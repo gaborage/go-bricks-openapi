@@ -32,6 +32,7 @@ from route registrations, type definitions, and validation tags.`,
 
 	rootCmd.AddCommand(
 		commands.NewGenerateCommand(),
+		commands.NewValidateCommand(),
 		commands.NewDoctorCommand(),
 		commands.NewVersionCommand(version),
 	)

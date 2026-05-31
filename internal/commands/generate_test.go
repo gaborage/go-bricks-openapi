@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/gaborage/go-bricks-openapi/internal/models"
+	"github.com/gaborage/go-bricks-openapi/internal/specvalidate"
 )
 
 const (
@@ -932,6 +933,56 @@ func TestValidateGenerateOptionsLicenseURLRequiresName(t *testing.T) {
 	}
 	if opts.License != "MIT" || opts.LicenseURL != "https://opensource.org/licenses/MIT" {
 		t.Errorf("license fields not trimmed: name=%q url=%q", opts.License, opts.LicenseURL)
+	}
+}
+
+// TestRunGenerateValidateHappyPath confirms that --validate on a project whose
+// generated spec is structurally valid (an empty project still emits a valid
+// `paths: {}` document) writes the file and succeeds.
+func TestRunGenerateValidateHappyPath(t *testing.T) {
+	tempDir := t.TempDir()
+	outputFile := filepath.Join(tempDir, "validated.yaml")
+
+	opts := &GenerateOptions{
+		ProjectRoot: tempDir,
+		OutputFile:  outputFile,
+		Validate:    true,
+	}
+
+	if err := runGenerate(context.Background(), opts); err != nil {
+		t.Fatalf("runGenerate with --validate failed on a valid project: %v", err)
+	}
+	if _, err := os.Stat(outputFile); os.IsNotExist(err) {
+		t.Error("Output file was not created with --validate on a valid project")
+	}
+
+	// The written file must itself be a valid OpenAPI 3.0 document.
+	content, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("failed to read validated output: %v", err)
+	}
+	if err := specvalidate.Validate(context.Background(), content); err != nil {
+		t.Errorf("written spec is not valid OpenAPI 3.0: %v", err)
+	}
+}
+
+// TestRunGenerateValidateJSONHappyPath confirms --validate also runs against the
+// JSON-rendered output (validation happens after the JSON conversion).
+func TestRunGenerateValidateJSONHappyPath(t *testing.T) {
+	tempDir := t.TempDir()
+	outputFile := filepath.Join(tempDir, "validated.json")
+
+	opts := &GenerateOptions{
+		ProjectRoot: tempDir,
+		OutputFile:  outputFile,
+		Validate:    true,
+	}
+
+	if err := runGenerate(context.Background(), opts); err != nil {
+		t.Fatalf("runGenerate with --validate failed for JSON output: %v", err)
+	}
+	if _, err := os.Stat(outputFile); os.IsNotExist(err) {
+		t.Error("JSON output file was not created with --validate")
 	}
 }
 
