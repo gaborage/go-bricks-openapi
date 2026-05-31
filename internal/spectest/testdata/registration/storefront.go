@@ -36,11 +36,11 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 
 	// Route registered inside a conditional block.
 	if true {
-		server.GET(hr, r, "/health", m.health, server.WithTags("ops"))
+		server.GET(hr, r, "/health", m.health, server.WithTags("ops"), server.WithPublic())
 	}
 
 	// Concatenated path from a constant: /api/version
-	server.GET(hr, r, apiBase+"/version", m.version, server.WithTags("ops"))
+	server.GET(hr, r, apiBase+"/version", m.version, server.WithTags("ops"), server.WithPublic())
 
 	// Routes registered by a helper method.
 	m.registerItemWrites(hr, r)
