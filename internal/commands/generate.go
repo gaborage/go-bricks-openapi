@@ -15,6 +15,7 @@ import (
 	"github.com/gaborage/go-bricks-openapi/internal/analyzer"
 	"github.com/gaborage/go-bricks-openapi/internal/generator"
 	"github.com/gaborage/go-bricks-openapi/internal/models"
+	"github.com/gaborage/go-bricks-openapi/internal/specvalidate"
 )
 
 const (
@@ -24,6 +25,11 @@ const (
 	extJSON         = ".json"
 	formatYAML      = "yaml"
 	formatJSON      = "json"
+
+	// defaultOutputFile is the default spec path generate writes to. The
+	// validate command defaults to the same path so `generate` then `validate`
+	// (with no args) operate on the same file.
+	defaultOutputFile = "openapi.yaml"
 )
 
 // GenerateOptions holds options for the generate command
@@ -43,6 +49,7 @@ type GenerateOptions struct {
 	Format            string // "yaml" (default) or "json"
 	DisableTenantAuth bool   // omit the X-Tenant-ID security scheme (single-tenant)
 	Strict            bool   // treat warnings (empty/untyped) as a non-zero exit
+	Validate          bool   // validate the generated spec (OpenAPI 3.0) before writing
 }
 
 // NewGenerateCommand creates the generate command
@@ -71,7 +78,7 @@ and produces a comprehensive API specification with validation constraints.`,
 	}
 
 	cmd.Flags().StringVarP(&opts.ProjectRoot, "project", "p", ".", "Project root directory")
-	cmd.Flags().StringVarP(&opts.OutputFile, "output", "o", "openapi.yaml", "Output file path")
+	cmd.Flags().StringVarP(&opts.OutputFile, "output", "o", defaultOutputFile, "Output file path")
 	cmd.Flags().BoolVarP(&opts.Verbose, "verbose", "v", false, "Verbose output")
 	cmd.Flags().StringVar(&opts.Title, "title", "", "info.title (overrides the project name)")
 	cmd.Flags().StringVar(&opts.APIVersion, "api-version", "", "info.version (overrides 1.0.0)")
@@ -82,6 +89,7 @@ and produces a comprehensive API specification with validation constraints.`,
 	cmd.Flags().StringVar(&opts.Format, "format", "", "Output format: yaml (default) or json")
 	cmd.Flags().BoolVar(&opts.DisableTenantAuth, "no-tenant-security", false, "Omit the X-Tenant-ID security scheme (single-tenant)")
 	cmd.Flags().BoolVar(&opts.Strict, "strict", false, "Exit non-zero if the spec has warnings (no modules/routes, untyped routes)")
+	cmd.Flags().BoolVar(&opts.Validate, "validate", false, "Validate the generated spec (OpenAPI 3.0) before writing; fails if invalid")
 
 	return cmd
 }
@@ -116,16 +124,9 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
 
-	gen := generator.NewWithConfig(buildGeneratorConfig(opts))
-	specContent, err := gen.Generate(project)
+	specContent, err := generateSpecContent(opts, project, format)
 	if err != nil {
-		return fmt.Errorf("failed to generate spec: %w", err)
-	}
-	if format == formatJSON {
-		specContent, err = toJSON(specContent)
-		if err != nil {
-			return fmt.Errorf("failed to render JSON: %w", err)
-		}
+		return err
 	}
 
 	// Content warnings (empty/untyped) on stderr. With --strict they are fatal
@@ -133,6 +134,13 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 	// leaves no consumable artifact (see failStrict).
 	if emitContentWarnings(project) && opts.Strict {
 		return failStrict(opts)
+	}
+
+	// Structural validation (OpenAPI 3.0) when --validate is set. Like --strict,
+	// a failure is fatal BEFORE we persist: no success line is printed and any
+	// stale artifact is removed so a downstream step can't consume an invalid spec.
+	if err := validateGeneratedSpec(ctx, opts, specContent); err != nil {
+		return err
 	}
 
 	if err := os.MkdirAll(filepath.Dir(opts.OutputFile), 0750); err != nil {
@@ -146,14 +154,58 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 	return nil
 }
 
+// generateSpecContent runs the generator over the analyzed project and renders
+// the spec in the resolved format (YAML, or JSON when requested).
+func generateSpecContent(opts *GenerateOptions, project *models.Project, format string) (string, error) {
+	gen := generator.NewWithConfig(buildGeneratorConfig(opts))
+	specContent, err := gen.Generate(project)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate spec: %w", err)
+	}
+	if format == formatJSON {
+		specContent, err = toJSON(specContent)
+		if err != nil {
+			return "", fmt.Errorf("failed to render JSON: %w", err)
+		}
+	}
+	return specContent, nil
+}
+
+// validateGeneratedSpec runs structural OpenAPI 3.0 validation over the rendered
+// spec when --validate is set (it is a no-op otherwise). On failure it mirrors
+// failStrict: it removes any stale output so a downstream step can't consume an
+// invalid spec, then returns a wrapped error.
+func validateGeneratedSpec(ctx context.Context, opts *GenerateOptions, specContent string) error {
+	if !opts.Validate {
+		return nil
+	}
+	if err := specvalidate.Validate(ctx, []byte(specContent)); err != nil {
+		if rmErr := removeStaleOutput(opts.OutputFile); rmErr != nil {
+			return rmErr
+		}
+		return fmt.Errorf("generated spec failed validation: %w", err)
+	}
+	return nil
+}
+
 // failStrict removes any pre-existing output so a stale spec from an earlier run
 // can't be consumed by a downstream step that keys off file existence, then
 // returns the strict-mode failure error.
 func failStrict(opts *GenerateOptions) error {
-	if err := os.Remove(opts.OutputFile); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove stale output %s: %w", opts.OutputFile, err)
+	if err := removeStaleOutput(opts.OutputFile); err != nil {
+		return err
 	}
 	return fmt.Errorf("spec generated with warnings and --strict is set")
+}
+
+// removeStaleOutput deletes any pre-existing output file so a failed run (strict
+// or validation) leaves no consumable artifact behind. A missing file is not an
+// error.
+func removeStaleOutput(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove stale output %s: %w", path, err)
+	}
+	return nil
 }
 
 // buildGeneratorConfig maps CLI options to a generator.Config.

@@ -18,10 +18,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/getkin/kin-openapi/openapi3"
-
 	"github.com/gaborage/go-bricks-openapi/internal/analyzer"
 	"github.com/gaborage/go-bricks-openapi/internal/generator"
+	"github.com/gaborage/go-bricks-openapi/internal/specvalidate"
 )
 
 // Generate runs the analyzer and generator over the project rooted at dir and
@@ -54,17 +53,9 @@ func Generate(ctx context.Context, dir string) (string, error) {
 // in-process, honouring ctx for cancellation. This is the primary structural
 // gate: it is deterministic and needs no network or external toolchain, unlike
 // the redocly step run in CI.
+//
+// It delegates to specvalidate.Validate, the reusable validator that also backs
+// the `validate` subcommand and the generator's `--validate` flag.
 func Validate(ctx context.Context, data []byte) error {
-	loader := openapi3.NewLoader()
-
-	doc, err := loader.LoadFromData(data)
-	if err != nil {
-		return fmt.Errorf("load spec: %w", err)
-	}
-
-	if err := doc.Validate(ctx); err != nil {
-		return fmt.Errorf("validate spec: %w", err)
-	}
-
-	return nil
+	return specvalidate.Validate(ctx, data)
 }

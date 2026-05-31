@@ -49,6 +49,7 @@ func TestRunHelpListsSubcommands(t *testing.T) {
 	// Distinctive Short strings, one per subcommand.
 	for _, short := range []string{
 		"Generate OpenAPI specification from go-bricks service",
+		"Validate an OpenAPI 3.0 specification document",
 		"Check environment and project compatibility",
 		"Show version information",
 	} {
@@ -100,6 +101,49 @@ func TestRunGenerateHappyPath(t *testing.T) {
 	}
 	if _, ok := doc["openapi"]; !ok {
 		t.Errorf("generated spec has no top-level openapi key: %v", doc)
+	}
+}
+
+// TestRunValidateHappyPath verifies the validate subcommand exits 0 on a valid
+// spec file and prints the confirmation line.
+func TestRunValidateHappyPath(t *testing.T) {
+	dir := t.TempDir()
+	spec := filepath.Join(dir, "openapi.yaml")
+	if err := os.WriteFile(spec,
+		[]byte("openapi: 3.0.1\ninfo:\n  title: T\n  version: 1.0.0\npaths: {}\n"), 0600); err != nil {
+		t.Fatalf("failed to write spec: %v", err)
+	}
+
+	var outBuf, errBuf bytes.Buffer
+	code := run([]string{"validate", spec}, &outBuf, &errBuf)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr: %s)", code, errBuf.String())
+	}
+	if !strings.Contains(outBuf.String(), "valid OpenAPI 3.0 document") {
+		t.Errorf("validate output missing confirmation line: %q", outBuf.String())
+	}
+}
+
+// TestRunValidateErrorPath verifies an invalid spec exits 1 through the run()
+// seam with exactly one "Error:" line and no usage block.
+func TestRunValidateErrorPath(t *testing.T) {
+	dir := t.TempDir()
+	spec := filepath.Join(dir, "broken.yaml")
+	if err := os.WriteFile(spec, []byte("foo: bar\n"), 0600); err != nil {
+		t.Fatalf("failed to write spec: %v", err)
+	}
+
+	var outBuf, errBuf bytes.Buffer
+	code := run([]string{"validate", spec}, &outBuf, &errBuf)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	stderr := errBuf.String()
+	if n := strings.Count(stderr, "Error:"); n != 1 {
+		t.Errorf("expected exactly one Error: line, got %d:\n%s", n, stderr)
+	}
+	if strings.Contains(stderr, "Usage:") {
+		t.Errorf("error path must not print a Usage: block:\n%s", stderr)
 	}
 }
 
