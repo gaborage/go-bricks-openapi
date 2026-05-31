@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"cmp"
 	"regexp"
 	"sort"
 	"strconv"
@@ -97,7 +98,172 @@ func MapConstraintToOpenAPI(fieldType, underlyingKind string, constraints map[st
 		result = append(result, dispatchScalarConstraint(key, value, effKind)...)
 	}
 
-	return result
+	return resolveMostRestrictive(result)
+}
+
+// lowerBoundKeywords are OpenAPI floor keywords. When several validator rules
+// collapse to the same one, the MOST-RESTRICTIVE (largest) value binds.
+var lowerBoundKeywords = map[string]bool{
+	constraintMinimum: true, constraintMinLength: true,
+	constraintMinItems: true, constraintMinProperties: true,
+}
+
+// upperBoundKeywords are OpenAPI ceiling keywords. When several validator rules
+// collapse to the same one, the MOST-RESTRICTIVE (smallest) value binds.
+var upperBoundKeywords = map[string]bool{
+	constraintMaximum: true, constraintMaxLength: true,
+	constraintMaxItems: true, constraintMaxProperties: true,
+}
+
+// resolveMostRestrictive collapses duplicate bound keywords to the single
+// most-restrictive entry. validator/v10 enforces ALL rules, so when distinct
+// validator keys map to the same OpenAPI keyword (e.g. min & gte -> minimum), the
+// binding bound is the largest floor / smallest ceiling — not whichever the map
+// iteration emitted last. Non-bound constraints pass through unchanged in input
+// order; each resolved bound is anchored at its first occurrence so the slice
+// stays deterministic and stable.
+func resolveMostRestrictive(in []OpenAPIConstraint) []OpenAPIConstraint {
+	winners := map[string]boundState{}
+	var order []string // bound keywords in first-seen order
+	var out []OpenAPIConstraint
+
+	for i := 0; i < len(in); i++ {
+		c := in[i]
+		if !isBoundKeyword(c.Name) {
+			out = append(out, c) // pass-through (format, pattern, enum, exclusive flags w/o partner…)
+			continue
+		}
+		cand, consumed := readBound(in, i)
+		i += consumed - 1 // advance past a consumed exclusive partner
+		if _, seen := winners[c.Name]; !seen {
+			order = append(order, c.Name)
+			out = append(out, OpenAPIConstraint{Name: boundPlaceholder, Value: c.Name}) // reserve slot
+		}
+		winners[c.Name] = mergeBound(winners[c.Name], cand, isLowerBound(c.Name))
+	}
+	return materializeBounds(out, winners, order)
+}
+
+// boundState is the running winner for one bound keyword: its (typed) value and
+// whether the binding bound is exclusive (couples exclusiveMinimum/Maximum).
+type boundState struct {
+	value     any
+	exclusive bool
+	set       bool
+}
+
+// boundPlaceholder marks a reserved slot in the pass-through slice that is later
+// replaced by the resolved bound (plus its exclusive flag, if any).
+const boundPlaceholder = "\x00bound"
+
+func isLowerBound(name string) bool   { return lowerBoundKeywords[name] }
+func isUpperBound(name string) bool   { return upperBoundKeywords[name] }
+func isBoundKeyword(name string) bool { return isLowerBound(name) || isUpperBound(name) }
+
+// readBound reads the bound at index i, consuming a trailing exclusiveMinimum/
+// exclusiveMaximum:true partner that handleNumericComparison emits immediately
+// after a minimum/maximum. It returns the candidate bound and the number of input
+// entries it spans (1, or 2 when an exclusive partner is consumed).
+func readBound(in []OpenAPIConstraint, i int) (cand boundState, spanned int) {
+	cand = boundState{value: in[i].Value, set: true}
+	partner := exclusivePartner(in[i].Name)
+	if partner != "" && i+1 < len(in) && in[i+1].Name == partner {
+		cand.exclusive = true
+		return cand, 2
+	}
+	return cand, 1
+}
+
+// exclusivePartner returns the exclusive-flag keyword coupled to a numeric bound
+// (minimum -> exclusiveMinimum, maximum -> exclusiveMaximum), else "".
+func exclusivePartner(name string) string {
+	switch name {
+	case constraintMinimum:
+		return constraintExclusiveMinimum
+	case constraintMaximum:
+		return constraintExclusiveMaximum
+	}
+	return ""
+}
+
+// mergeBound folds a candidate into the running winner. For a lower bound the
+// larger value wins; for an upper bound the smaller. On EQUAL value, exclusive
+// beats inclusive (exclusive is strictly more restrictive).
+func mergeBound(cur, cand boundState, lower bool) boundState {
+	if !cur.set {
+		return cand
+	}
+	ord := compareBoundValues(cand.value, cur.value)
+	if ord == 0 {
+		cur.exclusive = cur.exclusive || cand.exclusive
+		return cur
+	}
+	if (lower && ord > 0) || (!lower && ord < 0) {
+		return cand
+	}
+	return cur
+}
+
+// compareBoundValues orders two bound values numerically (minimum/maximum carry
+// int64/float64; the length/cardinality keywords carry int). Returns -1/0/1.
+// Integer bounds are compared as int64 so two distinct int64 values above 2^53
+// cannot collapse to one float64 and mis-resolve the most-restrictive winner;
+// only a fractional (float64) bound falls back to float64 comparison.
+func compareBoundValues(a, b any) int {
+	if ai, aok := boundInt64(a); aok {
+		if bi, bok := boundInt64(b); bok {
+			return cmp.Compare(ai, bi)
+		}
+	}
+	return cmp.Compare(boundFloat64(a), boundFloat64(b))
+}
+
+// boundInt64 reports a bound value as an int64 when it is an integer kind (int or
+// int64). A float64 bound returns ok=false so the caller compares as float64.
+func boundInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case int64:
+		return n, true
+	default:
+		return 0, false
+	}
+}
+
+// boundFloat64 converts a bound value (int, int64 or float64) to float64 for
+// comparison only; the original typed value is preserved when re-emitted.
+func boundFloat64(v any) float64 {
+	switch n := v.(type) {
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case float64:
+		return n
+	}
+	return 0
+}
+
+// materializeBounds replaces each reserved placeholder with its resolved bound,
+// re-emitting the exclusive flag only when the winning bound is exclusive.
+func materializeBounds(out []OpenAPIConstraint, winners map[string]boundState, order []string) []OpenAPIConstraint {
+	idx := 0 // next bound keyword (in first-seen order) to emit
+	final := make([]OpenAPIConstraint, 0, len(out))
+	for _, c := range out {
+		if c.Name != boundPlaceholder {
+			final = append(final, c)
+			continue
+		}
+		name := order[idx]
+		idx++
+		w := winners[name]
+		final = append(final, OpenAPIConstraint{Name: name, Value: w.value})
+		if w.exclusive {
+			final = append(final, OpenAPIConstraint{Name: exclusivePartner(name), Value: true})
+		}
+	}
+	return final
 }
 
 // sortedKeys returns the keys of m in lexicographic order so callers can iterate
