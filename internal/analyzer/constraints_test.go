@@ -467,28 +467,42 @@ func TestMapConstraintToOpenAPIDeterministicOverlap(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Run many times: a single run can coincidentally match even with the
-			// bug present, so we assert stability across iterations.
-			for i := 0; i < 100; i++ {
-				result := MapConstraintToOpenAPI(tc.fieldType, "", tc.constraints)
-				var got any
-				found := false
-				for _, c := range result {
-					if c.Name == tc.keyword {
-						got = c.Value
-						found = true
-					}
-				}
-				if !found {
-					t.Fatalf("iteration %d: keyword %q not emitted", i, tc.keyword)
-				}
-				if got != tc.wantValue {
-					t.Fatalf("iteration %d: %q = %v (%T), want %v (%T) — nondeterministic emission",
-						i, tc.keyword, got, got, tc.wantValue, tc.wantValue)
-				}
-			}
+			assertDeterministicConstraint(t, tc.fieldType, tc.constraints, tc.keyword, tc.wantValue)
 		})
 	}
+}
+
+// assertDeterministicConstraint asserts MapConstraintToOpenAPI emits keyword with
+// wantValue on every run. It repeats many times because a single run can
+// coincidentally match even when the underlying iteration order is nondeterministic.
+func assertDeterministicConstraint(t *testing.T, fieldType string, constraints map[string]string, keyword string, wantValue any) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		got, found := constraintByName(MapConstraintToOpenAPI(fieldType, "", constraints), keyword)
+		if !found {
+			t.Fatalf("iteration %d: keyword %q not emitted", i, keyword)
+		}
+		if got != wantValue {
+			t.Fatalf("iteration %d: %q = %v (%T), want %v (%T) — nondeterministic emission",
+				i, keyword, got, got, wantValue, wantValue)
+		}
+	}
+}
+
+// constraintByName returns the value emitted for the given OpenAPI keyword, if any.
+// It returns the LAST match, mirroring the generator's last-writer-wins overwrite
+// when several validator keys collapse to the same keyword (e.g. min & gte both
+// emit a "minimum" entry) — which is the value that actually lands in the spec.
+func constraintByName(result []OpenAPIConstraint, name string) (any, bool) {
+	var value any
+	found := false
+	for _, c := range result {
+		if c.Name == name {
+			value = c.Value
+			found = true
+		}
+	}
+	return value, found
 }
 
 // assertConstraintsMatch verifies every expected constraint is present in
