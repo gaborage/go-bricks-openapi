@@ -1463,21 +1463,21 @@ func (a *ProjectAnalyzer) validateGoFilePath(filePath string) error {
 
 // typeInfoFromExpr converts an AST type expression to TypeInfo
 // Handles identifiers, pointers, and qualified type names
-func (a *ProjectAnalyzer) typeInfoFromExpr(expr ast.Expr, packageName string) *models.TypeInfo {
+func (a *ProjectAnalyzer) typeInfoFromExpr(expr ast.Expr, packageName string, serverAliases map[string]struct{}) *models.TypeInfo {
 	switch t := expr.(type) {
 	case *ast.Ident:
 		return a.handleIdentType(t, packageName)
 	case *ast.StarExpr:
 		return a.handleStarExprType(t, packageName)
 	case *ast.SelectorExpr:
-		return a.handleSelectorExprType(t)
+		return a.handleSelectorExprType(t, serverAliases)
 	case *ast.IndexExpr:
 		// Single-type-param generic, e.g. server.Result[User].
-		return a.handleResultWrapper(t.X, t.Index, packageName)
+		return a.handleResultWrapper(t.X, t.Index, packageName, serverAliases)
 	case *ast.IndexListExpr:
 		// Multi-type-param generic, e.g. Foo[A, B]; the response type is the first.
 		if len(t.Indices) > 0 {
-			return a.handleResultWrapper(t.X, t.Indices[0], packageName)
+			return a.handleResultWrapper(t.X, t.Indices[0], packageName, serverAliases)
 		}
 	}
 
@@ -1487,22 +1487,23 @@ func (a *ProjectAnalyzer) typeInfoFromExpr(expr ast.Expr, packageName string) *m
 // handleResultWrapper unwraps a framework result wrapper (server.Result[R] /
 // server.ResultWithMeta[R]) to the inner response type R. Any other generic is
 // not a known response carrier, so it returns nil rather than guessing.
-func (a *ProjectAnalyzer) handleResultWrapper(x, index ast.Expr, packageName string) *models.TypeInfo {
-	if !isResultWrapper(x) {
+func (a *ProjectAnalyzer) handleResultWrapper(x, index ast.Expr, packageName string, serverAliases map[string]struct{}) *models.TypeInfo {
+	if !a.isResultWrapper(x, serverAliases) {
 		return nil
 	}
-	return a.typeInfoFromExpr(index, packageName)
+	return a.typeInfoFromExpr(index, packageName, serverAliases)
 }
 
-// isResultWrapper reports whether x is server.Result or server.ResultWithMeta.
-// (Matches the existing "server" qualifier assumption used by isFrameworkType.)
-func isResultWrapper(x ast.Expr) bool {
+// isResultWrapper reports whether x is server.Result or server.ResultWithMeta,
+// honouring the local alias(es) the server package is imported under (serverAliases);
+// an empty set falls back to the literal "server" qualifier via aliasContains.
+func (a *ProjectAnalyzer) isResultWrapper(x ast.Expr, serverAliases map[string]struct{}) bool {
 	sel, ok := x.(*ast.SelectorExpr)
 	if !ok {
 		return false
 	}
 	pkg, ok := sel.X.(*ast.Ident)
-	if !ok || pkg.Name != frameworkPkgServer {
+	if !ok || !a.aliasContains(serverAliases, pkg.Name, frameworkPkgServer) {
 		return false
 	}
 	return sel.Sel.Name == resultTypeName || sel.Sel.Name == resultWithMetaTypeName
@@ -1520,7 +1521,10 @@ func (a *ProjectAnalyzer) handleIdentType(t *ast.Ident, packageName string) *mod
 	}
 }
 
-// handleStarExprType processes pointer types (e.g., *TypeName or *pkg.TypeName)
+// handleStarExprType processes pointer types (e.g., *TypeName or *pkg.TypeName).
+// It needs no serverAliases: the framework-type decision flows through
+// isFrameworkType (which takes pkg.Name), and a pointer is never a Result wrapper
+// or NoContentResult marker (those are value types handled elsewhere).
 func (a *ProjectAnalyzer) handleStarExprType(t *ast.StarExpr, packageName string) *models.TypeInfo {
 	// Handle simple pointer: *TypeName
 	if ident, ok := t.X.(*ast.Ident); ok {
@@ -1552,7 +1556,7 @@ func (a *ProjectAnalyzer) handleStarExprType(t *ast.StarExpr, packageName string
 }
 
 // handleSelectorExprType processes qualified types (e.g., pkg.TypeName)
-func (a *ProjectAnalyzer) handleSelectorExprType(t *ast.SelectorExpr) *models.TypeInfo {
+func (a *ProjectAnalyzer) handleSelectorExprType(t *ast.SelectorExpr, serverAliases map[string]struct{}) *models.TypeInfo {
 	pkg, ok := t.X.(*ast.Ident)
 	if !ok {
 		return nil
@@ -1560,8 +1564,9 @@ func (a *ProjectAnalyzer) handleSelectorExprType(t *ast.SelectorExpr) *models.Ty
 
 	// server.NoContentResult is a bodyless 204 response — carry a marker (no
 	// Name/Fields, so no component is generated) rather than treating it as a
-	// schema-bearing response type.
-	if pkg.Name == frameworkPkgServer && t.Sel.Name == noContentResultTypeName {
+	// schema-bearing response type. The "server" qualifier honours local import
+	// aliases (serverAliases), falling back to the literal "server".
+	if a.aliasContains(serverAliases, pkg.Name, frameworkPkgServer) && t.Sel.Name == noContentResultTypeName {
 		return &models.TypeInfo{NoContent: true}
 	}
 
@@ -1578,7 +1583,7 @@ func (a *ProjectAnalyzer) handleSelectorExprType(t *ast.SelectorExpr) *models.Ty
 
 // extractRequestType extracts request type from handler parameters.
 // Returns the first non-framework type parameter, or nil if none found.
-func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName string) *models.TypeInfo {
+func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName string, serverAliases map[string]struct{}) *models.TypeInfo {
 	if params == nil || len(params.List) == 0 {
 		return nil
 	}
@@ -1586,7 +1591,7 @@ func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName 
 	// Return the first parameter that is not a framework type
 	// (HandlerContext can appear in first or second position)
 	for _, p := range params.List {
-		if ti := a.typeInfoFromExpr(p.Type, packageName); ti != nil {
+		if ti := a.typeInfoFromExpr(p.Type, packageName, serverAliases); ti != nil {
 			return ti
 		}
 	}
@@ -1596,14 +1601,14 @@ func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName 
 
 // extractResponseType extracts response type from handler return values.
 // Returns the first non-framework type result, or nil if none found.
-func (a *ProjectAnalyzer) extractResponseType(results *ast.FieldList, packageName string) *models.TypeInfo {
+func (a *ProjectAnalyzer) extractResponseType(results *ast.FieldList, packageName string, serverAliases map[string]struct{}) *models.TypeInfo {
 	if results == nil || len(results.List) == 0 {
 		return nil
 	}
 
 	// First result is response type (second is IAPIError or error, filtered by typeInfoFromExpr)
 	firstResult := results.List[0]
-	return a.typeInfoFromExpr(firstResult.Type, packageName)
+	return a.typeInfoFromExpr(firstResult.Type, packageName, serverAliases)
 }
 
 // findHandlerInFile searches a single AST file for a handler method
@@ -1625,10 +1630,16 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 			continue
 		}
 
+		// Resolve the local alias(es) the server package is imported under in this
+		// file so result-wrapper / NoContentResult / success-status detection honour
+		// aliased imports (e.g. `srv "github.com/.../server"`). Empty set falls back
+		// to the literal "server" via aliasContains.
+		serverAliases := a.extractImportAliases(astFile, serverImportPath)
+
 		// Extract types using helpers
-		requestType := a.extractRequestType(funcDecl.Type.Params, astFile.Name.Name)
-		responseType := a.extractResponseType(funcDecl.Type.Results, astFile.Name.Name)
-		status := extractSuccessStatus(funcDecl)
+		requestType := a.extractRequestType(funcDecl.Type.Params, astFile.Name.Name, serverAliases)
+		responseType := a.extractResponseType(funcDecl.Type.Results, astFile.Name.Name, serverAliases)
+		status := a.extractSuccessStatus(funcDecl, serverAliases)
 
 		return requestType, responseType, status
 	}
@@ -1646,14 +1657,25 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 // The LAST recognized return wins: idiomatic handlers put the happy-path return
 // last and any earlier server-constructor returns are typically guard branches
 // (e.g. a cache-hit early return), so the terminal status is the documented one.
-// The "server" qualifier is matched literally, consistent with the rest of the
-// type-resolution path (isResultWrapper, NoContentResult).
-func extractSuccessStatus(funcDecl *ast.FuncDecl) int {
+// The "server" qualifier honours local import aliases (serverAliases), falling
+// back to the literal "server" via aliasContains — consistent with the rest of
+// the type-resolution path (isResultWrapper, NoContentResult).
+//
+// Nested *ast.FuncLit bodies are NOT descended into: a server constructor
+// returned from an inner closure (e.g. a goroutine or callback defined inside the
+// handler) is not the handler's terminal return and must not override it.
+func (a *ProjectAnalyzer) extractSuccessStatus(funcDecl *ast.FuncDecl, serverAliases map[string]struct{}) int {
 	if funcDecl.Body == nil {
 		return 0
 	}
 	status := 0
 	ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
+		// Do not descend into nested closures: their returns belong to the closure,
+		// not the handler. funcDecl.Body is a *ast.BlockStmt (not a FuncLit), so the
+		// handler's own body is still walked.
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
 		ret, ok := n.(*ast.ReturnStmt)
 		if !ok || len(ret.Results) == 0 {
 			return true
@@ -1667,7 +1689,7 @@ func extractSuccessStatus(funcDecl *ast.FuncDecl) int {
 			return true
 		}
 		pkg, ok := sel.X.(*ast.Ident)
-		if !ok || pkg.Name != frameworkPkgServer {
+		if !ok || !a.aliasContains(serverAliases, pkg.Name, frameworkPkgServer) {
 			return true
 		}
 		if s := statusForConstructor(sel.Sel.Name, call.Args); s != 0 {
@@ -1950,24 +1972,52 @@ func (a *ProjectAnalyzer) inModuleDir(importPath string) (string, bool) {
 	return filepath.Join(a.projectRoot, filepath.FromSlash(rel)), true
 }
 
-// fileImports maps each import's local alias to its import path. The default alias
-// is the path's last segment (an approximation of the package name, correct for
-// the common case where they match); explicit aliases override it. Blank (_) and
-// dot (.) imports are skipped.
+// fileImports maps each import's local alias to its import path. An explicit alias
+// (e.g. `foo "path/bar"`) is used verbatim. For an unaliased import, Go references
+// the package by its DECLARED `package` clause name, which is not always the path's
+// last segment (e.g. `import "transport/httpapi"` whose files say `package http`).
+// We resolve the declared name from the already-parsed in-module package (cached,
+// no new parse on the hot path) and fall back to the path base for external/stdlib
+// imports whose declared name is unknowable here. Blank (_) and dot (.) imports are
+// skipped.
 func (a *ProjectAnalyzer) fileImports(astFile *ast.File) map[string]string {
 	out := make(map[string]string, len(astFile.Imports))
 	for _, imp := range astFile.Imports {
 		path := strings.Trim(imp.Path.Value, `"`)
-		alias := filepath.Base(path)
 		if imp.Name != nil {
 			if imp.Name.Name == "_" || imp.Name.Name == "." {
 				continue
 			}
-			alias = imp.Name.Name
+			out[imp.Name.Name] = path
+			continue
 		}
-		out[alias] = path
+		out[a.unaliasedImportName(path)] = path
 	}
 	return out
+}
+
+// unaliasedImportName returns the local name an unaliased import is referenced by:
+// the imported package's declared `package` clause name when it is in-module and
+// resolvable, else filepath.Base(path) for external/stdlib imports. Uses the same
+// cached helpers as resolveQualifiedStruct (inModuleDir + parsePackageDir), so it
+// adds no new parse cost on the hot path.
+func (a *ProjectAnalyzer) unaliasedImportName(path string) string {
+	dir, ok := a.inModuleDir(path)
+	if !ok {
+		return filepath.Base(path)
+	}
+	files, err := a.parsePackageDir(dir)
+	if err != nil {
+		return filepath.Base(path)
+	}
+	// All files in a valid package dir share one `package` clause; the first
+	// resolvable name is authoritative. Iterate in a stable order for determinism.
+	for _, p := range slices.Sorted(maps.Keys(files)) {
+		if f := files[p]; f.Name != nil && f.Name.Name != "" {
+			return f.Name.Name
+		}
+	}
+	return filepath.Base(path)
 }
 
 // parsePackageDir parses all non-test Go files in a directory, caching the result

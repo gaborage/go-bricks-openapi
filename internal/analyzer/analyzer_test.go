@@ -2331,7 +2331,7 @@ func test(param ` + tt.typeExpr + `) {}`
 			}
 			require.NotNil(t, expr, "Failed to find parameter type expression")
 
-			result := analyzer.typeInfoFromExpr(expr, "test")
+			result := analyzer.typeInfoFromExpr(expr, "test", map[string]struct{}{})
 
 			assertTypeInfo(t, tt.description, tt.expected, result)
 		})
@@ -2564,7 +2564,7 @@ func (h *Handler) list(ctx server.HandlerContext) {}`,
 				if !ok {
 					continue
 				}
-				reqType := analyzer.extractRequestType(funcDecl.Type.Params, astFile.Name.Name)
+				reqType := analyzer.extractRequestType(funcDecl.Type.Params, astFile.Name.Name, map[string]struct{}{})
 				assertTypeInfo(t, tt.description, tt.expectedReq, reqType)
 			}
 		})
@@ -3204,7 +3204,7 @@ func TestTypeInfoFromExprResultWrappers(t *testing.T) {
 			}
 		}
 		require.NotNil(t, expr)
-		return New("").typeInfoFromExpr(expr, "test")
+		return New("").typeInfoFromExpr(expr, "test", map[string]struct{}{})
 	}
 
 	t.Run("result_unwraps_to_inner", func(t *testing.T) {
@@ -3786,6 +3786,125 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	_, routes := analyzeSingleModule(t, src)
 	assert.Equal(t, 201, routeForPath(t, routes, "POST /upsert").SuccessStatus,
 		"terminal happy-path return (Created/201) wins over the earlier guard return")
+}
+
+// TestExtractResponseAndStatusHonorAliasedServerImport verifies that response
+// type unwrapping (srv.Result[T]), the NoContentResult marker (srv.NoContentResult),
+// and success-status detection (srv.Created -> 201) all honour a server package
+// imported under a non-default alias. Before fix 1a the qualifier was matched
+// against the literal "server", so an aliased import dropped the response schema,
+// the 204 marker, and the 201 status (silently falling back to 200/no body).
+func TestExtractResponseAndStatusHonorAliasedServerImport(t *testing.T) {
+	src := `package mod
+import (
+	srv "github.com/gaborage/go-bricks/server"
+
+	"github.com/gaborage/go-bricks/app"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
+func (m *Module) get(ctx srv.HandlerContext) (srv.Result[Thing], srv.IAPIError) { return srv.NewResult(200, Thing{}), nil }
+func (m *Module) create(ctx srv.HandlerContext) (srv.Result[Thing], srv.IAPIError) { return srv.Created(Thing{}), nil }
+func (m *Module) del(ctx srv.HandlerContext) (srv.NoContentResult, srv.IAPIError) { return srv.NoContent(), nil }
+func (m *Module) RegisterRoutes(hr *srv.HandlerRegistry, r srv.RouteRegistrar) {
+	srv.GET(hr, r, "/thing", m.get)
+	srv.POST(hr, r, "/thing", m.create)
+	srv.DELETE(hr, r, "/thing", m.del)
+}
+`
+	_, routes := analyzeSingleModule(t, src)
+
+	// srv.Result[Thing] unwraps to the inner Thing response type.
+	get := routeForPath(t, routes, "GET /thing")
+	require.NotNil(t, get.Response, "aliased srv.Result[Thing] must still resolve a response type")
+	assert.Equal(t, "Thing", get.Response.Name, "response type unwraps to Thing under an aliased server import")
+
+	// srv.Created(...) -> 201 even though the package is aliased.
+	create := routeForPath(t, routes, "POST /thing")
+	assert.Equal(t, 201, create.SuccessStatus, "srv.Created must map to 201 under an aliased server import")
+
+	// srv.NoContentResult marks a bodyless 204 response.
+	del := routeForPath(t, routes, "DELETE /thing")
+	require.NotNil(t, del.Response, "aliased srv.NoContentResult must carry a response marker")
+	assert.True(t, del.Response.NoContent, "srv.NoContentResult must set NoContent under an aliased server import")
+}
+
+// TestExtractSuccessStatusIgnoresNestedClosureReturn verifies the body inspection
+// does NOT descend into nested closures: a server constructor returned from an
+// inner *ast.FuncLit must not override the handler's own terminal return. The
+// handler's terminal return is NewResult(http.StatusOK, ...) (200); a closure that
+// returns server.Created(...) (201) appears AFTER it in source order, so under the
+// "last recognized return wins" rule the closure's 201 would override the handler's
+// 200 IF the walk descended into the closure. Pruning FuncLit bodies (fix 1b) keeps
+// the documented status at 200. (The unreachable closure is fine: the analyzer only
+// parses the source, it never type-checks or compiles it.)
+func TestExtractSuccessStatusIgnoresNestedClosureReturn(t *testing.T) {
+	src := `package mod
+import (
+	"net/http"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
+func (m *Module) get(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Thing{}), nil
+	make201 := func() server.Result[Thing] {
+		return server.Created(Thing{})
+	}
+	_ = make201
+}
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/thing", m.get)
+}
+`
+	_, routes := analyzeSingleModule(t, src)
+	assert.Equal(t, 200, routeForPath(t, routes, "GET /thing").SuccessStatus,
+		"the handler's terminal NewResult(200) wins; the later inner closure's Created(201) must not leak out")
+}
+
+// TestFileImportsUsesDeclaredPackageName verifies that for an unaliased in-module
+// import whose declared `package` clause name differs from the path's last segment
+// (here `transport/httpapi` declaring `package http`), fileImports keys the import
+// under the DECLARED name ("http"), not the path base ("httpapi"). This is what
+// resolveQualifiedStruct needs to resolve `http.Money` references. External/stdlib
+// imports still default to the path base.
+func TestFileImportsUsesDeclaredPackageName(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module example.com/app\n\ngo 1.25\n"), 0600))
+
+	// Sibling package directory transport/httpapi declaring `package http`.
+	pkgDir := filepath.Join(dir, "transport", "httpapi")
+	require.NoError(t, os.MkdirAll(pkgDir, 0750))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "money.go"),
+		[]byte("package http\n\ntype Money struct{ Amount int64 }\n"), 0600))
+
+	// A root file that imports the sibling package without an alias.
+	root := `package app
+import "example.com/app/transport/httpapi"
+var _ = http.Money{}
+`
+	a := New(dir)
+	// modulePath is resolved during AnalyzeProject; set it directly so inModuleDir
+	// can translate the import path to a directory in this focused unit test.
+	a.modulePath = "example.com/app"
+
+	astFile, err := parser.ParseFile(a.fileSet, filepath.Join(dir, "root.go"), root, parser.ParseComments)
+	require.NoError(t, err)
+
+	imports := a.fileImports(astFile)
+	assert.Equal(t, "example.com/app/transport/httpapi", imports["http"],
+		"unaliased import is keyed under its declared package name (http), not the path base")
+	_, hasBase := imports["httpapi"]
+	assert.False(t, hasBase, "the path-base key (httpapi) must be absent; Go references the package as http")
 }
 
 // TestStatusForConstructorEdgeCases locks the non-route-driven branches of the

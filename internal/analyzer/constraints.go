@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -64,10 +65,18 @@ func MapConstraintToOpenAPI(fieldType, underlyingKind string, constraints map[st
 	isSlice := isSliceType(fieldType) && !isByteSlice(baseType)
 	effKind := effectiveKind(baseType, underlyingKind)
 
-	for key, value := range constraints {
+	// Iterate keys in sorted order so the emitted constraints are deterministic.
+	// Go map iteration is randomized, and distinct validator keys can collapse to
+	// the SAME OpenAPI keyword (min & gte -> minimum; max & lt -> maximum; min/len/gt
+	// -> minLength; etc.). The generator's applyConstraint overwrites the scalar prop
+	// field last-writer-wins, so a random range made the emitted minimum/maximum
+	// nondeterministic across runs for fields like `validate:"min=1,gte=10"`. Sorting
+	// fixes a stable precedence (and stable golden output).
+	for _, key := range sortedKeys(constraints) {
 		if key == constraintRequired {
 			continue // handled at schema level
 		}
+		value := constraints[key]
 
 		// Slice fields: only cardinality (min/max/len -> minItems/maxItems) applies
 		// to the array itself; element rules arrive via ElementConstraints + dive.
@@ -79,6 +88,17 @@ func MapConstraintToOpenAPI(fieldType, underlyingKind string, constraints map[st
 	}
 
 	return result
+}
+
+// sortedKeys returns the keys of m in lexicographic order so callers can iterate
+// deterministically (Go map iteration order is randomized).
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // dispatchScalarConstraint routes a single (non-slice) constraint key to the first

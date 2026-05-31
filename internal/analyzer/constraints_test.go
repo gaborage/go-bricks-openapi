@@ -424,6 +424,73 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 	}
 }
 
+// TestMapConstraintToOpenAPIDeterministicOverlap guards against nondeterministic
+// emission when two distinct validator keys collapse to the SAME OpenAPI keyword.
+// Go map iteration is randomized, so before keys were sorted, `min=1,gte=10` (both
+// -> minimum) and `max=100,lt=50` (both -> maximum) emitted whichever value the
+// random range visited last — making the spec drift run-to-run. With sorted-key
+// iteration the winner is fixed: lexicographically the last key wins under the
+// generator's last-writer-wins overwrite ("min" > "gte", "max" > "lt").
+func TestMapConstraintToOpenAPIDeterministicOverlap(t *testing.T) {
+	cases := []struct {
+		name        string
+		fieldType   string
+		constraints map[string]string
+		keyword     string
+		wantValue   any
+	}{
+		{
+			name:        "min and gte both map to minimum",
+			fieldType:   "int",
+			constraints: map[string]string{"min": "1", "gte": "10"},
+			keyword:     "minimum",
+			// sorted keys: ["gte","min"]; "min" applied last -> 1 wins, every run.
+			wantValue: int64(1),
+		},
+		{
+			name:        "max and lt both map to maximum",
+			fieldType:   "int",
+			constraints: map[string]string{"max": "100", "lt": "50"},
+			keyword:     "maximum",
+			// sorted keys: ["lt","max"]; "max" applied last -> 100 wins, every run.
+			wantValue: int64(100),
+		},
+		{
+			name:        "min and len both map to minLength on string",
+			fieldType:   "string",
+			constraints: map[string]string{"min": "3", "len": "8"},
+			keyword:     "minLength",
+			// sorted keys: ["len","min"]; "min" applied last -> 3 wins, every run.
+			wantValue: 3,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Run many times: a single run can coincidentally match even with the
+			// bug present, so we assert stability across iterations.
+			for i := 0; i < 100; i++ {
+				result := MapConstraintToOpenAPI(tc.fieldType, "", tc.constraints)
+				var got any
+				found := false
+				for _, c := range result {
+					if c.Name == tc.keyword {
+						got = c.Value
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("iteration %d: keyword %q not emitted", i, tc.keyword)
+				}
+				if got != tc.wantValue {
+					t.Fatalf("iteration %d: %q = %v (%T), want %v (%T) — nondeterministic emission",
+						i, tc.keyword, got, got, tc.wantValue, tc.wantValue)
+				}
+			}
+		})
+	}
+}
+
 // assertConstraintsMatch verifies every expected constraint is present in
 // resultMap with the expected value. Enum constraints are compared element-wise
 // since they are slices; scalar constraints are compared via direct equality.
