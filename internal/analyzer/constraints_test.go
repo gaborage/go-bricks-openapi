@@ -433,6 +433,67 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 			expected:    []OpenAPIConstraint{{Name: "minProperties", Value: 1}, {Name: "maxProperties", Value: 5}},
 			description: "cardinality is independent of the map value type",
 		},
+		// --- Issue #2: most-restrictive bound when multiple rules collapse to one keyword ---
+		{
+			name: "numeric min+gte -> larger minimum", fieldType: "int",
+			constraints: map[string]string{"min": "1", "gte": "10"},
+			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(10)}},
+			description: "validator enforces both; effective minimum is the larger (10)",
+		},
+		{
+			name: "numeric max+lt -> smaller exclusive maximum", fieldType: "int",
+			constraints: map[string]string{"max": "100", "lt": "50"},
+			expected: []OpenAPIConstraint{
+				{Name: "maximum", Value: int64(50)},
+				{Name: "exclusiveMaximum", Value: true},
+			},
+			description: "effective maximum is the smaller (50); lt is exclusive",
+		},
+		{
+			name: "string min+gte -> larger minLength", fieldType: "string",
+			constraints: map[string]string{"min": "2", "gte": "5"},
+			expected:    []OpenAPIConstraint{{Name: "minLength", Value: 5}},
+			description: "effective minLength is the larger (5)",
+		},
+		{
+			name: "string max+lte -> smaller maxLength", fieldType: "string",
+			constraints: map[string]string{"max": "20", "lte": "8"},
+			expected:    []OpenAPIConstraint{{Name: "maxLength", Value: 8}},
+			description: "effective maxLength is the smaller (8)",
+		},
+		{
+			name: "numeric gt+gte equal magnitudes -> inclusive binds", fieldType: "int",
+			constraints: map[string]string{"gt": "5", "gte": "10"},
+			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(10)}},
+			description: "gte=10 (>gt=5) binds; inclusive 10 wins, no exclusiveMinimum",
+		},
+		{
+			name: "numeric gte+gt equal values -> exclusive wins", fieldType: "int",
+			constraints: map[string]string{"gte": "10", "gt": "10"},
+			expected: []OpenAPIConstraint{
+				{Name: "minimum", Value: int64(10)},
+				{Name: "exclusiveMinimum", Value: true},
+			},
+			description: "equal value, exclusive (gt) is more restrictive than inclusive (gte)",
+		},
+		{
+			name: "slice min+len -> larger minItems plus maxItems", fieldType: "[]string",
+			constraints: map[string]string{"min": "1", "len": "3"},
+			expected: []OpenAPIConstraint{
+				{Name: "minItems", Value: 3},
+				{Name: "maxItems", Value: 3},
+			},
+			description: "min=1 and len=3 both touch minItems; max(1,3)=3, maxItems=3 from len",
+		},
+		{
+			// 9007199254740992 = 2^53, 9007199254740993 = 2^53+1. Both are exact
+			// int64 but collapse to the same float64, so a float-based compare would
+			// wrongly treat them as equal and keep the smaller (first-seen) bound.
+			name: "int64 minimum overlap above 2^53 keeps the exact larger bound", fieldType: "int64",
+			constraints: map[string]string{"gte": "9007199254740992", "min": "9007199254740993"},
+			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(9007199254740993)}},
+			description: "distinct int64 bounds above 2^53 compare as int64, not float64",
+		},
 	}
 
 	for _, tt := range tests {
@@ -455,13 +516,12 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 	}
 }
 
-// TestMapConstraintToOpenAPIDeterministicOverlap guards against nondeterministic
-// emission when two distinct validator keys collapse to the SAME OpenAPI keyword.
-// Go map iteration is randomized, so before keys were sorted, `min=1,gte=10` (both
-// -> minimum) and `max=100,lt=50` (both -> maximum) emitted whichever value the
-// random range visited last — making the spec drift run-to-run. With sorted-key
-// iteration the winner is fixed: lexicographically the last key wins under the
-// generator's last-writer-wins overwrite ("min" > "gte", "max" > "lt").
+// TestMapConstraintToOpenAPIDeterministicOverlap guards emission when two distinct
+// validator keys collapse to the SAME OpenAPI keyword. validator/v10 enforces ALL
+// rules, so the effective bound is the MOST-RESTRICTIVE one: the larger value for a
+// lower bound (minimum/minLength) and the smaller for an upper bound (maximum).
+// resolveMostRestrictive collapses the duplicates so the emitted value no longer
+// depends on map-iteration order — it is the binding constraint on every run.
 func TestMapConstraintToOpenAPIDeterministicOverlap(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -475,24 +535,24 @@ func TestMapConstraintToOpenAPIDeterministicOverlap(t *testing.T) {
 			fieldType:   "int",
 			constraints: map[string]string{"min": "1", "gte": "10"},
 			keyword:     "minimum",
-			// sorted keys: ["gte","min"]; "min" applied last -> 1 wins, every run.
-			wantValue: int64(1),
+			// both enforced; effective minimum is the larger bound, 10.
+			wantValue: int64(10),
 		},
 		{
 			name:        "max and lt both map to maximum",
 			fieldType:   "int",
 			constraints: map[string]string{"max": "100", "lt": "50"},
 			keyword:     "maximum",
-			// sorted keys: ["lt","max"]; "max" applied last -> 100 wins, every run.
-			wantValue: int64(100),
+			// both enforced; effective maximum is the smaller bound, 50.
+			wantValue: int64(50),
 		},
 		{
 			name:        "min and len both map to minLength on string",
 			fieldType:   "string",
 			constraints: map[string]string{"min": "3", "len": "8"},
 			keyword:     "minLength",
-			// sorted keys: ["len","min"]; "min" applied last -> 3 wins, every run.
-			wantValue: 3,
+			// both enforced; effective minLength is the larger bound, 8.
+			wantValue: 8,
 		},
 	}
 
