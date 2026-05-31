@@ -155,6 +155,8 @@ type OpenAPIProperty struct {
 	MaxLength            *int                        `yaml:"maxLength,omitempty"`
 	MinItems             *int                        `yaml:"minItems,omitempty"` // For arrays (slice cardinality)
 	MaxItems             *int                        `yaml:"maxItems,omitempty"`
+	MinProperties        *int                        `yaml:"minProperties,omitempty"` // For maps (entry-count cardinality)
+	MaxProperties        *int                        `yaml:"maxProperties,omitempty"`
 	Minimum              *float64                    `yaml:"minimum,omitempty"`
 	Maximum              *float64                    `yaml:"maximum,omitempty"`
 	ExclusiveMinimum     *bool                       `yaml:"exclusiveMinimum,omitempty"`
@@ -1410,6 +1412,8 @@ var constraintApplicators = map[string]func(*OpenAPIProperty, any){
 	"maxLength":        applyMaxLengthConstraint,
 	"minItems":         applyMinItemsConstraint,
 	"maxItems":         applyMaxItemsConstraint,
+	"minProperties":    applyMinPropertiesConstraint,
+	"maxProperties":    applyMaxPropertiesConstraint,
 	"minimum":          applyMinimumConstraint,
 	"maximum":          applyMaximumConstraint,
 	"exclusiveMinimum": applyExclusiveMinimumConstraint,
@@ -1457,6 +1461,20 @@ func applyMinItemsConstraint(prop *OpenAPIProperty, value any) {
 func applyMaxItemsConstraint(prop *OpenAPIProperty, value any) {
 	if val, ok := value.(int); ok {
 		prop.MaxItems = &val
+	}
+}
+
+// applyMinPropertiesConstraint sets the minProperties field (map cardinality)
+func applyMinPropertiesConstraint(prop *OpenAPIProperty, value any) {
+	if val, ok := value.(int); ok {
+		prop.MinProperties = &val
+	}
+}
+
+// applyMaxPropertiesConstraint sets the maxProperties field (map cardinality)
+func applyMaxPropertiesConstraint(prop *OpenAPIProperty, value any) {
+	if val, ok := value.(int); ok {
+		prop.MaxProperties = &val
 	}
 }
 

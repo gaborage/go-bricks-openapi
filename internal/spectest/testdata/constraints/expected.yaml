@@ -72,6 +72,12 @@ components:
           type: integer
           minimum: 1
           maximum: 10000
+        meta:
+          type: object
+          additionalProperties:
+            type: string
+          minProperties: 1
+          maxProperties: 10
         name:
           type: string
           minLength: 3

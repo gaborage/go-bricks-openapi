@@ -1304,16 +1304,18 @@ func TestApplyConstraints(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
 	tests := []struct {
-		name                 string
-		field                *models.FieldInfo
-		expectedFormat       string
-		expectedMinLength    *int
-		expectedMaxLength    *int
-		expectedMinimum      *float64
-		expectedMaximum      *float64
-		expectedExclusiveMin *bool
-		expectedPattern      string
-		expectedEnumCount    int
+		name                  string
+		field                 *models.FieldInfo
+		expectedFormat        string
+		expectedMinLength     *int
+		expectedMaxLength     *int
+		expectedMinProperties *int
+		expectedMaxProperties *int
+		expectedMinimum       *float64
+		expectedMaximum       *float64
+		expectedExclusiveMin  *bool
+		expectedPattern       string
+		expectedEnumCount     int
 	}{
 		{
 			name: "no constraints",
@@ -1373,6 +1375,24 @@ func TestApplyConstraints(t *testing.T) {
 			},
 			expectedEnumCount: 3,
 		},
+		{
+			name: "map min/max -> minProperties/maxProperties",
+			field: &models.FieldInfo{
+				Type:        "map[string]string",
+				Constraints: map[string]string{"min": "1", "max": "10"},
+			},
+			expectedMinProperties: intPtr(1),
+			expectedMaxProperties: intPtr(10),
+		},
+		{
+			name: "map len -> minProperties == maxProperties",
+			field: &models.FieldInfo{
+				Type:        "map[string]int",
+				Constraints: map[string]string{"len": "3"},
+			},
+			expectedMinProperties: intPtr(3),
+			expectedMaxProperties: intPtr(3),
+		},
 	}
 
 	for _, tt := range tests {
@@ -1383,6 +1403,8 @@ func TestApplyConstraints(t *testing.T) {
 			assertOptionalString(t, "format", tt.expectedFormat, prop.Format)
 			assertOptionalPtr(t, "MinLength", tt.expectedMinLength, prop.MinLength)
 			assertOptionalPtr(t, "MaxLength", tt.expectedMaxLength, prop.MaxLength)
+			assertOptionalPtr(t, "MinProperties", tt.expectedMinProperties, prop.MinProperties)
+			assertOptionalPtr(t, "MaxProperties", tt.expectedMaxProperties, prop.MaxProperties)
 			assertOptionalPtr(t, "Minimum", tt.expectedMinimum, prop.Minimum)
 			assertOptionalPtr(t, "Maximum", tt.expectedMaximum, prop.Maximum)
 			assertOptionalPtr(t, "ExclusiveMinimum", tt.expectedExclusiveMin, prop.ExclusiveMinimum)
@@ -2584,6 +2606,20 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 		assert.Equal(t, refPath("Address"), p.Items.Ref, "$ref element stands alone")
 		require.NotNil(t, p.MinItems)
 		assert.Equal(t, 1, *p.MinItems)
+	})
+
+	t.Run("map cardinality -> minProperties/maxProperties on object", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{
+			Type: "map[string]string", JSONName: "meta",
+			Constraints: map[string]string{"min": "1", "max": "10"},
+		})
+		assert.Equal(t, typeObject, p.Type)
+		require.NotNil(t, p.AdditionalProperties)
+		assert.Equal(t, typeString, p.AdditionalProperties.Type, "additionalProperties carries the value type")
+		require.NotNil(t, p.MinProperties)
+		assert.Equal(t, 1, *p.MinProperties)
+		require.NotNil(t, p.MaxProperties)
+		assert.Equal(t, 10, *p.MaxProperties)
 	})
 }
 
