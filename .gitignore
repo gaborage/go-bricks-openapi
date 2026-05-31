@@ -1,0 +1,23 @@
+# Compiled binary (built by `make build` / `make install`)
+/go-bricks-openapi
+/go-bricks-openapi.exe
+
+# Cross-compiled release artifacts (`make release-dry-run`)
+/go-bricks-openapi-*
+
+# GoReleaser output
+/dist/
+
+# Test & coverage artifacts
+coverage.out
+coverage.html
+*.test
+
+# CI gosec scan output (written by the security job's no-op assertion)
+gosec-output.txt
+
+# Local generated fixture spec (`make validate-cli` / `make validate-spec`)
+.openapi-fixture-spec.yaml
+
+# OS / editor cruft
+.DS_Store

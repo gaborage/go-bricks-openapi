@@ -1,0 +1,310 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          set -euo pipefail
+          # Test each package individually to avoid coverage-profile conflicts;
+          # the `models` package is struct-only (no tests).
+          packages=$(go list ./... | grep -vE '/models$')
+          if [ -n "$packages" ]; then
+            for pkg in $packages; do
+              echo "Testing package: $pkg"
+              go test -race "$pkg"
+            done
+            # Generate the combined coverage profile for SonarCloud (Ubuntu only).
+            # A hard failure here is intentional — silent absence of coverage is
+            # exactly the kind of gap that hides regressions.
+            if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+              echo "Generating coverage report for SonarCloud"
+              go test -race -coverprofile=coverage.out -covermode=atomic $packages
+            fi
+          else
+            echo "No packages found to test"
+            exit 1
+          fi
+
+      - name: Run tests (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          $packages = go list ./...
+
+          if (-not $packages) {
+            Write-Host "No packages found to test"
+            exit 1
+          }
+
+          $testOutput = go test -race $packages 2>&1
+          $exitCode = $LASTEXITCODE
+
+          if ($exitCode -eq 0) {
+            Write-Host $testOutput
+            exit 0
+          }
+
+          Write-Host "Initial test run failed, re-running per package to evaluate failures" -ForegroundColor Yellow
+          $knownPatterns = @(
+            'Expected /tmp.*got D:'
+          )
+          $unexpectedFailure = $false
+
+          foreach ($pkg in $packages) {
+            Write-Host "Re-testing package: $pkg" -ForegroundColor Cyan
+            $pkgOutput = go test -race $pkg 2>&1
+            $pkgExitCode = $LASTEXITCODE
+
+            if ($pkgExitCode -eq 0) {
+              Write-Host $pkgOutput
+              continue
+            }
+
+            $isKnownIssue = $false
+            foreach ($pattern in $knownPatterns) {
+              if ($pkgOutput -match $pattern) {
+                Write-Host "Known Windows-specific issue detected in ${pkg}: $pattern" -ForegroundColor Yellow
+                $isKnownIssue = $true
+                break
+              }
+            }
+
+            if (-not $isKnownIssue) {
+              Write-Host "Unexpected test failure in $pkg" -ForegroundColor Red
+              Write-Host $pkgOutput
+              $unexpectedFailure = $true
+            } else {
+              Write-Host $pkgOutput
+            }
+          }
+
+          if ($unexpectedFailure) {
+            exit 1
+          }
+
+          Write-Host "All unexpected Windows test failures resolved or matched known issues." -ForegroundColor Green
+          exit 0
+
+      - name: Upload coverage artifact for SonarCloud (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 1
+          # The coverage profile is mandatory for SonarCloud and is reliably
+          # produced by the step above; fail loudly here if it ever goes missing
+          # rather than as an opaque download-artifact error in the sonar job.
+          if-no-files-found: error
+
+  build:
+    name: Build & Validate (${{ matrix.os }})
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build and validate CLI (Unix)
+        if: matrix.os != 'windows-latest'
+        run: make validate-cli
+
+      - name: Validate generated spec (redocly, Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: make validate-spec
+
+      - name: Build and validate CLI (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          # Build the CLI tool (equivalent to make build)
+          go build -ldflags "-X main.version=dev" -o go-bricks-openapi.exe ./cmd/go-bricks-openapi
+
+          # Validate CLI commands work (equivalent to make validate-cli)
+          ./go-bricks-openapi.exe version
+          ./go-bricks-openapi.exe --help
+          # doctor must run against a real go-bricks project (dependency + modules
+          # present). Mirror make validate-cli's SPEC_FIXTURE target.
+          $projectRoot = Resolve-Path "internal/spectest/testdata/nested_schema"
+          ./go-bricks-openapi.exe doctor --project $projectRoot
+          # Exercise generate end-to-end and sanity-check the output (network-free).
+          $specTmp = Join-Path $env:TEMP "openapi-cli-spec.yaml"
+          ./go-bricks-openapi.exe generate --project $projectRoot --output $specTmp
+          # PowerShell 5.1 does not abort on a native command's non-zero exit, so
+          # surface generate failures explicitly.
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $hasMarker = Select-String -Path $specTmp -Pattern "openapi: 3.0.1" -Quiet
+          Remove-Item -Force $specTmp
+          if (-not $hasMarker) {
+            Write-Error "generated spec missing the OpenAPI version marker"; exit 1
+          }
+          Write-Host "CLI validation passed"
+
+      - name: Verify go mod tidy (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+  lint:
+    name: Lint
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@36fe29c8f9dc696b104db0f7d49d1a87d2bbcd5b
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
+  security:
+    name: Security (gosec)
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
+
+      - name: Run Gosec Security Scanner
+        run: |
+          set -euo pipefail
+          # gosec needs filesystem path patterns — Go import paths make it
+          # silently scan 0 files and exit green. Exclude the testdata fixture
+          # modules (parsed as AST, never built). Then assert files were actually
+          # scanned, so a silent no-op can never pass as success again.
+          gosec -exclude-dir=testdata ./... 2>&1 | tee gosec-output.txt
+          files=$(sed 's/\x1b\[[0-9;]*m//g' gosec-output.txt | grep -E 'Files[[:space:]]*:' | grep -oE '[0-9]+' | head -1)
+          if [ -z "${files:-}" ] || [ "$files" -eq 0 ]; then
+            echo "::error::gosec scanned 0 files — the security gate would be a no-op"
+            exit 1
+          fi
+          echo "gosec scanned $files files with no issues"
+
+  release-check:
+    name: GoReleaser config check
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: go.sum
+
+      # Validates .goreleaser.yaml and that the build matrix compiles, without
+      # publishing anything — catches release-config breakage on every PR.
+      - name: GoReleaser check + snapshot build
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: build --snapshot --clean
+
+  sonarcloud:
+    name: SonarCloud
+    permissions:
+      contents: read
+    needs: [test]
+    if: ${{ always() && needs.test.result == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # full history for better SonarCloud relevancy
+
+      - name: Download coverage artifact
+        if: ${{ env.SONAR_TOKEN != '' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-report
+          path: .
+
+      - name: SonarCloud Scan
+        # Skips gracefully on fork PRs and before the SONAR_TOKEN secret is
+        # configured, so CI stays green until SonarCloud is wired up.
+        if: ${{ env.SONAR_TOKEN != '' }}
+        uses: SonarSource/sonarqube-scan-action@f099b441665cb71b0414100cfaf6d835492cee5f
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

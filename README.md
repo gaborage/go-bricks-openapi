@@ -1,1 +1,92 @@
 # go-bricks-openapi
+
+[![CI](https://github.com/gaborage/go-bricks-openapi/actions/workflows/ci.yml/badge.svg)](https://github.com/gaborage/go-bricks-openapi/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/gaborage/go-bricks-openapi.svg)](https://pkg.go.dev/github.com/gaborage/go-bricks-openapi)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
+Static-analysis–based **OpenAPI 3.0.1** specification generator for
+[GoBricks](https://github.com/gaborage/go-bricks) services.
+
+It discovers your modules, routes, and typed request/response models by parsing
+your source with `go/ast` — it **never imports or runs your service**, so spec
+generation is fast, hermetic, and needs no build of the target project.
+
+## Installation
+
+```bash
+# Install the latest release with the Go toolchain
+go install github.com/gaborage/go-bricks-openapi/cmd/go-bricks-openapi@latest
+```
+
+Prebuilt binaries for Linux, macOS, and Windows are attached to each
+[GitHub Release](https://github.com/gaborage/go-bricks-openapi/releases).
+
+Or build from source:
+
+```bash
+git clone https://github.com/gaborage/go-bricks-openapi.git
+cd go-bricks-openapi
+make install   # builds and installs go-bricks-openapi into $GOBIN
+```
+
+## Usage
+
+```bash
+# Generate an OpenAPI spec from a GoBricks service
+go-bricks-openapi generate --project . --output docs/openapi.yaml
+
+# Check environment & project compatibility before generating
+go-bricks-openapi doctor --project .
+
+# Print version / build info
+go-bricks-openapi version
+```
+
+### Commands
+
+| Command    | Purpose                                                        |
+|------------|----------------------------------------------------------------|
+| `generate` | Generate an OpenAPI 3.0.1 specification from a GoBricks service |
+| `doctor`   | Check Go/GoBricks compatibility and project structure          |
+| `version`  | Show tool, Go, and OpenAPI spec versions                       |
+
+### `generate` flags
+
+| Flag                    | Description                                              |
+|-------------------------|----------------------------------------------------------|
+| `--project, -p`         | Path to the GoBricks project root (default `.`)          |
+| `--output, -o`          | Output file path                                         |
+| `--format`              | Output format: `yaml` (default) or `json`                |
+| `--title`               | API title for the spec `info` block                      |
+| `--api-version`         | API version for the spec `info` block                    |
+| `--description`         | API description                                          |
+| `--server`              | Server URL (repeatable)                                  |
+| `--license`             | License name                                             |
+| `--license-url`         | License URL                                              |
+| `--no-tenant-security`  | Omit the `X-Tenant-ID` security scheme                   |
+| `--strict`              | Treat analyzer warnings as failures                      |
+| `--verbose, -v`         | Verbose output                                           |
+
+## Requirements
+
+- **Go 1.25+** to build/run the tool.
+- Targets **GoBricks v0.13.0+** projects (the `doctor` command enforces this floor).
+
+## Development
+
+```bash
+make check          # fmt + lint + test (race) + validate-cli — the pre-commit gate
+make test           # unit tests with race detection
+make test-coverage  # coverage profile + HTML report
+make validate-cli   # build the binary and smoke-test version/doctor/generate
+make validate-spec  # generate a fixture spec and lint it with redocly (needs npx)
+```
+
+The test suite is hermetic: the `internal/spectest` harness runs the real
+analyze → generate → validate pipeline over the fixture projects under
+`internal/spectest/testdata/` and validates the emitted documents in-process
+against OpenAPI 3.0 (no network required).
+
+## License
+
+[Apache 2.0](LICENSE)

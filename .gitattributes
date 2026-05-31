@@ -1,0 +1,6 @@
+# Golden OpenAPI specs for the spectest round-trip harness must stay LF on every
+# platform. Without this, Windows checkouts with autocrlf=true would convert them
+# to CRLF, and the byte-exact golden comparisons in internal/spectest would drift
+# (the test also normalizes EOL as a second line of defense, but pinning the
+# checkout is the primary guarantee).
+internal/spectest/testdata/**/*.yaml text eol=lf
