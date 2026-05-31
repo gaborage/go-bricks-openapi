@@ -993,6 +993,8 @@ func (a *ProjectAnalyzer) extractRouteMetadata(arg ast.Expr, route *models.Route
 		}
 	case "WithRawResponse":
 		route.RawResponse = true
+	case "WithPublic":
+		route.Public = true
 	}
 }
 

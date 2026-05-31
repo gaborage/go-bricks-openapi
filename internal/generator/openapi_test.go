@@ -2660,3 +2660,61 @@ func TestNewWithConfig(t *testing.T) {
 		assert.NotContains(t, spec, "MUTATED")
 	})
 }
+
+// TestBuildOperationPublicSecurityOverride covers the per-operation security
+// opt-out: a route.Public route emits operation-level `security: []` only when
+// the document carries a root tenant-security requirement to override.
+func TestBuildOperationPublicSecurityOverride(t *testing.T) {
+	route := &models.Route{Method: "GET", Path: "/health", HandlerName: "health"}
+
+	t.Run("public + tenant auth on => empty-but-present override", func(t *testing.T) {
+		gen := NewWithConfig(&Config{Title: "T", Version: "1.0.0"})
+		route.Public = true
+		op := gen.buildOperation(route, map[string]string{})
+		require.NotNil(t, op.Security, "public route must override root security")
+		assert.Empty(t, *op.Security, "override is an empty requirement list => no auth")
+	})
+
+	t.Run("public + tenant auth off => no override (nil)", func(t *testing.T) {
+		gen := NewWithConfig(&Config{Title: "T", Version: "1.0.0", DisableTenantSecurity: true})
+		route.Public = true
+		op := gen.buildOperation(route, map[string]string{})
+		assert.Nil(t, op.Security, "no root requirement => emitting security: [] would be redundant noise")
+	})
+
+	t.Run("not public => nil", func(t *testing.T) {
+		gen := NewWithConfig(&Config{Title: "T", Version: "1.0.0"})
+		route.Public = false
+		op := gen.buildOperation(route, map[string]string{})
+		assert.Nil(t, op.Security, "non-public route inherits the document-level security")
+	})
+}
+
+// TestOperationSecurityYAMLMarshal pins the pointer-to-slice contract: a
+// non-nil pointer to an empty slice marshals as `security: []`, while a nil
+// pointer omits the key entirely.
+func TestOperationSecurityYAMLMarshal(t *testing.T) {
+	t.Run("non-nil empty slice emits security: []", func(t *testing.T) {
+		empty := []map[string][]string{}
+		op := &OpenAPIOperation{
+			OperationID: "health",
+			Summary:     "Health",
+			Responses:   map[string]*OpenAPIResponse{"200": {Description: "ok"}},
+			Security:    &empty,
+		}
+		out, err := yaml.Marshal(op)
+		require.NoError(t, err)
+		assert.Contains(t, string(out), "security: []", "empty-but-present override must serialize as security: []")
+	})
+
+	t.Run("nil pointer omits the security key", func(t *testing.T) {
+		op := &OpenAPIOperation{
+			OperationID: "list",
+			Summary:     "List",
+			Responses:   map[string]*OpenAPIResponse{"200": {Description: "ok"}},
+		}
+		out, err := yaml.Marshal(op)
+		require.NoError(t, err)
+		assert.NotContains(t, string(out), "security", "nil pointer must omit the security key")
+	})
+}
