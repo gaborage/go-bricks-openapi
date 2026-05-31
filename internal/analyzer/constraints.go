@@ -22,6 +22,8 @@ const (
 	constraintMaximum          = "maximum"
 	constraintMinItems         = "minItems"
 	constraintMaxItems         = "maxItems"
+	constraintMinProperties    = "minProperties"
+	constraintMaxProperties    = "maxProperties"
 	constraintEnum             = "enum"
 	constraintPattern          = "pattern"
 	constraintExclusiveMinimum = "exclusiveMinimum"
@@ -59,10 +61,11 @@ func MapConstraintToOpenAPI(fieldType, underlyingKind string, constraints map[st
 	// scalars (the well-known mapper already types them string/binary), not slices.
 	// Their min/max are byte counts, which do NOT equal the base64-encoded character
 	// length, so we deliberately drop length bounds on them rather than emit a wrong
-	// minLength/maxLength. Maps likewise carry no cardinality here (effectiveKind is
-	// "" for a map type, so min/max are dropped); minProperties/maxProperties support
-	// is tracked as a follow-up.
+	// minLength/maxLength. Map types are handled by a parallel branch below: their
+	// effectiveKind is "" (neither string nor numeric), so min/max/len route to
+	// minProperties/maxProperties (entry-count cardinality) rather than being dropped.
 	isSlice := isSliceType(fieldType) && !isByteSlice(baseType)
+	isMap := isMapType(fieldType)
 	effKind := effectiveKind(baseType, underlyingKind)
 
 	// Iterate keys in sorted order so the emitted constraints are deterministic.
@@ -82,6 +85,13 @@ func MapConstraintToOpenAPI(fieldType, underlyingKind string, constraints map[st
 		// to the array itself; element rules arrive via ElementConstraints + dive.
 		if isSlice {
 			result = append(result, handleSliceCardinality(key, value)...)
+			continue
+		}
+		// Map fields: only entry-count cardinality (min/max/len -> minProperties/
+		// maxProperties) applies to the map itself. A map type never matches isSlice
+		// ("map[" does not start with "[]"), so the two branches are mutually exclusive.
+		if isMap {
+			result = append(result, handleMapCardinality(key, value)...)
 			continue
 		}
 		result = append(result, dispatchScalarConstraint(key, value, effKind)...)
@@ -153,6 +163,12 @@ func isByteSlice(t string) bool { return t == "[]byte" || t == "[]uint8" }
 // pointer). Twin of generator.isSliceType — keep in sync.
 func isSliceType(t string) bool {
 	return strings.HasPrefix(strings.TrimPrefix(t, "*"), "[]")
+}
+
+// isMapType reports whether t denotes a map (after an optional leading pointer),
+// e.g. "map[string]int" or "*map[string]int". Mirrors isSliceType.
+func isMapType(t string) bool {
+	return strings.HasPrefix(strings.TrimPrefix(t, "*"), "map[")
 }
 
 // formatTagMap maps boolean validator format tags to their OpenAPI `format`.
@@ -338,6 +354,24 @@ func handleSliceCardinality(key, value string) []OpenAPIConstraint {
 		return []OpenAPIConstraint{{Name: constraintMaxItems, Value: n}}
 	case "len":
 		return []OpenAPIConstraint{{Name: constraintMinItems, Value: n}, {Name: constraintMaxItems, Value: n}}
+	}
+	return nil
+}
+
+// handleMapCardinality maps min/max/len on a map field to minProperties/
+// maxProperties (entry-count cardinality). Mirrors handleSliceCardinality.
+func handleMapCardinality(key, value string) []OpenAPIConstraint {
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return nil
+	}
+	switch key {
+	case "min":
+		return []OpenAPIConstraint{{Name: constraintMinProperties, Value: n}}
+	case "max":
+		return []OpenAPIConstraint{{Name: constraintMaxProperties, Value: n}}
+	case "len":
+		return []OpenAPIConstraint{{Name: constraintMinProperties, Value: n}, {Name: constraintMaxProperties, Value: n}}
 	}
 	return nil
 }

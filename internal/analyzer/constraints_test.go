@@ -402,6 +402,37 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 			expected:    []OpenAPIConstraint{{Name: "maxItems", Value: 5}},
 			description: "max on []T maps to maxItems",
 		},
+		// --- map cardinality (issue #3) ---
+		{
+			name: "map min -> minProperties", fieldType: "map[string]string",
+			constraints: map[string]string{"min": "1"},
+			expected:    []OpenAPIConstraint{{Name: "minProperties", Value: 1}},
+			description: "min on map[string]T maps to minProperties",
+		},
+		{
+			name: "map max -> maxProperties", fieldType: "map[string]string",
+			constraints: map[string]string{"max": "10"},
+			expected:    []OpenAPIConstraint{{Name: "maxProperties", Value: 10}},
+			description: "max on map[string]T maps to maxProperties",
+		},
+		{
+			name: "map len -> minProperties+maxProperties", fieldType: "map[string]string",
+			constraints: map[string]string{"len": "3"},
+			expected:    []OpenAPIConstraint{{Name: "minProperties", Value: 3}, {Name: "maxProperties", Value: 3}},
+			description: "len on map[string]T maps to minProperties == maxProperties",
+		},
+		{
+			name: "pointer map min -> minProperties", fieldType: "*map[string]int",
+			constraints: map[string]string{"min": "2"},
+			expected:    []OpenAPIConstraint{{Name: "minProperties", Value: 2}},
+			description: "pointer-to-map stripped, cardinality applies",
+		},
+		{
+			name: "struct-valued map cardinality", fieldType: "map[string]struct{}",
+			constraints: map[string]string{"min": "1", "max": "5"},
+			expected:    []OpenAPIConstraint{{Name: "minProperties", Value: 1}, {Name: "maxProperties", Value: 5}},
+			description: "cardinality is independent of the map value type",
+		},
 	}
 
 	for _, tt := range tests {
