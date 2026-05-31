@@ -3757,6 +3757,42 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 		"HandlerName stays the handler method name, so the generator can module-qualify the derived id")
 }
 
+// TestWithPublicMetadata verifies the server.WithPublic() route option flips
+// route.Public, that it composes with WithTags, and that a route without it
+// keeps Public=false.
+func TestWithPublicMetadata(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
+func (m *Module) health(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
+func (m *Module) tagged(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
+func (m *Module) private(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/health", m.health, server.WithPublic())
+	server.GET(hr, r, "/tagged", m.tagged, server.WithPublic(), server.WithTags("ops"))
+	server.GET(hr, r, "/private", m.private)
+}
+`
+	_, routes := analyzeSingleModule(t, src)
+
+	health := routeForPath(t, routes, "GET /health")
+	assert.True(t, health.Public, "WithPublic() must set Public")
+
+	tagged := routeForPath(t, routes, "GET /tagged")
+	assert.True(t, tagged.Public, "WithPublic() composes with other options")
+	assert.Equal(t, []string{"ops"}, tagged.Tags, "WithTags still applies alongside WithPublic")
+
+	private := routeForPath(t, routes, "GET /private")
+	assert.False(t, private.Public, "a route without WithPublic() must keep Public=false")
+}
+
 // TestExtractSuccessStatusLastWins confirms that when a handler returns a server
 // constructor from an early guard branch and a different one from the terminal
 // happy path, the terminal (last) return is the documented status.

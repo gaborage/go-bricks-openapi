@@ -1304,16 +1304,18 @@ func TestApplyConstraints(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
 	tests := []struct {
-		name                 string
-		field                *models.FieldInfo
-		expectedFormat       string
-		expectedMinLength    *int
-		expectedMaxLength    *int
-		expectedMinimum      *float64
-		expectedMaximum      *float64
-		expectedExclusiveMin *bool
-		expectedPattern      string
-		expectedEnumCount    int
+		name                  string
+		field                 *models.FieldInfo
+		expectedFormat        string
+		expectedMinLength     *int
+		expectedMaxLength     *int
+		expectedMinProperties *int
+		expectedMaxProperties *int
+		expectedMinimum       *float64
+		expectedMaximum       *float64
+		expectedExclusiveMin  *bool
+		expectedPattern       string
+		expectedEnumCount     int
 	}{
 		{
 			name: "no constraints",
@@ -1373,6 +1375,24 @@ func TestApplyConstraints(t *testing.T) {
 			},
 			expectedEnumCount: 3,
 		},
+		{
+			name: "map min/max -> minProperties/maxProperties",
+			field: &models.FieldInfo{
+				Type:        "map[string]string",
+				Constraints: map[string]string{"min": "1", "max": "10"},
+			},
+			expectedMinProperties: intPtr(1),
+			expectedMaxProperties: intPtr(10),
+		},
+		{
+			name: "map len -> minProperties == maxProperties",
+			field: &models.FieldInfo{
+				Type:        "map[string]int",
+				Constraints: map[string]string{"len": "3"},
+			},
+			expectedMinProperties: intPtr(3),
+			expectedMaxProperties: intPtr(3),
+		},
 	}
 
 	for _, tt := range tests {
@@ -1383,6 +1403,8 @@ func TestApplyConstraints(t *testing.T) {
 			assertOptionalString(t, "format", tt.expectedFormat, prop.Format)
 			assertOptionalPtr(t, "MinLength", tt.expectedMinLength, prop.MinLength)
 			assertOptionalPtr(t, "MaxLength", tt.expectedMaxLength, prop.MaxLength)
+			assertOptionalPtr(t, "MinProperties", tt.expectedMinProperties, prop.MinProperties)
+			assertOptionalPtr(t, "MaxProperties", tt.expectedMaxProperties, prop.MaxProperties)
 			assertOptionalPtr(t, "Minimum", tt.expectedMinimum, prop.Minimum)
 			assertOptionalPtr(t, "Maximum", tt.expectedMaximum, prop.Maximum)
 			assertOptionalPtr(t, "ExclusiveMinimum", tt.expectedExclusiveMin, prop.ExclusiveMinimum)
@@ -2585,6 +2607,20 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 		require.NotNil(t, p.MinItems)
 		assert.Equal(t, 1, *p.MinItems)
 	})
+
+	t.Run("map cardinality -> minProperties/maxProperties on object", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{
+			Type: "map[string]string", JSONName: "meta",
+			Constraints: map[string]string{"min": "1", "max": "10"},
+		})
+		assert.Equal(t, typeObject, p.Type)
+		require.NotNil(t, p.AdditionalProperties)
+		assert.Equal(t, typeString, p.AdditionalProperties.Type, "additionalProperties carries the value type")
+		require.NotNil(t, p.MinProperties)
+		assert.Equal(t, 1, *p.MinProperties)
+		require.NotNil(t, p.MaxProperties)
+		assert.Equal(t, 10, *p.MaxProperties)
+	})
 }
 
 // TestNewWithConfig covers the CLI-driven document metadata: custom servers,
@@ -2658,5 +2694,63 @@ func TestNewWithConfig(t *testing.T) {
 		assert.NotContains(t, spec, "mutated.example.com")
 		assert.Contains(t, spec, "name: MIT", "license must be copied")
 		assert.NotContains(t, spec, "MUTATED")
+	})
+}
+
+// TestBuildOperationPublicSecurityOverride covers the per-operation security
+// opt-out: a route.Public route emits operation-level `security: []` only when
+// the document carries a root tenant-security requirement to override.
+func TestBuildOperationPublicSecurityOverride(t *testing.T) {
+	route := &models.Route{Method: "GET", Path: "/health", HandlerName: "health"}
+
+	t.Run("public + tenant auth on => empty-but-present override", func(t *testing.T) {
+		gen := NewWithConfig(&Config{Title: "T", Version: "1.0.0"})
+		route.Public = true
+		op := gen.buildOperation(route, map[string]string{})
+		require.NotNil(t, op.Security, "public route must override root security")
+		assert.Empty(t, *op.Security, "override is an empty requirement list => no auth")
+	})
+
+	t.Run("public + tenant auth off => no override (nil)", func(t *testing.T) {
+		gen := NewWithConfig(&Config{Title: "T", Version: "1.0.0", DisableTenantSecurity: true})
+		route.Public = true
+		op := gen.buildOperation(route, map[string]string{})
+		assert.Nil(t, op.Security, "no root requirement => emitting security: [] would be redundant noise")
+	})
+
+	t.Run("not public => nil", func(t *testing.T) {
+		gen := NewWithConfig(&Config{Title: "T", Version: "1.0.0"})
+		route.Public = false
+		op := gen.buildOperation(route, map[string]string{})
+		assert.Nil(t, op.Security, "non-public route inherits the document-level security")
+	})
+}
+
+// TestOperationSecurityYAMLMarshal pins the pointer-to-slice contract: a
+// non-nil pointer to an empty slice marshals as `security: []`, while a nil
+// pointer omits the key entirely.
+func TestOperationSecurityYAMLMarshal(t *testing.T) {
+	t.Run("non-nil empty slice emits security: []", func(t *testing.T) {
+		empty := []map[string][]string{}
+		op := &OpenAPIOperation{
+			OperationID: "health",
+			Summary:     "Health",
+			Responses:   map[string]*OpenAPIResponse{"200": {Description: "ok"}},
+			Security:    &empty,
+		}
+		out, err := yaml.Marshal(op)
+		require.NoError(t, err)
+		assert.Contains(t, string(out), "security: []", "empty-but-present override must serialize as security: []")
+	})
+
+	t.Run("nil pointer omits the security key", func(t *testing.T) {
+		op := &OpenAPIOperation{
+			OperationID: "list",
+			Summary:     "List",
+			Responses:   map[string]*OpenAPIResponse{"200": {Description: "ok"}},
+		}
+		out, err := yaml.Marshal(op)
+		require.NoError(t, err)
+		assert.NotContains(t, string(out), "security", "nil pointer must omit the security key")
 	})
 }
