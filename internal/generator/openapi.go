@@ -195,6 +195,10 @@ type OpenAPIOperation struct {
 	Parameters  []Parameter                 `yaml:"parameters,omitempty"`
 	RequestBody *OpenAPIRequestBody         `yaml:"requestBody,omitempty"`
 	Responses   map[string]*OpenAPIResponse `yaml:"responses"`
+	// Security overrides the root security requirement for this operation.
+	// nil => inherit the document-level security; a non-nil empty slice =>
+	// emit `security: []` (no auth), used for tenant-agnostic routes.
+	Security *[]map[string][]string `yaml:"security,omitempty"`
 }
 
 // OpenAPIRequestBody is a Request Body Object. Description carries the JOSE
@@ -590,6 +594,15 @@ func (g *OpenAPIGenerator) buildOperation(route *models.Route, opIDs map[string]
 	// the route still expects an application/jose payload on the wire).
 	if route.Request != nil && (len(bodyFields) > 0 || route.Request.JOSE) {
 		op.RequestBody = g.buildRequestBody(route.Request)
+	}
+
+	// Public routes opt out of the document-level tenant requirement by emitting
+	// operation-level `security: []`. Only override when there IS a root tenant
+	// requirement to override — with tenant security off, `security: []` would be
+	// redundant noise.
+	if route.Public && g.tenantAuth {
+		empty := []map[string][]string{}
+		op.Security = &empty
 	}
 
 	return op

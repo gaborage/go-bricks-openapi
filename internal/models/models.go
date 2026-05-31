@@ -48,6 +48,11 @@ type Route struct {
 	// handler bypasses the standard data/meta envelope and returns its payload
 	// directly (Strangler-Fig migration).
 	RawResponse bool
+	// Public is true when the route opts out of tenant security via
+	// server.WithPublic(): the generator emits operation-level `security: []`
+	// so liveness/readiness probes and other tenant-agnostic endpoints
+	// (/health, /ready, /api/version) are documented as requiring no auth.
+	Public bool
 }
 
 // TypeInfo represents type metadata for requests and responses

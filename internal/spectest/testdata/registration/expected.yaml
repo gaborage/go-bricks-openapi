@@ -45,6 +45,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+      security: []
   /health:
     get:
       operationId: storefrontHealth
@@ -83,6 +84,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+      security: []
   /items:
     post:
       operationId: storefrontCreateItem
