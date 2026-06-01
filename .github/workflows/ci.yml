@@ -303,8 +303,17 @@ jobs:
 
       - name: SonarCloud Scan
         # Skips gracefully on fork PRs and before the SONAR_TOKEN secret is
-        # configured, so CI stays green until SonarCloud is wired up.
+        # configured (forks never see the secret), so CI stays green for
+        # external contributors and until SonarCloud is wired up.
         if: ${{ env.SONAR_TOKEN != '' }}
         uses: SonarSource/sonarqube-scan-action@f099b441665cb71b0414100cfaf6d835492cee5f
+        with:
+          # Block on the server-computed quality gate. Without this the scan
+          # exits SUCCESS the instant the report uploads — regardless of whether
+          # the gate (new-code coverage, ratings, hotspots) actually passed —
+          # making a green SonarCloud job a silent no-op. Waiting turns this job
+          # RED on a failing gate, which is the signal the required status check
+          # enforces. (Polls the Sonar API via SONAR_TOKEN; no GitHub perms.)
+          args: -Dsonar.qualitygate.wait=true
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
