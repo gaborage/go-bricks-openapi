@@ -3,10 +3,12 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - 'v*.*.*'   # matches stable and pre-release tags; attestation runs on both
 
 permissions:
-  contents: write  # required to create the GitHub Release and upload assets
+  contents: write       # create the GitHub Release and upload assets
+  id-token: write       # mint the OIDC token for keyless Sigstore signing
+  attestations: write   # persist the build provenance attestation
 
 jobs:
   goreleaser:
@@ -32,3 +34,15 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest build provenance
+        # Intentionally not continue-on-error: a signing failure should block the
+        # release so a missing attestation is never silent.
+        uses: actions/attest-build-provenance@v4
+        with:
+          # GoReleaser writes dist/checksums.txt (sha256 digests + names); one
+          # attestation covers every archive and binary listed in it.
+          subject-checksums: dist/checksums.txt
+          # Storage records are org-only; this is a user-owned repo, so skip it
+          # and keep the permission set to id-token + attestations.
+          create-storage-record: false

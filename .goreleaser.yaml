@@ -19,8 +19,10 @@ builds:
       - -trimpath
     ldflags:
       # main.version is the package-level var injected by ldflags (same seam the
-      # Makefile uses); GoReleaser supplies the clean SemVer tag.
-      - -s -w -X main.version={{ .Version }}
+      # Makefile uses). Use {{ .Tag }} (the full v-prefixed tag) so a prebuilt
+      # binary reports the same string as a `go install ...@vX.Y.Z` build, whose
+      # module version string keeps the leading v.
+      - -s -w -X main.version={{ .Tag }}
     goos:
       - linux
       - darwin

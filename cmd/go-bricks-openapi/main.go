@@ -13,9 +13,11 @@ import (
 var version = "dev" // Will be set during build via -ldflags "-X main.version=..."
 
 // buildRootCmd constructs the go-bricks-openapi root command with all subcommands.
-// The version (injected at build time) is surfaced by the --version flag and the
-// version subcommand.
+// The version is resolved once (ldflags > go-install module metadata > "dev") and
+// surfaced by both the --version flag and the version subcommand.
 func buildRootCmd() *cobra.Command {
+	resolved := commands.ResolveVersion(version)
+
 	rootCmd := &cobra.Command{
 		Use:   "go-bricks-openapi",
 		Short: "Generate OpenAPI specs for go-bricks services",
@@ -23,7 +25,7 @@ func buildRootCmd() *cobra.Command {
 
 This tool analyzes go-bricks services and generates OpenAPI specifications automatically
 from route registrations, type definitions, and validation tags.`,
-		Version: version,
+		Version: resolved,
 		// Errors and usage are reported once by run() (a single "Error:" line, no
 		// usage dump) rather than by cobra's default handler on a RunE error.
 		SilenceUsage:  true,
@@ -34,7 +36,7 @@ from route registrations, type definitions, and validation tags.`,
 		commands.NewGenerateCommand(),
 		commands.NewValidateCommand(),
 		commands.NewDoctorCommand(),
-		commands.NewVersionCommand(version),
+		commands.NewVersionCommand(resolved),
 	)
 
 	return rootCmd
