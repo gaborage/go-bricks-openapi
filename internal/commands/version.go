@@ -12,17 +12,14 @@ import (
 // the default value of main.version before ldflags or module metadata override it.
 const devVersion = "dev"
 
-// readBuildVersion returns the main module's version from the metadata the Go
-// toolchain embeds in the binary, and whether a usable value was found. It is a
-// package-level var so tests can substitute the lookup.
-//
-// `go install module@vX.Y.Z` records the tag here even though it never runs the
-// Makefile/GoReleaser ldflags — this is what lets the go-install channel report
-// an honest version. A local `go build` reports "(devel)" or empty, which is
-// treated as "no usable version".
-var readBuildVersion = func() (string, bool) {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
+// usableBuildVersion extracts the main module's version from the build metadata
+// the Go toolchain embeds in the binary. It normalizes the "no real version"
+// markers — a missing BuildInfo (ok == false), an empty version, or the local
+// "(devel)" placeholder — to ("", false); a release tag or a pseudo-version is
+// returned as usable. Kept as a pure function (no I/O) so every branch is
+// unit-testable with fabricated BuildInfo values.
+func usableBuildVersion(info *debug.BuildInfo, ok bool) (string, bool) {
+	if !ok || info == nil {
 		return "", false
 	}
 	v := info.Main.Version
@@ -30,6 +27,17 @@ var readBuildVersion = func() (string, bool) {
 		return "", false
 	}
 	return v, true
+}
+
+// readBuildVersion returns the main module's version recorded in the binary's
+// build metadata, and whether a usable value was found. It is a package-level
+// var so tests can substitute the lookup when exercising ResolveVersion.
+//
+// `go install module@vX.Y.Z` records the tag here even though it never runs the
+// Makefile/GoReleaser ldflags — this is what lets the go-install channel report
+// an honest version.
+var readBuildVersion = func() (string, bool) {
+	return usableBuildVersion(debug.ReadBuildInfo())
 }
 
 // ResolveVersion picks the most authoritative version string available.
