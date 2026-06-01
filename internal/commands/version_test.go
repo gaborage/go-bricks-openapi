@@ -142,6 +142,36 @@ func TestPrintVersion(t *testing.T) {
 	}
 }
 
+// TestResolveVersion verifies the precedence: an ldflags-injected version wins;
+// otherwise the module build version recorded by `go install`; otherwise "dev".
+// readBuildVersion is swapped out so the build-metadata branch is deterministic.
+func TestResolveVersion(t *testing.T) {
+	tests := []struct {
+		name     string
+		injected string
+		buildVer string
+		buildOK  bool
+		want     string
+	}{
+		{"ldflag wins over build metadata", "v1.2.3", "v9.9.9", true, "v1.2.3"},
+		{"ldflag wins even when build metadata absent", "v1.2.3", "", false, "v1.2.3"},
+		{"go install tag used when injected is the dev sentinel", "dev", "v0.1.0", true, "v0.1.0"},
+		{"go install tag used when injected is empty", "", "v0.1.0", true, "v0.1.0"},
+		{"falls back to dev when no build metadata (dev sentinel)", "dev", "", false, "dev"},
+		{"falls back to dev when no build metadata (empty)", "", "", false, "dev"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orig := readBuildVersion
+			t.Cleanup(func() { readBuildVersion = orig })
+			readBuildVersion = func() (string, bool) { return tt.buildVer, tt.buildOK }
+
+			assert.Equal(t, tt.want, ResolveVersion(tt.injected))
+		})
+	}
+}
+
 func TestVersionCommandIntegration(t *testing.T) {
 	// Test that version command works as a subcommand
 	rootCmd := &cobra.Command{Use: "test-root"}

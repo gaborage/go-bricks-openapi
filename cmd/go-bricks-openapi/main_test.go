@@ -14,6 +14,8 @@ import (
 
 // withVersion temporarily sets the build-injected version global for a test.
 // NOTE: mutates the package-level version; do not call from parallel tests.
+// buildRootCmd passes this through commands.ResolveVersion, which returns any
+// non-sentinel value ("" and "dev" are sentinels) unchanged.
 func withVersion(t *testing.T, v string) {
 	t.Helper()
 	orig := version
