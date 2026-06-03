@@ -1,8 +1,12 @@
-.PHONY: help build test lint fmt update clean install demo check update test-coverage validate-cli validate-spec dev-deps release-dry-run
+.PHONY: help build test lint fmt update clean install demo check update test-coverage validate-cli validate-spec dev-deps vuln sec release release-dry-run
 
 # Binary name
 BINARY_NAME := go-bricks-openapi
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+
+# Pinned scanner versions — identical to CI so the local release gate matches.
+GOVULNCHECK_VERSION := v1.1.4
+GOSEC_VERSION := v2.26.1
 
 # Pinned redocly CLI version for the structural-validation gate. Pinned (not
 # @latest) so an upstream release cannot silently change the gate or break CI.
@@ -75,11 +79,24 @@ validate-spec: build ## Generate a fixture spec and validate it with redocly (re
 # internal/spectest already runs under `test`, so `check` stays offline/fast.
 check: fmt lint test validate-cli ## Run fmt, lint, test, and CLI validation (pre-commit checks)
 
+# Security scanners (pinned; mirror the CI gates so the local release gate matches)
+vuln: ## Run govulncheck vulnerability scan
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+
+sec: ## Run gosec security scanner (excludes testdata fixture modules, like CI)
+	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude-dir=testdata ./...
+
 # Development helpers
 dev-deps: ## Install development dependencies
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
 # Release helpers
+release: ## Cut a signed release tag (usage: make release VERSION=v0.2.0). Run AFTER merging the release-please PR.
+	@# VERSION has a git-describe default (used by build/install), so require an explicit
+	@# command-line override here rather than a non-empty check (which would always pass).
+	@test "$(origin VERSION)" = "command line" || { echo "Error: VERSION is required, e.g. 'make release VERSION=v0.2.0'"; exit 1; }
+	@VERSION=$(VERSION) ./scripts/release.sh
+
 release-dry-run: ## Test release build without publishing
 	@echo "Testing release build for version: $(VERSION)"
 	GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=$(VERSION)" -o $(BINARY_NAME)-linux-amd64 ./cmd/go-bricks-openapi

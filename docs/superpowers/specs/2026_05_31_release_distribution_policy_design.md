@@ -1,6 +1,15 @@
 # Release & Distribution Policy — Design
 
-**Status:** Approved (design)
+> **Partially superseded (2026-06-02)** by
+> [`2026_06_02_release_please_mechanism_design.md`](2026_06_02_release_please_mechanism_design.md).
+> The **release trigger** moved from manual tagging (§3) to a `release-please` standing PR +
+> signed tag, and a committed `CHANGELOG.md` (§4) now exists — both were deferred under §8 as
+> "revisit on demand," and that demand arrived. The **versioning policy** (§2), **honest
+> version reporting** (§5), and **SLSA provenance** (§6) below remain in force — **except** the
+> §2 "Pre-releases" bullet (`vX.Y.Z-rc.N`): `scripts/release.sh` now enforces strict
+> `v0.MINOR.PATCH`, so there is no RC path through `make release` (see the successor doc §6).
+
+**Status:** Approved (design); release-trigger + changelog sections superseded
 **Date:** 2026-05-31
 **Scope:** Versioning, release, and distribution policy for `go-bricks-openapi`, plus the minimal mechanism changes needed to make the existing pipeline honor it.
 

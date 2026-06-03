@@ -101,8 +101,8 @@ against OpenAPI 3.0 (no network required).
 
 ## Releasing
 
-Versioning and the manual release process are documented in
-[RELEASING.md](RELEASING.md).
+Versioning and the release process (a `release-please` standing PR plus a
+locally-cut signed tag) are documented in [RELEASING.md](RELEASING.md).
 
 ## License
 

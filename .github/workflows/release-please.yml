@@ -1,0 +1,24 @@
+name: release-please
+on:
+  push:
+    branches: [main]
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Maintains a standing "chore(main): release vX.Y.Z" PR that writes CHANGELOG.md
+      # + bumps .release-please-manifest.json. skip-github-release (in the config) means
+      # it never tags or publishes — the maintainer cuts the signed tag via `make release`,
+      # and release.yml publishes. RELEASE_PLEASE_TOKEN (a PAT) is required so the Release
+      # PR triggers CI and the label edits are reliable; the default GITHUB_TOKEN does neither.
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}

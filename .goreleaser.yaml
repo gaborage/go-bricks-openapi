@@ -51,17 +51,11 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+# Release notes come from the CHANGELOG.md section (release-please-owned), passed
+# to `goreleaser release --release-notes=...` by release.yml. Disable GoReleaser's
+# own changelog so CHANGELOG.md stays the single source of truth for release notes.
 changelog:
-  sort: asc
-  use: github
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
-      - "^ci:"
-      - "Merge pull request"
-      - "Merge branch"
+  disable: true
 
 release:
   github:
