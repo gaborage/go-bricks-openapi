@@ -41,11 +41,15 @@ backward compatibility on the three surfaces above — not an automatic mileston
 - **Squash setting** — Settings → General → Pull Requests → **"Default to PR title for squash
   merge commits"** must be ON (release-please parses the PR title as the commit subject). This
   repo is already squash-only.
-- **Tag/branch protection** — `.github/allowed_signers` is the CI trust root for release-tag
-  signatures. `release.yml` verifies a tag's signature against the copy of `allowed_signers`
-  **on `main`** and requires the tagged commit to be an ancestor of `main`, so the trust root
-  is exactly what the branch ruleset guards. For defense-in-depth, add a **tag-protection
-  ruleset** on `v*` restricting tag creation to the maintainer.
+- **Tag protection (REQUIRED)** — add a **tag-protection ruleset on `v*`** restricting tag
+  creation to the maintainer. This is the *enforcing* control, not optional: GitHub runs
+  `release.yml` from the **pushed tag's own tree**, so a tag that ships a modified `release.yml`
+  could strip the in-job signature/ancestry checks and reach the privileged publish token.
+  Restricting who can create `v*` tags is what actually closes that gap.
+- **Signature trust root** — `.github/allowed_signers` backs up tag protection. `release.yml`
+  verifies a tag's signature against the copy of `allowed_signers` **on `main`** (ruleset-guarded)
+  and requires the tagged commit to be an ancestor of `main`, so the in-job gate is exactly as
+  trustworthy as `main` — defense-in-depth behind the `v*` tag-protection ruleset above.
 - **Local SSH signing** — `make release` signs the tag (`git tag -s`). Configure
   `git config gpg.format ssh` + `user.signingkey` with the key listed in
   `.github/allowed_signers` (1Password or `ssh-agent`).

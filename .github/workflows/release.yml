@@ -20,14 +20,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
           ref: ${{ github.ref }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
         with:
           go-version: '1.26'
           cache: true
@@ -55,13 +55,18 @@ jobs:
     name: Publish release
     needs: [verify]
     runs-on: ubuntu-latest
+    # TRUST MODEL: GitHub runs this workflow from the *pushed tag's* tree, so the
+    # in-job annotated/ancestor/signature checks below are defense-in-depth, not the
+    # sole control — a tag could ship a modified release.yml. The enforcing control is
+    # the REQUIRED `v*` tag-protection ruleset restricting tag creation to the
+    # maintainer (RELEASING.md §0); the signed-tag gate then backs it up. Both matter.
     permissions:
       contents: write        # GoReleaser creates the GitHub Release and uploads assets
       pull-requests: write   # the autorelease:pending label step edits the merged Release PR
       id-token: write        # mint the OIDC token for keyless Sigstore signing
       attestations: write    # persist the build provenance attestation
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
           ref: ${{ github.ref }}
           fetch-depth: 0  # GoReleaser needs full tag history
@@ -115,14 +120,14 @@ jobs:
           echo "file=$notes" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
         with:
           go-version: '1.26'
           cache: true
           cache-dependency-path: go.sum
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a  # v6
         with:
           version: '~> v2'
           # --release-notes makes the CHANGELOG.md section (release-please-owned) the
@@ -134,7 +139,7 @@ jobs:
       - name: Attest build provenance
         # Intentionally not continue-on-error: a signing failure should block the
         # release so a missing attestation is never silent.
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4
         with:
           # GoReleaser writes dist/checksums.txt (sha256 digests + names); one
           # attestation covers every archive and binary listed in it.

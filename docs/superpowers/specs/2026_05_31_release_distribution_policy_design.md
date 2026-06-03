@@ -46,9 +46,12 @@ true, and nothing more. The first concrete outcome is a correct, repeatable
 - **Graduation to `v1.0.0`** is an explicit, deliberate decision — made the day
   the maintainer is willing to *promise* backward compatibility on the three
   surfaces above. It is not an automatic milestone.
-- **Pre-releases:** to validate a release before finalizing, tag
-  `vX.Y.Z-rc.N`. `.goreleaser.yaml`'s `prerelease: auto` already flags any tag
-  containing `-` as a GitHub pre-release; promote by tagging the final version.
+- **Pre-releases:** _(superseded — no longer supported; see the banner above.)_
+  This originally allowed tagging `vX.Y.Z-rc.N`. `scripts/release.sh` now enforces strict
+  `v0.MINOR.PATCH` and rejects any `-rc.N` tag, so there is **no RC path through
+  `make release`**. `.goreleaser.yaml`'s `prerelease: auto` still flags any tag containing `-`
+  as a GitHub pre-release, but that path is unreachable via the supported release flow; promote
+  by tagging the final `vX.Y.Z` directly.
 
 ## 3. Release trigger & process (manual tagging)
 

@@ -62,8 +62,10 @@ automation + signed-tag governance layered on top of the Phase-2 artifacts go-br
 
 ## 5. One-time setup (maintainer)
 
-`RELEASE_PLEASE_TOKEN` secret; "Default to PR title for squash merge commits" ON; optional
-`v*` tag-protection ruleset. Local SSH signing already configured.
+`RELEASE_PLEASE_TOKEN` secret; "Default to PR title for squash merge commits" ON; a **required**
+`v*` tag-protection ruleset (the enforcing control — `release.yml` runs from the pushed tag's
+tree, so the in-job signature gate is defense-in-depth; see RELEASING.md §0). Local SSH signing
+already configured. Release-workflow actions are pinned to full commit SHAs.
 
 ## 6. Out of scope
 
