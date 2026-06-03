@@ -1,6 +1,15 @@
 # Release & Distribution Policy — Design
 
-**Status:** Approved (design)
+> **Partially superseded (2026-06-02)** by
+> [`2026_06_02_release_please_mechanism_design.md`](2026_06_02_release_please_mechanism_design.md).
+> The **release trigger** moved from manual tagging (§3) to a `release-please` standing PR +
+> signed tag, and a committed `CHANGELOG.md` (§4) now exists — both were deferred under §8 as
+> "revisit on demand," and that demand arrived. The **versioning policy** (§2), **honest
+> version reporting** (§5), and **SLSA provenance** (§6) below remain in force — **except** the
+> §2 "Pre-releases" bullet (`vX.Y.Z-rc.N`): `scripts/release.sh` now enforces strict
+> `v0.MINOR.PATCH`, so there is no RC path through `make release` (see the successor doc §6).
+
+**Status:** Approved (design); release-trigger + changelog sections superseded
 **Date:** 2026-05-31
 **Scope:** Versioning, release, and distribution policy for `go-bricks-openapi`, plus the minimal mechanism changes needed to make the existing pipeline honor it.
 
@@ -37,9 +46,12 @@ true, and nothing more. The first concrete outcome is a correct, repeatable
 - **Graduation to `v1.0.0`** is an explicit, deliberate decision — made the day
   the maintainer is willing to *promise* backward compatibility on the three
   surfaces above. It is not an automatic milestone.
-- **Pre-releases:** to validate a release before finalizing, tag
-  `vX.Y.Z-rc.N`. `.goreleaser.yaml`'s `prerelease: auto` already flags any tag
-  containing `-` as a GitHub pre-release; promote by tagging the final version.
+- **Pre-releases:** _(superseded — no longer supported; see the banner above.)_
+  This originally allowed tagging `vX.Y.Z-rc.N`. `scripts/release.sh` now enforces strict
+  `v0.MINOR.PATCH` and rejects any `-rc.N` tag, so there is **no RC path through
+  `make release`**. `.goreleaser.yaml`'s `prerelease: auto` still flags any tag containing `-`
+  as a GitHub pre-release, but that path is unreachable via the supported release flow; promote
+  by tagging the final `vX.Y.Z` directly.
 
 ## 3. Release trigger & process (manual tagging)
 
