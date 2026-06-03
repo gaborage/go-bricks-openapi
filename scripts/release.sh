@@ -75,6 +75,12 @@ esac
 make check
 make vuln
 make sec
+# 'make check' runs 'fmt'; if it rewrote tracked files the commit isn't actually
+# fmt/lint-clean, yet the tag would still point at the un-rewritten commit. Fail loudly
+# rather than release a commit the gate silently "fixed" locally. (Binaries/temp specs
+# are gitignored, so only real source rewrites trip this.)
+[ -z "$(git status --porcelain)" ] \
+  || die "the release gate (make check → fmt) modified tracked files; the commit is not fmt-clean. Fix on main and re-merge the release PR."
 
 # 9. signing probe BEFORE mutating refs (cleans up even if interrupted)
 PROBE="_release-sign-probe-$$"
@@ -89,10 +95,11 @@ trap - EXIT
 # 10. signed annotated tag on HEAD (the merged release-please commit). -s is MANDATORY.
 git tag -s "$VERSION" -m "Release $VERSION"
 
-# 11. BLOCKING local signature verify (always; fall back to the committed allowlist)
-SIGNERS="$(git config --get gpg.ssh.allowedSignersFile || echo .github/allowed_signers)"
-git -c gpg.ssh.allowedSignersFile="$SIGNERS" tag -v "$VERSION" \
-  || { git tag -d "$VERSION"; die "tag signature failed local verify (key/principal mismatch?) — tag deleted"; }
+# 11. BLOCKING local signature verify against the REPO allowlist — the same trust root
+#     CI uses (.github/allowed_signers), NOT the maintainer's personal Git config, so a
+#     stale or broader personal allowlist can't pass a tag that CI's gate would reject.
+git -c gpg.ssh.allowedSignersFile=.github/allowed_signers tag -v "$VERSION" \
+  || { git tag -d "$VERSION"; die "tag signature failed local verify against .github/allowed_signers (key/principal mismatch?) — tag deleted"; }
 
 # 12. push the tag (fires release.yml). main is already at HEAD (release-please PR merge).
 git push origin "$VERSION" || { git tag -d "$VERSION"; die "tag push failed; local tag removed — re-run: make release VERSION=$VERSION"; }
