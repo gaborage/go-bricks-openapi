@@ -4558,6 +4558,29 @@ func TestRegisterHandlerGenericForm(t *testing.T) {
 	src := `package mod
 import (
 	"net/http"
+// TestNestedDelegationSameStructNameAcrossPackages guards the cycle-guard key
+// against cross-package collisions: a nested delegation chain in which two
+// DIFFERENT packages both name their delegate struct Handler must contribute
+// routes from both — a bare struct-name key would mistake the deeper Handler
+// for a cycle and silently drop its routes (CodeRabbit PR14 finding).
+func TestNestedDelegationSameStructNameAcrossPackages(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	write("go.mod", "module example.com/nested\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.45.0\n")
+	write("module.go", `package payments
+
+import (
+	"example.com/nested/alpha"
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
@@ -4589,4 +4612,65 @@ var someVar = "PUT"
 	warnings := a.Warnings(context.Background())
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "RegisterHandler")
+
+type Module struct{ inner *alpha.Handler }
+
+func (m *Module) Name() string                    { return "payments" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	m.inner.RegisterRoutes(hr, r)
+}
+`)
+	write("alpha/handler.go", `package alpha
+
+import (
+	"example.com/nested/beta"
+
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Handler struct{ deep *beta.Handler }
+
+type Thing struct {
+	ID int64 `+"`json:\"id\"`"+`
+}
+
+func (h *Handler) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/alpha", h.get)
+	h.deep.RegisterRoutes(hr, r)
+}
+
+func (h *Handler) get(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) {
+	return server.NewResult(200, Thing{}), nil
+}
+`)
+	write("beta/handler.go", `package beta
+
+import "github.com/gaborage/go-bricks/server"
+
+type Handler struct{}
+
+type Item struct {
+	ID int64 `+"`json:\"id\"`"+`
+}
+
+func (h *Handler) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/beta", h.get)
+}
+
+func (h *Handler) get(ctx server.HandlerContext) (server.Result[Item], server.IAPIError) {
+	return server.NewResult(200, Item{}), nil
+}
+`)
+
+	project, err := New(dir).AnalyzeProject()
+	require.NoError(t, err)
+	require.Len(t, project.Modules, 1)
+
+	routes := project.Modules[0].Routes
+	require.Len(t, routes, 2, "the beta package's same-named Handler must not be mistaken for a cycle")
+	routeForPath(t, routes, "GET /alpha")
+	routeForPath(t, routes, "GET /beta")
 }
