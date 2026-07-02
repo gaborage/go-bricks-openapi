@@ -22,7 +22,8 @@ type PingResponse struct {
 
 // RegisterRoutes registers a route whose handler is a bare package-level func.
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	server.GET(hr, r, "/ping", ping, server.WithTags("health"), server.WithPublic())
+	//openapi:public
+	server.GET(hr, r, "/ping", ping, server.WithTags("health"))
 }
 
 func ping(ctx server.HandlerContext) (server.Result[PingResponse], server.IAPIError) {

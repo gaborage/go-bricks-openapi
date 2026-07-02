@@ -3758,10 +3758,11 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 		"HandlerName stays the handler method name, so the generator can module-qualify the derived id")
 }
 
-// TestWithPublicMetadata verifies the server.WithPublic() route option flips
-// route.Public, that it composes with WithTags, and that a route without it
-// keeps Public=false.
-func TestWithPublicMetadata(t *testing.T) {
+// TestPublicDirective verifies the //openapi:public comment directive flips
+// route.Public: alone, inside a doc-comment block, and NOT via unrelated
+// comments or the removed server.WithPublic() option (phantom API — it never
+// existed in go-bricks, so real consumer code cannot contain it).
+func TestPublicDirective(t *testing.T) {
 	src := `package mod
 import (
 	"github.com/gaborage/go-bricks/app"
@@ -3773,25 +3774,31 @@ func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
 func (m *Module) Shutdown() error { return nil }
 type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
 func (m *Module) health(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
-func (m *Module) tagged(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
+func (m *Module) login(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
 func (m *Module) private(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	server.GET(hr, r, "/health", m.health, server.WithPublic())
-	server.GET(hr, r, "/tagged", m.tagged, server.WithPublic(), server.WithTags("ops"))
+	//openapi:public
+	server.GET(hr, r, "/health", m.health)
+
+	// Login issues the session token.
+	//openapi:public
+	server.POST(hr, r, "/login", m.login, server.WithTags("auth"))
+
+	// An ordinary comment must not mark the route public.
 	server.GET(hr, r, "/private", m.private)
 }
 `
 	_, routes := analyzeSingleModule(t, src)
 
 	health := routeForPath(t, routes, "GET /health")
-	assert.True(t, health.Public, "WithPublic() must set Public")
+	assert.True(t, health.Public, "//openapi:public directly above the call must set Public")
 
-	tagged := routeForPath(t, routes, "GET /tagged")
-	assert.True(t, tagged.Public, "WithPublic() composes with other options")
-	assert.Equal(t, []string{"ops"}, tagged.Tags, "WithTags still applies alongside WithPublic")
+	login := routeForPath(t, routes, "POST /login")
+	assert.True(t, login.Public, "directive inside a doc-comment block must set Public")
+	assert.Equal(t, []string{"auth"}, login.Tags, "WithTags still applies alongside the directive")
 
 	private := routeForPath(t, routes, "GET /private")
-	assert.False(t, private.Public, "a route without WithPublic() must keep Public=false")
+	assert.False(t, private.Public, "an unrelated comment must not mark the route public")
 }
 
 // TestExtractSuccessStatusLastWins confirms that when a handler returns a server
