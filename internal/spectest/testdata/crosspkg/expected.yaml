@@ -155,7 +155,22 @@ components:
               description: Machine-readable error code (e.g. BAD_REQUEST, NOT_FOUND, INTERNAL_ERROR, or a custom business code)
             details:
               type: object
-              description: 'Contextual error payload, emitted in development environments only. Validation failures carry validationErrors: [{field, message, value}].'
+              properties:
+                validationErrors:
+                  type: array
+                  description: Per-field validation failures (400 validation errors)
+                  items:
+                    type: object
+                    properties:
+                      field:
+                        type: string
+                        description: Field that failed validation
+                      message:
+                        type: string
+                        description: Violated validation rule
+                      value:
+                        description: Submitted value (any type)
+              description: Contextual error payload, emitted in development environments only
             message:
               type: string
               description: Human-readable error message

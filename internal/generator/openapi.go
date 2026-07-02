@@ -38,6 +38,11 @@ const (
 	schemaSuccessResponse   = "SuccessResponse"
 )
 
+// joseAuthFailureCodes is the pre-trust 401 catalog (decrypt/verify/kid
+// failures), single-sourced so the 401 response description and the
+// JOSEErrorEnvelope code-field description cannot drift apart.
+const joseAuthFailureCodes = "JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN, JOSE_KID_MISSING"
+
 // HTTP method names used in switch discriminants and operation generation.
 const (
 	httpMethodGet     = "GET"
@@ -732,7 +737,7 @@ func (g *OpenAPIGenerator) buildResponses(route *models.Route) map[string]*OpenA
 	// established keys), hence the dual 500 content.
 	if errorSchema == schemaJOSEErrorEnvelope {
 		responses["401"] = &OpenAPIResponse{
-			Description: "Unauthorized — JOSE decrypt/verify failure (JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN, JOSE_KID_MISSING)",
+			Description: "Unauthorized — JOSE decrypt/verify failure (" + joseAuthFailureCodes + ")",
 			Content:     jsonMediaRef(errorSchema),
 		}
 		responses["415"] = &OpenAPIResponse{
@@ -1042,7 +1047,24 @@ func errorResponseSchema() *OpenAPISchema {
 				Properties: map[string]*OpenAPIProperty{
 					propNameCode:    {Type: typeString, Description: "Machine-readable error code (e.g. BAD_REQUEST, NOT_FOUND, INTERNAL_ERROR, or a custom business code)"},
 					propNameMessage: {Type: typeString, Description: "Human-readable error message"},
-					"details":       {Type: typeObject, Description: "Contextual error payload, emitted in development environments only. Validation failures carry validationErrors: [{field, message, value}]."},
+					"details": {
+						Type:        typeObject,
+						Description: "Contextual error payload, emitted in development environments only",
+						Properties: map[string]*OpenAPIProperty{
+							"validationErrors": {
+								Type:        typeArray,
+								Description: "Per-field validation failures (400 validation errors)",
+								Items: &OpenAPIProperty{
+									Type: typeObject,
+									Properties: map[string]*OpenAPIProperty{
+										"field":   {Type: typeString, Description: "Field that failed validation"},
+										"message": {Type: typeString, Description: "Violated validation rule"},
+										"value":   {Description: "Submitted value (any type)"},
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 			propNameMeta: metaEnvelopeSchema(),
@@ -1058,7 +1080,7 @@ func joseErrorEnvelopeSchema() *OpenAPISchema {
 	return &OpenAPISchema{
 		Type: typeObject,
 		Properties: map[string]*OpenAPIProperty{
-			propNameCode:    {Type: typeString, Description: "Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)"},
+			propNameCode:    {Type: typeString, Description: "Machine-readable JOSE error code (e.g., " + joseAuthFailureCodes + ", JOSE_PLAINTEXT_REJECTED)"},
 			propNameMessage: {Type: typeString, Description: "Constant-time generic message — never reveals which key was tried or which library detected the failure"},
 		},
 		Required: []string{propNameCode, propNameMessage},
