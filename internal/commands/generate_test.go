@@ -787,6 +787,7 @@ func TestBuildGeneratorConfig(t *testing.T) {
 		Servers: []string{"https://a", "https://b"},
 		License: "MIT", LicenseURL: "https://mit",
 		DisableTenantAuth: true,
+		TenantHeader:      "X-Org-ID",
 	})
 	if cfg.Title != "My API" || cfg.Version != "2.0.0" || cfg.Description != "d" {
 		t.Errorf("metadata not threaded: %+v", cfg)
@@ -800,9 +801,40 @@ func TestBuildGeneratorConfig(t *testing.T) {
 	if !cfg.DisableTenantSecurity {
 		t.Error("tenant-security opt-out not threaded")
 	}
+	if cfg.TenantHeader != "X-Org-ID" {
+		t.Errorf("tenant-header not threaded: %q", cfg.TenantHeader)
+	}
 	// No --license -> nil license.
 	if got := buildGeneratorConfig(&GenerateOptions{}); got.License != nil {
 		t.Errorf("expected nil license when --license unset, got %+v", got.License)
+	}
+}
+
+// TestRunGenerateTenantHeaderFlag confirms --tenant-header reaches the emitted
+// spec: the custom header name replaces X-Tenant-ID in the security scheme.
+func TestRunGenerateTenantHeaderFlag(t *testing.T) {
+	tempDir := t.TempDir()
+	outputFile := filepath.Join(tempDir, outputFileName)
+
+	opts := &GenerateOptions{
+		ProjectRoot:  tempDir,
+		OutputFile:   outputFile,
+		TenantHeader: "X-Org-ID",
+	}
+	if err := runGenerate(context.Background(), opts); err != nil {
+		t.Fatalf(generateCmdFailedMsg, err)
+	}
+
+	content, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("failed to read output: %v", err)
+	}
+	contentStr := string(content)
+	if !strings.Contains(contentStr, "X-Org-ID") {
+		t.Error("expected custom tenant header X-Org-ID in emitted spec")
+	}
+	if strings.Contains(contentStr, "X-Tenant-ID") {
+		t.Error("default X-Tenant-ID header should not appear when overridden")
 	}
 }
 

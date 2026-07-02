@@ -107,16 +107,20 @@ type Config struct {
 	// DisableTenantSecurity omits the X-Tenant-ID security scheme + root security
 	// (for single-tenant services).
 	DisableTenantSecurity bool
+	// TenantHeader overrides the header name in the tenant security scheme
+	// (default X-Tenant-ID; go-bricks header resolvers are configurable).
+	TenantHeader string
 }
 
 // OpenAPIGenerator creates OpenAPI specifications from project models
 type OpenAPIGenerator struct {
-	title       string
-	version     string
-	description string
-	servers     []string
-	license     *License
-	tenantAuth  bool
+	title        string
+	version      string
+	description  string
+	servers      []string
+	license      *License
+	tenantAuth   bool
+	tenantHeader string
 }
 
 // openAPILicense is the emitted info.license object.
@@ -244,13 +248,18 @@ func NewWithConfig(cfg *Config) *OpenAPIGenerator {
 		copied := *cfg.License
 		license = &copied
 	}
+	tenantHeader := cfg.TenantHeader
+	if tenantHeader == "" {
+		tenantHeader = defaultTenantHeader
+	}
 	return &OpenAPIGenerator{
-		title:       cfg.Title,
-		version:     cfg.Version,
-		description: cfg.Description,
-		servers:     servers,
-		license:     license,
-		tenantAuth:  !cfg.DisableTenantSecurity,
+		title:        cfg.Title,
+		version:      cfg.Version,
+		description:  cfg.Description,
+		servers:      servers,
+		license:      license,
+		tenantAuth:   !cfg.DisableTenantSecurity,
+		tenantHeader: tenantHeader,
 	}
 }
 
@@ -329,7 +338,7 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	// Tenant security is opt-out (single-tenant services). When on, the scheme must
 	// be declared (security-defined) and referenced at the root.
 	if g.tenantAuth {
-		components["securitySchemes"] = securitySchemes()
+		components["securitySchemes"] = g.securitySchemes()
 	}
 
 	componentsYAML, err := g.marshalYAMLSection("components", components)
@@ -370,8 +379,20 @@ func (g *OpenAPIGenerator) configuredServers() []openAPIServer {
 	return out
 }
 
-// tenantSecurityScheme is the component name for the X-Tenant-ID apiKey scheme.
+// tenantSecurityScheme is the component name for the tenant apiKey scheme.
 const tenantSecurityScheme = "TenantID"
+
+// defaultTenantHeader is the header name used when Config.TenantHeader is
+// unset. go-bricks' default header-based tenant resolver reads this header.
+const defaultTenantHeader = "X-Tenant-ID"
+
+// tenantSchemeDescription is deliberately honest about v0.45 semantics: the
+// header is enforced only for multi-tenant deployments using a header
+// resolver, the failure mode is 400 (not the 401 an apiKey scheme usually
+// implies), and subdomain/path resolvers never read it.
+const tenantSchemeDescription = "Tenant identifier. Enforced only when the service runs with " +
+	"multitenancy enabled and a header-based tenant resolver; a missing or invalid tenant yields " +
+	"HTTP 400. Deployments resolving the tenant from the subdomain or URL path do not read this header."
 
 // openAPIServer is a Server Object.
 type openAPIServer struct {
@@ -381,9 +402,10 @@ type openAPIServer struct {
 
 // securityScheme is a Security Scheme Object (apiKey form).
 type securityScheme struct {
-	Type string `yaml:"type"`
-	In   string `yaml:"in,omitempty"`
-	Name string `yaml:"name,omitempty"`
+	Type        string `yaml:"type"`
+	In          string `yaml:"in,omitempty"`
+	Name        string `yaml:"name,omitempty"`
+	Description string `yaml:"description,omitempty"`
 }
 
 // defaultServers returns the default servers block: a single relative-root entry.
@@ -393,11 +415,12 @@ func defaultServers() []openAPIServer {
 }
 
 // securitySchemes returns the components.securitySchemes map. The framework
-// resolves the tenant from the X-Tenant-ID request header (apiKey-in-header);
-// bearer/oauth schemes can be added here later without restructuring.
-func securitySchemes() map[string]securityScheme {
+// resolves the tenant from a request header (apiKey-in-header, default
+// X-Tenant-ID, overridable via Config.TenantHeader); bearer/oauth schemes can
+// be added here later without restructuring.
+func (g *OpenAPIGenerator) securitySchemes() map[string]securityScheme {
 	return map[string]securityScheme{
-		tenantSecurityScheme: {Type: "apiKey", In: paramTypeHeader, Name: "X-Tenant-ID"},
+		tenantSecurityScheme: {Type: "apiKey", In: paramTypeHeader, Name: g.tenantHeader, Description: tenantSchemeDescription},
 	}
 }
 

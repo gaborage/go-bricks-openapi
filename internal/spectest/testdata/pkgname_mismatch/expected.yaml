@@ -103,5 +103,6 @@ components:
       type: apiKey
       in: header
       name: X-Tenant-ID
+      description: Tenant identifier. Enforced only when the service runs with multitenancy enabled and a header-based tenant resolver; a missing or invalid tenant yields HTTP 400. Deployments resolving the tenant from the subdomain or URL path do not read this header.
 security:
   - TenantID: []

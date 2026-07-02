@@ -2713,6 +2713,24 @@ func TestNewWithConfig(t *testing.T) {
 	})
 }
 
+// TestTenantSchemeHonestyAndHeaderOverride verifies the tenant scheme
+// documents its deployment-dependent enforcement (400 on failure, not 401)
+// and that --tenant-header renames the header.
+func TestTenantSchemeHonestyAndHeaderOverride(t *testing.T) {
+	project := &models.Project{Name: "svc", Version: "1.0.0", Modules: []models.Module{}, Types: map[string]*models.TypeInfo{}}
+
+	spec, err := New("", "", "").Generate(project)
+	require.NoError(t, err)
+	assert.Contains(t, spec, "X-Tenant-ID", "default header name")
+	assert.Contains(t, spec, "multitenancy", "description states enforcement is deployment-dependent")
+	assert.Contains(t, spec, "400", "description states failure mode is 400")
+
+	custom, err := NewWithConfig(&Config{TenantHeader: "X-Org-ID"}).Generate(project)
+	require.NoError(t, err)
+	assert.Contains(t, custom, "X-Org-ID")
+	assert.NotContains(t, custom, "X-Tenant-ID")
+}
+
 // TestBuildOperationPublicSecurityOverride covers the per-operation security
 // opt-out: a route.Public route emits operation-level `security: []` only when
 // the document carries a root tenant-security requirement to override.
