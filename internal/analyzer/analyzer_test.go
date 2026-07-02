@@ -3758,6 +3758,36 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 		"HandlerName stays the handler method name, so the generator can module-qualify the derived id")
 }
 
+// TestWithModuleOverride verifies server.WithModule(name) overrides the
+// route's owning-module namespace (tags/operationId grouping) while routes
+// without it keep the discovering module's name.
+func TestWithModuleOverride(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
+func (m *Module) a(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.NewResult(200, Thing{}), nil }
+func (m *Module) b(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.NewResult(200, Thing{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/renamed", m.a, server.WithModule("billing"))
+	server.GET(hr, r, "/normal", m.b)
+}
+`
+	_, routes := analyzeSingleModule(t, src)
+
+	renamed := routeForPath(t, routes, "GET /renamed")
+	assert.Equal(t, "billing", renamed.Module, "WithModule must override the module namespace")
+
+	normal := routeForPath(t, routes, "GET /normal")
+	assert.Equal(t, "mod", normal.Module, "routes without WithModule keep the discovering module")
+}
+
 // TestPublicDirective verifies the //openapi:public comment directive flips
 // route.Public: alone, inside a doc-comment block, and NOT via unrelated
 // comments or the removed server.WithPublic() option (phantom API — it never

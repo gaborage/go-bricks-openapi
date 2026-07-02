@@ -393,7 +393,9 @@ func (a *ProjectAnalyzer) analyzeGoFile(filePath string) (module *models.Module,
 	// Stamp the owning module identity onto each route at discovery time so later
 	// passes (operationId namespacing, component-name disambiguation) can use it.
 	for i := range module.Routes {
-		module.Routes[i].Module = module.Name
+		if module.Routes[i].Module == "" {
+			module.Routes[i].Module = module.Name
+		}
 		module.Routes[i].Package = module.Package
 	}
 
@@ -1269,6 +1271,12 @@ func (a *ProjectAnalyzer) extractRouteMetadata(arg ast.Expr, route *models.Route
 		}
 	case "WithRawResponse":
 		route.RawResponse = true
+	case "WithModule":
+		// Overrides RouteDescriptor.ModuleName at runtime; mirror it so
+		// tags/operationId grouping matches the live registry.
+		if name := a.extractStringFromFirstArg(callExpr); name != "" {
+			route.Module = name
+		}
 	}
 }
 
