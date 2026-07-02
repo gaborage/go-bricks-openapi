@@ -4558,29 +4558,6 @@ func TestRegisterHandlerGenericForm(t *testing.T) {
 	src := `package mod
 import (
 	"net/http"
-// TestNestedDelegationSameStructNameAcrossPackages guards the cycle-guard key
-// against cross-package collisions: a nested delegation chain in which two
-// DIFFERENT packages both name their delegate struct Handler must contribute
-// routes from both — a bare struct-name key would mistake the deeper Handler
-// for a cycle and silently drop its routes (CodeRabbit PR14 finding).
-func TestNestedDelegationSameStructNameAcrossPackages(t *testing.T) {
-	dir := t.TempDir()
-	write := func(rel, src string) {
-		t.Helper()
-		full := filepath.Join(dir, rel)
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", rel, err)
-		}
-		if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
-			t.Fatalf("write %s: %v", rel, err)
-		}
-	}
-
-	write("go.mod", "module example.com/nested\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.45.0\n")
-	write("module.go", `package payments
-
-import (
-	"example.com/nested/alpha"
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
@@ -4612,6 +4589,35 @@ var someVar = "PUT"
 	warnings := a.Warnings(context.Background())
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "RegisterHandler")
+}
+
+// TestNestedDelegationSameStructNameAcrossPackages guards the cycle-guard key
+// against cross-package collisions: a nested delegation chain in which two
+// DIFFERENT packages both name their delegate struct Handler must contribute
+// routes from both — a bare struct-name key would mistake the deeper Handler
+// for a cycle and silently drop its routes (CodeRabbit PR14 finding).
+func TestNestedDelegationSameStructNameAcrossPackages(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	write("go.mod", "module example.com/nested\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.45.0\n")
+	write("module.go", `package payments
+
+import (
+	"example.com/nested/alpha"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
 
 type Module struct{ inner *alpha.Handler }
 
