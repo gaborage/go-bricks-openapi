@@ -59,6 +59,10 @@ const (
 	// HTTP method names
 	httpMethodPost = "POST"
 
+	// registerHandlerFuncName is the exported generic registration form:
+	// server.RegisterHandler[T, R](hr, r, method, path, handler, opts...).
+	registerHandlerFuncName = "RegisterHandler"
+
 	// File and directory names
 	goFileExt     = ".go"
 	testFileExt   = "_test.go"
@@ -730,14 +734,14 @@ func (w *routeWalker) collectGroupPrefixes(body *ast.BlockStmt) map[string]strin
 // routeFromCall builds a route from a server.METHOD(...) call, or nil if the call
 // is not a route registration. Unresolvable paths drop the route with a warning.
 func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes map[string]string) *models.Route {
-	method, ok := w.a.validateServerCall(call, w.serverAliases)
+	shape, ok := w.a.validateServerCall(call, w.serverAliases)
 	if !ok {
 		return nil
 	}
 
-	rawPath, resolved := w.a.extractPathFromArg(call.Args[2])
+	rawPath, resolved := w.a.extractPathFromArg(call.Args[shape.pathIdx])
 	if !resolved {
-		w.a.addWarningf("skipping a server.%s route: its path argument could not be resolved to a literal string", method)
+		w.a.addWarningf("skipping a server.%s route: its path argument could not be resolved to a literal string", shape.method)
 		return nil
 	}
 
@@ -748,12 +752,15 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes map[string]stri
 	}
 
 	route := &models.Route{
-		Method: strings.ToUpper(method),
+		Method: strings.ToUpper(shape.method),
 		Tags:   []string{},
 		Path:   normalizePath(prefix + rawPath),
 	}
-	route.HandlerName, route.Request, route.Response, route.SuccessStatus = w.a.extractHandlerInfo(call, w.astFile, w.filePath, w.structName)
-	for i := 4; i < len(call.Args); i++ {
+	if shape.handlerIdx < len(call.Args) {
+		route.HandlerName, route.Request, route.Response, route.SuccessStatus =
+			w.a.extractHandlerInfo(call.Args[shape.handlerIdx], w.astFile, w.filePath, w.structName)
+	}
+	for i := shape.optsIdx; i < len(call.Args); i++ {
 		w.a.extractRouteMetadata(call.Args[i], route, w.serverAliases)
 	}
 	if w.a.isPublicRoute(call.Pos()) {
@@ -940,29 +947,65 @@ func (a *ProjectAnalyzer) isRouteRegistrarType(expr ast.Expr, serverAliases map[
 	return ok && a.aliasContains(serverAliases, pkg.Name, frameworkPkgServer) && sel.Sel.Name == routeRegistrarTypeName
 }
 
-// validateServerCall reports whether call is a server.METHOD(hr, r, path, ...)
-// route registration and returns the HTTP method name.
-func (a *ProjectAnalyzer) validateServerCall(callExpr *ast.CallExpr, serverAliases map[string]struct{}) (method string, ok bool) {
+// routeCallShape locates a registration call's arguments: server.GET keeps the
+// path at Args[2] and handler at Args[3]; server.RegisterHandler carries an
+// explicit method at Args[2], shifting path/handler/options right by one.
+type routeCallShape struct {
+	method     string
+	pathIdx    int
+	handlerIdx int
+	optsIdx    int
+}
+
+// validateServerCall reports whether call is a route registration —
+// server.METHOD(hr, r, path, handler, opts...) or
+// server.RegisterHandler(hr, r, method, path, handler, opts...) — and returns
+// its argument shape. A RegisterHandler whose method argument is not a string
+// literal or http.MethodX constant is warned about and skipped (the route
+// cannot be documented without a static method).
+func (a *ProjectAnalyzer) validateServerCall(callExpr *ast.CallExpr, serverAliases map[string]struct{}) (routeCallShape, bool) {
 	selExpr, ok := callExpr.Fun.(*ast.SelectorExpr)
 	if !ok {
-		return "", false
+		return routeCallShape{}, false
 	}
-
 	pkgIdent, ok := selExpr.X.(*ast.Ident)
 	if !ok || !a.aliasContains(serverAliases, pkgIdent.Name, frameworkPkgServer) {
-		return "", false
+		return routeCallShape{}, false
 	}
 
-	method = selExpr.Sel.Name
-	if !a.isHTTPMethod(method) {
-		return "", false
+	name := selExpr.Sel.Name
+	if name == registerHandlerFuncName {
+		if len(callExpr.Args) < 5 {
+			return routeCallShape{}, false
+		}
+		method, ok := staticHTTPMethod(callExpr.Args[2])
+		if !ok || !a.isHTTPMethod(method) {
+			a.addWarningf("skipping a server.RegisterHandler route: its method argument is not a static HTTP method (string literal or http.MethodX constant)")
+			return routeCallShape{}, false
+		}
+		return routeCallShape{method: method, pathIdx: 3, handlerIdx: 4, optsIdx: 5}, true
 	}
 
-	if len(callExpr.Args) < 3 {
-		return "", false
+	if !a.isHTTPMethod(name) || len(callExpr.Args) < 3 {
+		return routeCallShape{}, false
 	}
+	return routeCallShape{method: name, pathIdx: 2, handlerIdx: 3, optsIdx: 4}, true
+}
 
-	return method, true
+// staticHTTPMethod resolves a method argument that is a string literal ("GET")
+// or an http.MethodX selector (http.MethodGet) to its method name.
+func staticHTTPMethod(arg ast.Expr) (string, bool) {
+	switch m := arg.(type) {
+	case *ast.BasicLit:
+		if m.Kind == token.STRING {
+			return strings.Trim(m.Value, `"`), true
+		}
+	case *ast.SelectorExpr:
+		if pkg, ok := m.X.(*ast.Ident); ok && pkg.Name == stdlibPkgHTTP && strings.HasPrefix(m.Sel.Name, "Method") {
+			return strings.ToUpper(strings.TrimPrefix(m.Sel.Name, "Method")), true
+		}
+	}
+	return "", false
 }
 
 // findMethodDecl finds the declaration of method methodName on structName,
@@ -1013,16 +1056,12 @@ func receiverVarName(recv *ast.FieldList) string {
 // extractHandlerInfo extracts handler name and type information from a route call.
 // Returns handler name, request type, and response type.
 func (a *ProjectAnalyzer) extractHandlerInfo(
-	callExpr *ast.CallExpr,
+	handlerArg ast.Expr,
 	astFile *ast.File,
 	filePath string,
 	structName string,
 ) (handlerName string, reqType, respType *models.TypeInfo, successStatus int) {
-	if len(callExpr.Args) <= 3 {
-		return "", nil, nil, 0
-	}
-
-	handlerName, receiverType, isPackageFunc, ok := a.resolveHandler(callExpr.Args[3], structName, astFile, filePath)
+	handlerName, receiverType, isPackageFunc, ok := a.resolveHandler(handlerArg, structName, astFile, filePath)
 	if !ok {
 		return "", nil, nil, 0
 	}

@@ -4519,3 +4519,44 @@ func (m *Module) ok(ctx server.HandlerContext) (server.Result[Thing], server.IAP
 	assert.Contains(t, warnings[0], "mystery")
 	assert.Contains(t, warnings[0], "RegisterRoutes")
 }
+
+// TestRegisterHandlerGenericForm verifies the exported generic registration
+// form server.RegisterHandler(hr, r, method, path, handler, opts...) is
+// recognized with the method taken from a string literal or an http.MethodX
+// constant, and that options shift right by one position.
+func TestRegisterHandlerGenericForm(t *testing.T) {
+	src := `package mod
+import (
+	"net/http"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
+func (m *Module) get(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.NewResult(200, Thing{}), nil }
+func (m *Module) create(req Thing, ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.RegisterHandler(hr, r, "GET", "/things/:id", m.get, server.WithTags("things"))
+	server.RegisterHandler(hr, r, http.MethodPost, "/things", m.create)
+	server.RegisterHandler(hr, r, someVar, "/dropped", m.get) // non-literal method: warn + skip
+}
+var someVar = "PUT"
+`
+	a, routes := analyzeSingleModule(t, src)
+	require.Len(t, routes, 2)
+
+	get := routeForPath(t, routes, "GET /things/{id}")
+	assert.Equal(t, "get", get.HandlerName)
+	assert.Equal(t, []string{"things"}, get.Tags, "options shifted by one must still parse")
+
+	create := routeForPath(t, routes, "POST /things")
+	require.NotNil(t, create.Request)
+
+	warnings := a.Warnings(context.Background())
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "RegisterHandler")
+}
