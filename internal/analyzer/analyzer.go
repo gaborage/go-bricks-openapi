@@ -167,6 +167,7 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	a.warnings = nil
 	a.typeRegistry = make(map[string]*models.TypeInfo)
 	a.pkgCache = make(map[string]map[string]*ast.File)
+	a.publicDirectives = make(map[string]map[int]struct{})
 	a.nameAssign = make(map[string]string)
 	a.usedNames = make(map[string]struct{})
 
@@ -356,6 +357,22 @@ func (a *ProjectAnalyzer) isPublicRoute(pos token.Pos) bool {
 	return ok
 }
 
+// parseGoFile is the single entry point for parsing a source file into the
+// shared FileSet: it parses with comments and indexes public directives, so
+// the "every parsed file is directive-indexed" invariant holds by
+// construction. src may be nil (the parser reads the file) or the file's
+// bytes when the caller already read them; it is typed any because a typed
+// nil []byte would make parser.ParseFile parse empty source instead of
+// reading the file.
+func (a *ProjectAnalyzer) parseGoFile(filePath string, src any) (*ast.File, error) {
+	astFile, err := parser.ParseFile(a.fileSet, filePath, src, parser.ParseComments)
+	if err != nil {
+		return nil, err
+	}
+	a.indexPublicDirectives(astFile)
+	return astFile, nil
+}
+
 // analyzeGoFile parses a Go file and extracts module information. The second
 // return value is the name of a near-miss module struct found in the file (empty
 // if none); discoverModules resolves it against the set of packages that produced
@@ -372,11 +389,10 @@ func (a *ProjectAnalyzer) analyzeGoFile(filePath string) (module *models.Module,
 	}
 
 	// Parse the Go file
-	astFile, err := parser.ParseFile(a.fileSet, filePath, src, parser.ParseComments)
+	astFile, err := a.parseGoFile(filePath, src)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to parse file %s: %w", filePath, err)
 	}
-	a.indexPublicDirectives(astFile)
 
 	// Extract constants first (needed for route path resolution)
 	a.extractConstants(astFile)
@@ -387,15 +403,14 @@ func (a *ProjectAnalyzer) analyzeGoFile(filePath string) (module *models.Module,
 		return nil, nearMiss, nil // Not a module file (nearMiss may be set)
 	}
 
-	// Extract routes from the RegisterRoutes method, including other files in the package
-	module.Routes = a.extractRoutesFromPackage(astFile, filePath, structName)
+	// Extract routes from the RegisterRoutes method, including other files in
+	// the package. Each route's Module is set at build time (the discovering
+	// module's name, overridable per route via server.WithModule).
+	module.Routes = a.extractRoutesFromPackage(astFile, filePath, structName, module.Name)
 
-	// Stamp the owning module identity onto each route at discovery time so later
-	// passes (operationId namespacing, component-name disambiguation) can use it.
+	// Stamp the owning package onto each route (no per-route override exists
+	// for Package) so later passes can disambiguate component names.
 	for i := range module.Routes {
-		if module.Routes[i].Module == "" {
-			module.Routes[i].Module = module.Name
-		}
 		module.Routes[i].Package = module.Package
 	}
 
@@ -559,11 +574,13 @@ func (a *ProjectAnalyzer) isModuleDepsField(field *ast.Field) bool {
 	return pkgIdent.Name == frameworkPkgApp && selExpr.Sel.Name == frameworkTypeModuleDeps
 }
 
-// extractRoutesFromPackage extracts route registrations for the module across the entire package
-func (a *ProjectAnalyzer) extractRoutesFromPackage(astFile *ast.File, filePath, structName string) []models.Route {
+// extractRoutesFromPackage extracts route registrations for the module across
+// the entire package. moduleName is stamped onto each route at build time (a
+// per-route server.WithModule option overrides it).
+func (a *ProjectAnalyzer) extractRoutesFromPackage(astFile *ast.File, filePath, structName, moduleName string) []models.Route {
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
 	if err != nil || files == nil {
-		return a.collectRoutesFromFile(astFile, filePath, structName, map[string]struct{}{frameworkPkgServer: {}})
+		return a.collectRoutesFromFile(astFile, filePath, structName, moduleName, map[string]struct{}{frameworkPkgServer: {}})
 	}
 
 	var routes []models.Route
@@ -581,14 +598,14 @@ func (a *ProjectAnalyzer) extractRoutesFromPackage(astFile *ast.File, filePath, 
 		if len(aliases) == 0 {
 			continue
 		}
-		routes = append(routes, a.collectRoutesFromFile(file, filePath, structName, aliases)...)
+		routes = append(routes, a.collectRoutesFromFile(file, filePath, structName, moduleName, aliases)...)
 	}
 
 	return routes
 }
 
 // collectRoutesFromFile gathers routes for a specific module struct from a single file
-func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, structName string, serverAliases map[string]struct{}) []models.Route {
+func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, structName, moduleName string, serverAliases map[string]struct{}) []models.Route {
 	var routes []models.Route
 
 	for _, decl := range astFile.Decls {
@@ -607,7 +624,7 @@ func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, str
 
 		recvVar := receiverVarName(funcDecl.Recv)
 		_, rootRegistrar := a.routeRegistrarParam(funcDecl, serverAliases)
-		routes = append(routes, a.extractRoutesFromFuncBodyWithAliases(funcDecl.Body, astFile, filePath, structName, recvVar, rootRegistrar, serverAliases)...)
+		routes = append(routes, a.extractRoutesFromFuncBodyWithAliases(funcDecl.Body, astFile, filePath, structName, recvVar, rootRegistrar, moduleName, serverAliases)...)
 	}
 
 	return routes
@@ -616,7 +633,7 @@ func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, str
 // extractRoutesFromFuncBody extracts route registrations from a function body
 // using only the default "server" alias and no handler/helper context.
 func (a *ProjectAnalyzer) extractRoutesFromFuncBody(body *ast.BlockStmt) []models.Route {
-	return a.extractRoutesFromFuncBodyWithAliases(body, nil, "", "", "", "", map[string]struct{}{frameworkPkgServer: {}})
+	return a.extractRoutesFromFuncBodyWithAliases(body, nil, "", "", "", "", "", map[string]struct{}{frameworkPkgServer: {}})
 }
 
 // extractRoutesFromFuncBodyWithAliases walks a RegisterRoutes body (and the
@@ -624,7 +641,7 @@ func (a *ProjectAnalyzer) extractRoutesFromFuncBody(body *ast.BlockStmt) []model
 // collect every route registration, including those nested inside
 // if/for/range/blocks and those registered on a r.Group(prefix) registrar.
 func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(
-	body *ast.BlockStmt, astFile *ast.File, filePath, structName, recvVar, rootRegistrar string, serverAliases map[string]struct{},
+	body *ast.BlockStmt, astFile *ast.File, filePath, structName, recvVar, rootRegistrar, moduleName string, serverAliases map[string]struct{},
 ) []models.Route {
 	w := &routeWalker{
 		a:             a,
@@ -632,6 +649,7 @@ func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(
 		filePath:      filePath,
 		structName:    structName,
 		recvVar:       recvVar,
+		moduleName:    moduleName,
 		serverAliases: serverAliases,
 		// Seed the recursion stack with the entry method so a helper that calls
 		// back into RegisterRoutes cannot re-walk it (cycle guard for the root).
@@ -655,6 +673,7 @@ type routeWalker struct {
 	filePath      string
 	structName    string // struct owning the walked method, for handler resolution
 	recvVar       string // receiver var name of the walked method; "" if none
+	moduleName    string // owning go-bricks module name, stamped on routes at build time
 	serverAliases map[string]struct{}
 	stack         map[string]bool // "<struct>.<method>" keys currently on the walk stack (cycle guard)
 	// delegates memoizes per-field delegate resolution for this walk: the
@@ -757,12 +776,15 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes map[string]stri
 		Method: strings.ToUpper(shape.method),
 		Tags:   []string{},
 		Path:   normalizePath(prefix + rawPath),
+		// Module is set at build time (WithModule in the opts loop overrides it),
+		// so no later stamping pass needs a zero-value sentinel.
+		Module: w.moduleName,
 	}
-	if shape.handlerIdx < len(call.Args) {
+	if shape.handlerIdx() < len(call.Args) {
 		route.HandlerName, route.Request, route.Response, route.SuccessStatus =
-			w.a.extractHandlerInfo(call.Args[shape.handlerIdx], w.astFile, w.filePath, w.structName)
+			w.a.extractHandlerInfo(call.Args[shape.handlerIdx()], w.astFile, w.filePath, w.structName)
 	}
-	for i := shape.optsIdx; i < len(call.Args); i++ {
+	for i := shape.optsIdx(); i < len(call.Args); i++ {
 		w.a.extractRouteMetadata(call.Args[i], route, w.serverAliases)
 	}
 	if w.a.isPublicRoute(call.Pos()) {
@@ -864,6 +886,7 @@ func (w *routeWalker) recurseInto(call *ast.CallExpr, target delegateContext, fi
 		filePath:      target.filePath,
 		structName:    target.structName,
 		recvVar:       receiverVarName(decl.Recv),
+		moduleName:    w.moduleName,
 		serverAliases: target.serverAliases,
 		stack:         w.stack, // shared: cycles across delegation chains must terminate
 	}
@@ -950,14 +973,16 @@ func (a *ProjectAnalyzer) isRouteRegistrarType(expr ast.Expr, serverAliases map[
 }
 
 // routeCallShape locates a registration call's arguments: server.GET keeps the
-// path at Args[2] and handler at Args[3]; server.RegisterHandler carries an
-// explicit method at Args[2], shifting path/handler/options right by one.
+// path at Args[2]; server.RegisterHandler carries an explicit method at
+// Args[2], shifting the path to Args[3]. The handler always follows the path
+// and options follow the handler, so both derive from pathIdx.
 type routeCallShape struct {
-	method     string
-	pathIdx    int
-	handlerIdx int
-	optsIdx    int
+	method  string
+	pathIdx int
 }
+
+func (s routeCallShape) handlerIdx() int { return s.pathIdx + 1 }
+func (s routeCallShape) optsIdx() int    { return s.pathIdx + 2 }
 
 // validateServerCall reports whether call is a route registration —
 // server.METHOD(hr, r, path, handler, opts...) or
@@ -980,29 +1005,27 @@ func (a *ProjectAnalyzer) validateServerCall(callExpr *ast.CallExpr, serverAlias
 		if len(callExpr.Args) < 5 {
 			return routeCallShape{}, false
 		}
-		method, ok := staticHTTPMethod(callExpr.Args[2])
+		method, ok := a.staticHTTPMethod(callExpr.Args[2])
 		if !ok || !a.isHTTPMethod(method) {
 			a.addWarningf("skipping a server.RegisterHandler route: its method argument is not a static HTTP method (string literal or http.MethodX constant)")
 			return routeCallShape{}, false
 		}
-		return routeCallShape{method: method, pathIdx: 3, handlerIdx: 4, optsIdx: 5}, true
+		return routeCallShape{method: method, pathIdx: 3}, true
 	}
 
 	if !a.isHTTPMethod(name) || len(callExpr.Args) < 3 {
 		return routeCallShape{}, false
 	}
-	return routeCallShape{method: name, pathIdx: 2, handlerIdx: 3, optsIdx: 4}, true
+	return routeCallShape{method: name, pathIdx: 2}, true
 }
 
 // staticHTTPMethod resolves a method argument that is a string literal ("GET")
 // or an http.MethodX selector (http.MethodGet) to its method name.
-func staticHTTPMethod(arg ast.Expr) (string, bool) {
-	switch m := arg.(type) {
-	case *ast.BasicLit:
-		if m.Kind == token.STRING {
-			return strings.Trim(m.Value, `"`), true
-		}
-	case *ast.SelectorExpr:
+func (a *ProjectAnalyzer) staticHTTPMethod(arg ast.Expr) (string, bool) {
+	if lit := a.extractStringFromExpr(arg); lit != "" {
+		return lit, true
+	}
+	if m, ok := arg.(*ast.SelectorExpr); ok {
 		if pkg, ok := m.X.(*ast.Ident); ok && pkg.Name == stdlibPkgHTTP && strings.HasPrefix(m.Sel.Name, "Method") {
 			return strings.ToUpper(strings.TrimPrefix(m.Sel.Name, "Method")), true
 		}
@@ -1055,8 +1078,9 @@ func receiverVarName(recv *ast.FieldList) string {
 	return recv.List[0].Names[0].Name
 }
 
-// extractHandlerInfo extracts handler name and type information from a route call.
-// Returns handler name, request type, and response type.
+// extractHandlerInfo extracts handler name and type information from a route
+// registration's handler argument. Returns handler name, request type,
+// response type, and constructor-derived success status.
 func (a *ProjectAnalyzer) extractHandlerInfo(
 	handlerArg ast.Expr,
 	astFile *ast.File,
@@ -1453,39 +1477,24 @@ func (a *ProjectAnalyzer) extractPackageDescription(astFile *ast.File) string {
 	return strings.Join(lines, " ")
 }
 
-// parsePackage parses all Go files (excluding tests) within the module's directory
+// parsePackage returns the parsed files of packageName in filePath's directory.
+// It delegates to parsePackageDir so a directory is read, parsed, and
+// directive-indexed once per analysis regardless of how many callers ask
+// (module detection alone asks once per candidate struct).
 func (a *ProjectAnalyzer) parsePackage(filePath, packageName string) (map[string]*ast.File, error) {
-	dir := filepath.Dir(filePath)
-	entries, err := os.ReadDir(dir)
+	all, err := a.parsePackageDir(filepath.Dir(filePath))
 	if err != nil {
 		return nil, err
 	}
-
 	files := make(map[string]*ast.File)
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasSuffix(name, goFileExt) || strings.HasSuffix(name, testFileExt) {
-			continue
-		}
-
-		fullPath := filepath.Join(dir, name)
-		astFile, parseErr := parser.ParseFile(a.fileSet, fullPath, nil, parser.ParseComments)
-		if parseErr != nil {
-			continue
-		}
-		a.indexPublicDirectives(astFile)
+	for path, astFile := range all {
 		if astFile.Name.Name == packageName {
-			files[fullPath] = astFile
+			files[path] = astFile
 		}
 	}
-
 	if len(files) == 0 {
-		return nil, fmt.Errorf("package %s not found in %s", packageName, dir)
+		return nil, fmt.Errorf("package %s not found in %s", packageName, filepath.Dir(filePath))
 	}
-
 	return files, nil
 }
 
@@ -2325,11 +2334,10 @@ func (a *ProjectAnalyzer) parsePackageDir(dir string) (map[string]*ast.File, err
 			continue
 		}
 		full := filepath.Join(dir, name)
-		f, perr := parser.ParseFile(a.fileSet, full, nil, parser.ParseComments)
+		f, perr := a.parseGoFile(full, nil)
 		if perr != nil {
 			continue
 		}
-		a.indexPublicDirectives(f)
 		files[full] = f
 	}
 	a.pkgCache[dir] = files
