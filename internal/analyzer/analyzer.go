@@ -555,7 +555,8 @@ func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, str
 		}
 
 		recvVar := receiverVarName(funcDecl.Recv)
-		routes = append(routes, a.extractRoutesFromFuncBodyWithAliases(funcDecl.Body, astFile, filePath, structName, recvVar, serverAliases)...)
+		_, rootRegistrar := a.routeRegistrarParam(funcDecl, serverAliases)
+		routes = append(routes, a.extractRoutesFromFuncBodyWithAliases(funcDecl.Body, astFile, filePath, structName, recvVar, rootRegistrar, serverAliases)...)
 	}
 
 	return routes
@@ -564,15 +565,15 @@ func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, str
 // extractRoutesFromFuncBody extracts route registrations from a function body
 // using only the default "server" alias and no handler/helper context.
 func (a *ProjectAnalyzer) extractRoutesFromFuncBody(body *ast.BlockStmt) []models.Route {
-	return a.extractRoutesFromFuncBodyWithAliases(body, nil, "", "", "", map[string]struct{}{frameworkPkgServer: {}})
+	return a.extractRoutesFromFuncBodyWithAliases(body, nil, "", "", "", "", map[string]struct{}{frameworkPkgServer: {}})
 }
 
 // extractRoutesFromFuncBodyWithAliases walks a RegisterRoutes body (and the
-// same-receiver helper methods it calls) to collect every route registration,
-// including those nested inside if/for/range/blocks and those registered on a
-// r.Group(prefix) registrar.
+// same-receiver helper methods and handler-field delegates it calls) to
+// collect every route registration, including those nested inside
+// if/for/range/blocks and those registered on a r.Group(prefix) registrar.
 func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(
-	body *ast.BlockStmt, astFile *ast.File, filePath, structName, recvVar string, serverAliases map[string]struct{},
+	body *ast.BlockStmt, astFile *ast.File, filePath, structName, recvVar, rootRegistrar string, serverAliases map[string]struct{},
 ) []models.Route {
 	w := &routeWalker{
 		a:             a,
@@ -583,23 +584,39 @@ func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(
 		serverAliases: serverAliases,
 		// Seed the recursion stack with the entry method so a helper that calls
 		// back into RegisterRoutes cannot re-walk it (cycle guard for the root).
-		stack: map[string]bool{moduleMethodRegisterRoutes: true},
+		stack:      map[string]bool{structName + "." + moduleMethodRegisterRoutes: true},
+		registrars: registrarSet(rootRegistrar),
 	}
 	w.walkBody(body, nil)
 	return w.routes
 }
 
+// registrarSet builds the walker's known-registrar set from a (possibly empty)
+// registrar parameter name.
+func registrarSet(name string) map[string]bool {
+	s := map[string]bool{}
+	if name != "" {
+		s[name] = true
+	}
+	return s
+}
+
 // routeWalker collects routes from a RegisterRoutes method body and the
-// same-receiver helper methods it transitively calls.
+// same-receiver helper methods / handler-field delegates it transitively calls.
 type routeWalker struct {
 	a             *ProjectAnalyzer
 	astFile       *ast.File
 	filePath      string
-	structName    string // module struct, for handler resolution
-	recvVar       string // module receiver var name (for helper calls); "" if none
+	structName    string // struct owning the walked method, for handler resolution
+	recvVar       string // receiver var name of the walked method; "" if none
 	serverAliases map[string]struct{}
-	stack         map[string]bool // helper methods currently on the walk stack (cycle guard)
-	routes        []models.Route
+	stack         map[string]bool // "<struct>.<method>" keys currently on the walk stack (cycle guard)
+	// registrars holds identifier names known to be route registrars in the
+	// walked body (the method's own RouteRegistrar param); group vars are
+	// tracked separately in prefixes. Used to warn when a delegation that
+	// receives a registrar cannot be resolved (routes would silently vanish).
+	registrars map[string]bool
+	routes     []models.Route
 }
 
 // walkBody collects server.METHOD route registrations from a body (with
@@ -703,14 +720,13 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes map[string]stri
 	return route
 }
 
-// maybeRecurseHelper recurses into a same-receiver route-registration helper
-// (w.recvVar.method(...) where method takes a server.RouteRegistrar) so routes
-// registered in helpers are discovered. The RouteRegistrar requirement excludes
-// non-registration methods (e.g. predicates or handler factories) so their
-// internal server.* calls are not mistaken for routes. The stack guards against
-// infinite recursion on mutually-recursive helpers while still allowing a helper
-// to be invoked more than once. The prefix bound to the registrar argument is
-// threaded into the helper's registrar parameter.
+// maybeRecurseHelper recurses into route-registration targets reachable from
+// the walked body: same-receiver helpers (m.helper(hr, r)) and handler-field
+// delegates (m.handler.RegisterRoutes(hr, r) — the idiomatic pattern where a
+// module forwards the registry to a struct field, in-package or in an in-module
+// sibling package). The RouteRegistrar-parameter requirement excludes
+// non-registration methods so their internal server.* calls are not mistaken
+// for routes. The struct-qualified stack guards against infinite recursion.
 func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes map[string]string) {
 	if w.recvVar == "" || w.astFile == nil {
 		return
@@ -719,12 +735,26 @@ func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes map[string
 	if !ok {
 		return
 	}
-	recv, ok := sel.X.(*ast.Ident)
-	if !ok || recv.Name != w.recvVar {
-		return
+	switch recv := sel.X.(type) {
+	case *ast.Ident:
+		if recv.Name != w.recvVar {
+			return
+		}
+		w.recurseSameReceiver(call, sel.Sel.Name, prefixes)
+	case *ast.SelectorExpr:
+		base, ok := recv.X.(*ast.Ident)
+		if !ok || base.Name != w.recvVar {
+			return
+		}
+		w.recurseFieldDelegate(call, recv.Sel.Name, sel.Sel.Name, prefixes)
 	}
-	method := sel.Sel.Name
-	if w.stack[method] {
+}
+
+// recurseSameReceiver walks a same-receiver helper (m.helper(...)) that has a
+// server.RouteRegistrar parameter, threading the caller's group prefix.
+func (w *routeWalker) recurseSameReceiver(call *ast.CallExpr, method string, prefixes map[string]string) {
+	key := w.structName + "." + method
+	if w.stack[key] {
 		return
 	}
 	decl := w.a.findMethodDecl(w.astFile, w.filePath, w.structName, method)
@@ -732,9 +762,50 @@ func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes map[string
 	if idx < 0 {
 		return // not a route-registration helper
 	}
+	w.stack[key] = true
+	w.walkBody(decl.Body, w.seedFromCall(call, idx, paramName, prefixes))
+	delete(w.stack, key)
+}
 
-	// Thread the prefix of the registrar argument into the helper's registrar
-	// parameter so routes inside the helper inherit the caller's group prefix.
+// recurseFieldDelegate walks a handler-field delegate (m.<field>.<method>(...)).
+// Non-registration field calls (m.logger.Info(...)) fail to resolve or lack a
+// registrar param and are silently skipped; a call that PASSES a registrar but
+// cannot be resolved is warned about, because its routes are being dropped.
+func (w *routeWalker) recurseFieldDelegate(call *ast.CallExpr, fieldName, method string, prefixes map[string]string) {
+	delegate, ok := w.a.resolveDelegateContext(w.astFile, w.filePath, w.structName, fieldName)
+	if !ok {
+		w.warnIfRegistrarPassed(call, fieldName, method, prefixes)
+		return
+	}
+	key := delegate.structName + "." + method
+	if w.stack[key] {
+		return
+	}
+	decl := w.a.findMethodDecl(delegate.astFile, delegate.filePath, delegate.structName, method)
+	idx, paramName := w.a.routeRegistrarParam(decl, delegate.serverAliases)
+	if idx < 0 {
+		w.warnIfRegistrarPassed(call, fieldName, method, prefixes)
+		return
+	}
+	dw := &routeWalker{
+		a:             w.a,
+		astFile:       delegate.astFile,
+		filePath:      delegate.filePath,
+		structName:    delegate.structName,
+		recvVar:       receiverVarName(decl.Recv),
+		serverAliases: delegate.serverAliases,
+		stack:         w.stack, // shared: cycles across delegation chains must terminate
+		registrars:    registrarSet(paramName),
+	}
+	w.stack[key] = true
+	dw.walkBody(decl.Body, w.seedFromCall(call, idx, paramName, prefixes))
+	delete(w.stack, key)
+	w.routes = append(w.routes, dw.routes...)
+}
+
+// seedFromCall threads the group prefix bound to the call's registrar argument
+// into the callee's registrar parameter name.
+func (w *routeWalker) seedFromCall(call *ast.CallExpr, idx int, paramName string, prefixes map[string]string) map[string]string {
 	seed := map[string]string{}
 	if paramName != "" && idx < len(call.Args) {
 		if argIdent, ok := call.Args[idx].(*ast.Ident); ok {
@@ -743,10 +814,25 @@ func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes map[string
 			}
 		}
 	}
+	return seed
+}
 
-	w.stack[method] = true
-	w.walkBody(decl.Body, seed)
-	delete(w.stack, method)
+// warnIfRegistrarPassed emits a diagnostic when an unresolvable delegated call
+// receives a known registrar (the walked method's own registrar param or a
+// group derived from it) — the strongest static signal that route
+// registrations are being dropped. Calls without a registrar stay silent.
+func (w *routeWalker) warnIfRegistrarPassed(call *ast.CallExpr, fieldName, method string, prefixes map[string]string) {
+	for _, arg := range call.Args {
+		ident, ok := arg.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if w.registrars[ident.Name] || prefixes[ident.Name] != "" {
+			w.a.addWarningf("skipping %s.%s.%s(...): it receives a route registrar but its routes could not be resolved (delegate type or method not found)",
+				w.recvVar, fieldName, method)
+			return
+		}
+	}
 }
 
 // routeRegistrarParam returns the positional index and name of a function's
@@ -937,6 +1023,84 @@ func (a *ProjectAnalyzer) resolveFieldType(structName, fieldName string, astFile
 		}
 	}
 	return ""
+}
+
+// delegateContext is the file/package context of a module field's struct type,
+// letting the walker recurse into the delegate's methods with the aliases of
+// the file that declares them.
+type delegateContext struct {
+	structName    string
+	astFile       *ast.File
+	filePath      string
+	serverAliases map[string]struct{}
+}
+
+// resolveDelegateContext resolves module field fieldName to an in-module struct.
+// ok=false for external or unresolvable field types — the normal case for
+// non-handler fields (loggers, services), so callers must not warn on it alone.
+func (a *ProjectAnalyzer) resolveDelegateContext(astFile *ast.File, filePath, moduleStruct, fieldName string) (delegateContext, bool) {
+	fieldType, qualified := a.fieldTypeExpr(moduleStruct, fieldName, astFile, filePath)
+	if fieldType == "" {
+		return delegateContext{}, false
+	}
+	if qualified {
+		q, ok := a.resolveQualifiedStruct(fieldType, astFile)
+		if !ok {
+			return delegateContext{}, false
+		}
+		return delegateContext{
+			structName:    q.typeName,
+			astFile:       q.file,
+			filePath:      q.filePath,
+			serverAliases: a.extractImportAliases(q.file, serverImportPath),
+		}, true
+	}
+	// Same package: findMethodDecl searches the whole package from this file,
+	// so keep the current file context (matching same-receiver helper behavior,
+	// which also uses the entry file's aliases for cross-file helpers).
+	return delegateContext{
+		structName:    fieldType,
+		astFile:       astFile,
+		filePath:      filePath,
+		serverAliases: a.extractImportAliases(astFile, serverImportPath),
+	}, true
+}
+
+// fieldTypeExpr returns the declared type of field fieldName on structName:
+// ("Handler", false) for an in-package type, ("handlers.Handler", true) for a
+// package-qualified one, ("", false) when unresolvable. Pointers are stripped.
+func (a *ProjectAnalyzer) fieldTypeExpr(structName, fieldName string, astFile *ast.File, filePath string) (name string, qualified bool) {
+	if structName == "" {
+		return "", false
+	}
+	structType, err := a.findStructDefinition(astFile, filePath, structName)
+	if err != nil || structType.Fields == nil {
+		return "", false
+	}
+	for _, field := range structType.Fields.List {
+		for _, n := range field.Names {
+			if n.Name == fieldName {
+				return qualifiedTypeName(field.Type)
+			}
+		}
+	}
+	return "", false
+}
+
+// qualifiedTypeName renders a field type expression as an (optionally
+// package-qualified) type name, stripping a leading pointer.
+func qualifiedTypeName(expr ast.Expr) (string, bool) {
+	switch t := expr.(type) {
+	case *ast.StarExpr:
+		return qualifiedTypeName(t.X)
+	case *ast.Ident:
+		return t.Name, false
+	case *ast.SelectorExpr:
+		if pkg, ok := t.X.(*ast.Ident); ok {
+			return pkg.Name + "." + t.Sel.Name, true
+		}
+	}
+	return "", false
 }
 
 // baseTypeName returns the unqualified type name of an expression, stripping a
