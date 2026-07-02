@@ -584,7 +584,7 @@ func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(
 		serverAliases: serverAliases,
 		// Seed the recursion stack with the entry method so a helper that calls
 		// back into RegisterRoutes cannot re-walk it (cycle guard for the root).
-		stack: map[string]bool{structName + "." + moduleMethodRegisterRoutes: true},
+		stack: map[string]bool{walkStackKey(filePath, structName, moduleMethodRegisterRoutes): true},
 	}
 	// The method's own registrar param is a known registrar with no prefix;
 	// presence in the prefix map is what fail-loud delegation checks key on.
@@ -594,6 +594,14 @@ func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(
 	}
 	w.walkBody(body, seed)
 	return w.routes
+}
+
+// walkStackKey is the cycle-guard key for a registration method, qualified by
+// the file's directory (= package): bare struct names collide across packages
+// in nested delegation chains (Handler is a common delegate name), and a false
+// collision silently drops the deeper package's routes.
+func walkStackKey(filePath, structName, method string) string {
+	return filepath.Dir(filePath) + "#" + structName + "." + method
 }
 
 // routeWalker collects routes from a RegisterRoutes method body and the
@@ -785,7 +793,7 @@ func (w *routeWalker) delegateFor(fieldName string) (delegateContext, bool) {
 // silent. A child walker carries the target's own file/struct/alias context so
 // handler signatures resolve against the right struct.
 func (w *routeWalker) recurseInto(call *ast.CallExpr, target delegateContext, fieldName, method string, prefixes map[string]string) {
-	key := target.structName + "." + method
+	key := walkStackKey(target.filePath, target.structName, method)
 	if w.stack[key] {
 		return
 	}
