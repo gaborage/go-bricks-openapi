@@ -659,11 +659,13 @@ func jsonMediaRef(name string) map[string]*OpenAPIMediaType {
 //     which is what finally references the response component the analyzer
 //     discovered (closing the "orphan component" window).
 //
-// Error responses: 400 and 500 are always present; 422 is added when the request
-// type carries validation tags (the framework returns 422 on validation
-// failure). The error schema is JOSEErrorEnvelope for JOSE routes (pre-trust
-// failures leak nothing beyond {code,message}), RawErrorResponse for raw routes,
-// and ErrorResponse otherwise.
+// Error responses: 400 and 500 are always present. 400 covers binding AND
+// validation failures — v0.45 returns 400 with details.validationErrors for
+// both; 422 only arises from handler-level BusinessLogicError, which is
+// invisible to static analysis, so it is never emitted here. The error schema
+// is JOSEErrorEnvelope for JOSE routes (pre-trust failures leak nothing beyond
+// {code,message}), RawErrorResponse for raw routes, and ErrorResponse
+// otherwise.
 //
 // JOSE 4xx schema selection is driven by EITHER side carrying jose tags. The
 // runtime enforces bidirectional symmetry at registration, but the analyzer runs
@@ -697,11 +699,8 @@ func (g *OpenAPIGenerator) buildResponses(route *models.Route) map[string]*OpenA
 	errorSchema := errorSchemaName(route)
 
 	responses := map[string]*OpenAPIResponse{
-		"400": {Description: "Bad Request", Content: jsonMediaRef(errorSchema)},
+		"400": {Description: "Bad Request — malformed request or failed validation", Content: jsonMediaRef(errorSchema)},
 		"500": {Description: "Internal Server Error", Content: jsonMediaRef(errorSchema)},
-	}
-	if routeHasValidation(route.Request) {
-		responses["422"] = &OpenAPIResponse{Description: "Unprocessable Entity", Content: jsonMediaRef(errorSchema)}
 	}
 	// Assign the success entry LAST so a success status that overlaps an error code
 	// (e.g. a handler that returns NewResult(400, ...) as a non-error Result) keeps
@@ -785,21 +784,6 @@ func responsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
 		return &OpenAPIProperty{Type: typeObject}
 	}
 	return &OpenAPIProperty{Ref: refPath(schemaName(response))}
-}
-
-// routeHasValidation reports whether the request type carries any validation
-// constraints, which is what makes a 422 (Unprocessable Entity) reachable.
-func routeHasValidation(request *models.TypeInfo) bool {
-	if request == nil {
-		return false
-	}
-	for i := range request.Fields {
-		f := &request.Fields[i]
-		if f.Required || f.RawValidation != "" {
-			return true
-		}
-	}
-	return false
 }
 
 // getOperationID generates an operation ID for a route
@@ -1004,12 +988,25 @@ func successResponseSchema() *OpenAPISchema {
 	}
 }
 
+// errorResponseSchema mirrors go-bricks' error envelope:
+// {error:{code,message,details?}, meta:{timestamp,traceId}}. details carries
+// contextual payloads — a 400 validation failure holds
+// validationErrors: [{field,message,value}] — and is emitted only in
+// development environments, so it is documented but not required.
 func errorResponseSchema() *OpenAPISchema {
 	return &OpenAPISchema{
 		Type: typeObject,
 		Properties: map[string]*OpenAPIProperty{
-			propNameError: {Type: typeObject, Description: "Error details with code and message"},
-			propNameMeta:  {Type: typeObject, Description: "Response metadata"},
+			propNameError: {
+				Type:        typeObject,
+				Description: "Error details",
+				Properties: map[string]*OpenAPIProperty{
+					propNameCode:    {Type: typeString, Description: "Machine-readable error code (e.g. BAD_REQUEST, NOT_FOUND, INTERNAL_ERROR, or a custom business code)"},
+					propNameMessage: {Type: typeString, Description: "Human-readable error message"},
+					"details":       {Type: typeObject, Description: "Contextual error payload, emitted in development environments only. Validation failures carry validationErrors: [{field, message, value}]."},
+				},
+			},
+			propNameMeta: metaEnvelopeSchema(),
 		},
 		Required: []string{propNameError},
 	}

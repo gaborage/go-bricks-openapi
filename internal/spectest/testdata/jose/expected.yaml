@@ -38,13 +38,7 @@ paths:
                 type: string
                 format: jose
         "400":
-          description: Bad Request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/JOSEErrorEnvelope'
-        "422":
-          description: Unprocessable Entity
+          description: Bad Request — malformed request or failed validation
           content:
             application/json:
               schema:
