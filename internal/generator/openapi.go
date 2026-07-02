@@ -702,6 +702,22 @@ func (g *OpenAPIGenerator) buildResponses(route *models.Route) map[string]*OpenA
 		"400": {Description: "Bad Request — malformed request or failed validation", Content: jsonMediaRef(errorSchema)},
 		"500": {Description: "Internal Server Error", Content: jsonMediaRef(errorSchema)},
 	}
+	// JOSE routes carry the full pre-trust failure catalog: 401 for
+	// decrypt/verify/kid failures (the primary class), 415 for a plaintext
+	// request on a sealed route. Post-trust failures (after inbound verify)
+	// are sealed application/jose envelopes; pre-trust ones cannot be (no
+	// established keys), hence the dual 500 content.
+	if errorSchema == schemaJOSEErrorEnvelope {
+		responses["401"] = &OpenAPIResponse{
+			Description: "Unauthorized — JOSE decrypt/verify failure (JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN, JOSE_KID_MISSING)",
+			Content:     jsonMediaRef(errorSchema),
+		}
+		responses["415"] = &OpenAPIResponse{
+			Description: "Unsupported Media Type — plaintext request on a JOSE route (JOSE_PLAINTEXT_REJECTED)",
+			Content:     jsonMediaRef(errorSchema),
+		}
+		responses["500"].Content[mediaJOSE] = &OpenAPIMediaType{Schema: joseTokenSchema()}
+	}
 	// Assign the success entry LAST so a success status that overlaps an error code
 	// (e.g. a handler that returns NewResult(400, ...) as a non-error Result) keeps
 	// the documented success response rather than being clobbered by the 400 entry.

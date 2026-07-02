@@ -2770,3 +2770,31 @@ func TestOperationSecurityYAMLMarshal(t *testing.T) {
 		assert.NotContains(t, string(out), "security", "nil pointer must omit the security key")
 	})
 }
+
+// TestJOSEErrorCatalog locks the v0.45 JOSE failure contract: pre-trust
+// failures are application/json minimal envelopes on 400 (malformed), 401
+// (decrypt/signature/kid — the primary auth-failure class), and 415 (plaintext
+// rejected); post-trust failures are sealed application/jose, modeled as an
+// alternate 500 content type.
+func TestJOSEErrorCatalog(t *testing.T) {
+	project := &models.Project{
+		Name: "svc", Version: "1.0.0",
+		Modules: []models.Module{{
+			Name: "vault", Package: "vault",
+			Routes: []models.Route{{
+				Method: "POST", Path: "/seal", HandlerName: "seal", Module: "vault", Package: "vault",
+				Request: &models.TypeInfo{Name: "SealReq", Package: "vault", JOSE: true, Fields: []models.FieldInfo{
+					{Name: "Payload", Type: "string", JSONName: "payload"},
+				}},
+			}},
+		}},
+		Types: map[string]*models.TypeInfo{},
+	}
+	spec, err := New("", "", "").Generate(project)
+	require.NoError(t, err)
+
+	assert.Contains(t, spec, `"401"`, "JOSE decrypt/verify failures are 401")
+	assert.Contains(t, spec, `"415"`, "plaintext on a JOSE route is 415")
+	assert.Contains(t, spec, "JOSE_PLAINTEXT_REJECTED")
+	assert.Contains(t, spec, "application/jose", "post-trust errors are sealed")
+}

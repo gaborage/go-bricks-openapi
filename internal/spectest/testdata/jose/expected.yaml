@@ -43,9 +43,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/JOSEErrorEnvelope'
+        "401":
+          description: Unauthorized — JOSE decrypt/verify failure (JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN, JOSE_KID_MISSING)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JOSEErrorEnvelope'
+        "415":
+          description: Unsupported Media Type — plaintext request on a JOSE route (JOSE_PLAINTEXT_REJECTED)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JOSEErrorEnvelope'
         "500":
           description: Internal Server Error
           content:
+            application/jose:
+              schema:
+                type: string
+                format: jose
             application/json:
               schema:
                 $ref: '#/components/schemas/JOSEErrorEnvelope'
