@@ -38,6 +38,14 @@ const (
 	schemaSuccessResponse   = "SuccessResponse"
 )
 
+// maxValidationErrorItems bounds the documented validationErrors array
+// (SAST hygiene, CKV_OPENAPI_21): validators emit one entry per failed
+// field/rule, so this is a generous ceiling for any real request struct.
+const maxValidationErrorItems = 100
+
+// intPtr returns a pointer to v, for optional numeric schema fields.
+func intPtr(v int) *int { return &v }
+
 // joseAuthFailureCodes is the pre-trust 401 catalog (decrypt/verify/kid
 // failures), single-sourced so the 401 response description and the
 // JOSEErrorEnvelope code-field description cannot drift apart.
@@ -253,7 +261,7 @@ func NewWithConfig(cfg *Config) *OpenAPIGenerator {
 		copied := *cfg.License
 		license = &copied
 	}
-	tenantHeader := cfg.TenantHeader
+	tenantHeader := strings.TrimSpace(cfg.TenantHeader)
 	if tenantHeader == "" {
 		tenantHeader = defaultTenantHeader
 	}
@@ -1052,7 +1060,11 @@ func errorResponseSchema() *OpenAPISchema {
 						Description: "Contextual error payload, emitted in development environments only",
 						Properties: map[string]*OpenAPIProperty{
 							"validationErrors": {
-								Type:        typeArray,
+								Type: typeArray,
+								// Bounded for SAST hygiene (CKV_OPENAPI_21): validators
+								// emit one entry per failed field/rule; 100 is a
+								// generous ceiling for any real request struct.
+								MaxItems:    intPtr(maxValidationErrorItems),
 								Description: "Per-field validation failures (400 validation errors)",
 								Items: &OpenAPIProperty{
 									Type: typeObject,

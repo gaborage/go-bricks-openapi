@@ -1572,11 +1572,6 @@ func TestGenerateWithTypedRequestResponse(t *testing.T) {
 	}
 }
 
-// Helper functions for pointer creation in tests
-func intPtr(i int) *int {
-	return &i
-}
-
 func float64Ptr(f float64) *float64 {
 	return &f
 }
@@ -2729,6 +2724,10 @@ func TestTenantSchemeHonestyAndHeaderOverride(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, custom, "X-Org-ID")
 	assert.NotContains(t, custom, "X-Tenant-ID")
+
+	blank, err := NewWithConfig(&Config{TenantHeader: "   "}).Generate(project)
+	require.NoError(t, err)
+	assert.Contains(t, blank, "X-Tenant-ID", "whitespace-only --tenant-header must fall back to the default")
 }
 
 // TestBuildOperationPublicSecurityOverride covers the per-operation security

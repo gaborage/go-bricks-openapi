@@ -86,6 +86,7 @@ components:
                         description: Violated validation rule
                       value:
                         description: Submitted value (any type)
+                  maxItems: 100
               description: Contextual error payload, emitted in development environments only
             message:
               type: string
