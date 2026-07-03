@@ -624,7 +624,15 @@ func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, str
 
 		recvVar := receiverVarName(funcDecl.Recv)
 		_, rootRegistrar := a.routeRegistrarParam(funcDecl, serverAliases)
-		routes = append(routes, a.extractRoutesFromFuncBodyWithAliases(funcDecl.Body, astFile, filePath, structName, recvVar, rootRegistrar, moduleName, serverAliases)...)
+		routes = append(routes, a.extractRoutesFromFuncBodyWithAliases(funcDecl.Body, &walkSetup{
+			astFile:       astFile,
+			filePath:      filePath,
+			structName:    structName,
+			recvVar:       recvVar,
+			rootRegistrar: rootRegistrar,
+			moduleName:    moduleName,
+			serverAliases: serverAliases,
+		})...)
 	}
 
 	return routes
@@ -633,33 +641,45 @@ func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, str
 // extractRoutesFromFuncBody extracts route registrations from a function body
 // using only the default "server" alias and no handler/helper context.
 func (a *ProjectAnalyzer) extractRoutesFromFuncBody(body *ast.BlockStmt) []models.Route {
-	return a.extractRoutesFromFuncBodyWithAliases(body, nil, "", "", "", "", "", map[string]struct{}{frameworkPkgServer: {}})
+	return a.extractRoutesFromFuncBodyWithAliases(body, &walkSetup{
+		serverAliases: map[string]struct{}{frameworkPkgServer: {}},
+	})
+}
+
+// walkSetup is the per-method context for walking a RegisterRoutes body,
+// grouped so the walk entry point keeps a sane arity (Sonar S107).
+type walkSetup struct {
+	astFile       *ast.File
+	filePath      string
+	structName    string
+	recvVar       string
+	rootRegistrar string
+	moduleName    string
+	serverAliases map[string]struct{}
 }
 
 // extractRoutesFromFuncBodyWithAliases walks a RegisterRoutes body (and the
 // same-receiver helper methods and handler-field delegates it calls) to
 // collect every route registration, including those nested inside
 // if/for/range/blocks and those registered on a r.Group(prefix) registrar.
-func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(
-	body *ast.BlockStmt, astFile *ast.File, filePath, structName, recvVar, rootRegistrar, moduleName string, serverAliases map[string]struct{},
-) []models.Route {
+func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(body *ast.BlockStmt, setup *walkSetup) []models.Route {
 	w := &routeWalker{
 		a:             a,
-		astFile:       astFile,
-		filePath:      filePath,
-		structName:    structName,
-		recvVar:       recvVar,
-		moduleName:    moduleName,
-		serverAliases: serverAliases,
+		astFile:       setup.astFile,
+		filePath:      setup.filePath,
+		structName:    setup.structName,
+		recvVar:       setup.recvVar,
+		moduleName:    setup.moduleName,
+		serverAliases: setup.serverAliases,
 		// Seed the recursion stack with the entry method so a helper that calls
 		// back into RegisterRoutes cannot re-walk it (cycle guard for the root).
-		stack: map[string]bool{walkStackKey(filePath, structName, moduleMethodRegisterRoutes): true},
+		stack: map[string]bool{walkStackKey(setup.filePath, setup.structName, moduleMethodRegisterRoutes): true},
 	}
 	// The method's own registrar param is a known registrar with no prefix;
 	// presence in the prefix map is what fail-loud delegation checks key on.
 	seed := map[string]string{}
-	if rootRegistrar != "" {
-		seed[rootRegistrar] = ""
+	if setup.rootRegistrar != "" {
+		seed[setup.rootRegistrar] = ""
 	}
 	w.walkBody(body, seed)
 	return w.routes
