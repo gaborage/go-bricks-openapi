@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -4398,4 +4399,206 @@ func TestParseValidationTagDive(t *testing.T) {
 	c, e = a.parseValidationTag("")
 	assert.Empty(t, c)
 	assert.Nil(t, e)
+}
+
+// TestFieldDelegatedRegisterRoutes verifies routes registered through the
+// m.<field>.Method(hr, r) delegation shape are discovered: same-package
+// delegate, group-prefix threading into the delegate, and typed handlers
+// resolved against the DELEGATE struct (not the module).
+func TestFieldDelegatedRegisterRoutes(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{ h *Handler }
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	m.h.RegisterRoutes(hr, r)
+	v1 := r.Group("/v1")
+	m.h.RegisterWrites(hr, v1)
+}
+type Handler struct{}
+type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
+func (h *Handler) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/things", h.list)
+}
+func (h *Handler) RegisterWrites(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.POST(hr, r, "/things", h.create)
+}
+func (h *Handler) list(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) {
+	return server.NewResult(200, Thing{}), nil
+}
+func (h *Handler) create(req Thing, ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) {
+	return server.Created(Thing{}), nil
+}
+`
+	_, routes := analyzeSingleModule(t, src)
+	require.Len(t, routes, 2, "both delegated route sets must be discovered")
+
+	list := routeForPath(t, routes, "GET /things")
+	assert.Equal(t, "list", list.HandlerName)
+	require.NotNil(t, list.Response, "handler signature must resolve against the delegate struct")
+
+	create := routeForPath(t, routes, "POST /v1/things")
+	assert.Equal(t, "create", create.HandlerName)
+	require.NotNil(t, create.Request, "request type must resolve against the delegate struct")
+}
+
+// TestFieldDelegationCycleGuard verifies mutually-delegating registration
+// methods terminate (the stack key is struct-qualified, so a delegate method
+// named RegisterRoutes does not collide with the module's own RegisterRoutes).
+func TestFieldDelegationCycleGuard(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{ h *Handler }
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	m.h.RegisterRoutes(hr, r)
+}
+type Handler struct{ again *Handler }
+type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
+func (h *Handler) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/once", h.get)
+	h.again.RegisterRoutes(hr, r) // self-delegation: must not loop or duplicate
+}
+func (h *Handler) get(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) {
+	return server.NewResult(200, Thing{}), nil
+}
+`
+	_, routes := analyzeSingleModule(t, src)
+	require.Len(t, routes, 1, "cycle guard must stop self-delegation without duplicating routes")
+}
+
+// TestFieldDelegationWarnsOnUnresolvable verifies the fail-loud contract: a
+// delegated call that PASSES a registrar but whose target cannot be resolved
+// warns (routes are being dropped), while ordinary field method calls that do
+// not receive a registrar stay silent.
+func TestFieldDelegationWarnsOnUnresolvable(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+	"github.com/rs/zerolog"
+)
+type Module struct {
+	mystery zerolog.Logger
+}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	m.mystery.RegisterRoutes(hr, r) // external type: unresolvable, receives registrar -> warn
+	m.mystery.Print("starting")     // ordinary call, no registrar -> silent
+	server.GET(hr, r, "/ok", m.ok)
+}
+func (m *Module) ok(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) {
+	return server.NewResult(200, Thing{}), nil
+}
+`
+	a, routes := analyzeSingleModule(t, src)
+	require.Len(t, routes, 1)
+
+	warnings := a.Warnings(context.Background())
+	require.Len(t, warnings, 1, "exactly one warning: the dropped delegation, not the Print call")
+	assert.Contains(t, warnings[0], "mystery")
+	assert.Contains(t, warnings[0], "RegisterRoutes")
+}
+
+// TestNestedDelegationSameStructNameAcrossPackages guards the cycle-guard key
+// against cross-package collisions: a nested delegation chain in which two
+// DIFFERENT packages both name their delegate struct Handler must contribute
+// routes from both — a bare struct-name key would mistake the deeper Handler
+// for a cycle and silently drop its routes (CodeRabbit PR14 finding).
+func TestNestedDelegationSameStructNameAcrossPackages(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	write("go.mod", "module example.com/nested\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.45.0\n")
+	write("module.go", `package payments
+
+import (
+	"example.com/nested/alpha"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{ inner *alpha.Handler }
+
+func (m *Module) Name() string                    { return "payments" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	m.inner.RegisterRoutes(hr, r)
+}
+`)
+	write("alpha/handler.go", `package alpha
+
+import (
+	"example.com/nested/beta"
+
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Handler struct{ deep *beta.Handler }
+
+type Thing struct {
+	ID int64 `+"`json:\"id\"`"+`
+}
+
+func (h *Handler) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/alpha", h.get)
+	h.deep.RegisterRoutes(hr, r)
+}
+
+func (h *Handler) get(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) {
+	return server.NewResult(200, Thing{}), nil
+}
+`)
+	write("beta/handler.go", `package beta
+
+import "github.com/gaborage/go-bricks/server"
+
+type Handler struct{}
+
+type Item struct {
+	ID int64 `+"`json:\"id\"`"+`
+}
+
+func (h *Handler) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/beta", h.get)
+}
+
+func (h *Handler) get(ctx server.HandlerContext) (server.Result[Item], server.IAPIError) {
+	return server.NewResult(200, Item{}), nil
+}
+`)
+
+	project, err := New(dir).AnalyzeProject()
+	require.NoError(t, err)
+	require.Len(t, project.Modules, 1)
+
+	routes := project.Modules[0].Routes
+	require.Len(t, routes, 2, "the beta package's same-named Handler must not be mistaken for a cycle")
+	routeForPath(t, routes, "GET /alpha")
+	routeForPath(t, routes, "GET /beta")
 }
