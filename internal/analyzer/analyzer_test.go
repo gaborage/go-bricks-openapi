@@ -3758,10 +3758,41 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 		"HandlerName stays the handler method name, so the generator can module-qualify the derived id")
 }
 
-// TestWithPublicMetadata verifies the server.WithPublic() route option flips
-// route.Public, that it composes with WithTags, and that a route without it
-// keeps Public=false.
-func TestWithPublicMetadata(t *testing.T) {
+// TestWithModuleOverride verifies server.WithModule(name) overrides the
+// route's owning-module namespace (tags/operationId grouping) while routes
+// without it keep the discovering module's name.
+func TestWithModuleOverride(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
+func (m *Module) a(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.NewResult(200, Thing{}), nil }
+func (m *Module) b(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.NewResult(200, Thing{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/renamed", m.a, server.WithModule("billing"))
+	server.GET(hr, r, "/normal", m.b)
+}
+`
+	_, routes := analyzeSingleModule(t, src)
+
+	renamed := routeForPath(t, routes, "GET /renamed")
+	assert.Equal(t, "billing", renamed.Module, "WithModule must override the module namespace")
+
+	normal := routeForPath(t, routes, "GET /normal")
+	assert.Equal(t, "mod", normal.Module, "routes without WithModule keep the discovering module")
+}
+
+// TestPublicDirective verifies the //openapi:public comment directive flips
+// route.Public: alone, inside a doc-comment block, and NOT via unrelated
+// comments or the removed server.WithPublic() option (phantom API — it never
+// existed in go-bricks, so real consumer code cannot contain it).
+func TestPublicDirective(t *testing.T) {
 	src := `package mod
 import (
 	"github.com/gaborage/go-bricks/app"
@@ -3773,25 +3804,31 @@ func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
 func (m *Module) Shutdown() error { return nil }
 type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
 func (m *Module) health(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
-func (m *Module) tagged(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
+func (m *Module) login(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
 func (m *Module) private(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	server.GET(hr, r, "/health", m.health, server.WithPublic())
-	server.GET(hr, r, "/tagged", m.tagged, server.WithPublic(), server.WithTags("ops"))
+	//openapi:public
+	server.GET(hr, r, "/health", m.health)
+
+	// Login issues the session token.
+	//openapi:public
+	server.POST(hr, r, "/login", m.login, server.WithTags("auth"))
+
+	// An ordinary comment must not mark the route public.
 	server.GET(hr, r, "/private", m.private)
 }
 `
 	_, routes := analyzeSingleModule(t, src)
 
 	health := routeForPath(t, routes, "GET /health")
-	assert.True(t, health.Public, "WithPublic() must set Public")
+	assert.True(t, health.Public, "//openapi:public directly above the call must set Public")
 
-	tagged := routeForPath(t, routes, "GET /tagged")
-	assert.True(t, tagged.Public, "WithPublic() composes with other options")
-	assert.Equal(t, []string{"ops"}, tagged.Tags, "WithTags still applies alongside WithPublic")
+	login := routeForPath(t, routes, "POST /login")
+	assert.True(t, login.Public, "directive inside a doc-comment block must set Public")
+	assert.Equal(t, []string{"auth"}, login.Tags, "WithTags still applies alongside the directive")
 
 	private := routeForPath(t, routes, "GET /private")
-	assert.False(t, private.Public, "a route without WithPublic() must keep Public=false")
+	assert.False(t, private.Public, "an unrelated comment must not mark the route public")
 }
 
 // TestExtractSuccessStatusLastWins confirms that when a handler returns a server
@@ -4511,6 +4548,47 @@ func (m *Module) ok(ctx server.HandlerContext) (server.Result[Thing], server.IAP
 	require.Len(t, warnings, 1, "exactly one warning: the dropped delegation, not the Print call")
 	assert.Contains(t, warnings[0], "mystery")
 	assert.Contains(t, warnings[0], "RegisterRoutes")
+}
+
+// TestRegisterHandlerGenericForm verifies the exported generic registration
+// form server.RegisterHandler(hr, r, method, path, handler, opts...) is
+// recognized with the method taken from a string literal or an http.MethodX
+// constant, and that options shift right by one position.
+func TestRegisterHandlerGenericForm(t *testing.T) {
+	src := `package mod
+import (
+	"net/http"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
+func (m *Module) get(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.NewResult(200, Thing{}), nil }
+func (m *Module) create(req Thing, ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.RegisterHandler(hr, r, "GET", "/things/:id", m.get, server.WithTags("things"))
+	server.RegisterHandler(hr, r, http.MethodPost, "/things", m.create)
+	server.RegisterHandler(hr, r, someVar, "/dropped", m.get) // non-literal method: warn + skip
+}
+var someVar = "PUT"
+`
+	a, routes := analyzeSingleModule(t, src)
+	require.Len(t, routes, 2)
+
+	get := routeForPath(t, routes, "GET /things/{id}")
+	assert.Equal(t, "get", get.HandlerName)
+	assert.Equal(t, []string{"things"}, get.Tags, "options shifted by one must still parse")
+
+	create := routeForPath(t, routes, "POST /things")
+	require.NotNil(t, create.Request)
+
+	warnings := a.Warnings(context.Background())
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "RegisterHandler")
 }
 
 // TestNestedDelegationSameStructNameAcrossPackages guards the cycle-guard key
