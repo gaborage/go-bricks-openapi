@@ -48,6 +48,7 @@ type GenerateOptions struct {
 
 	Format            string // "yaml" (default) or "json"
 	DisableTenantAuth bool   // omit the X-Tenant-ID security scheme (single-tenant)
+	TenantHeader      string // header name for the tenant security scheme (default X-Tenant-ID)
 	Strict            bool   // treat warnings (empty/untyped) as a non-zero exit
 	Validate          bool   // validate the generated spec (OpenAPI 3.0) before writing
 }
@@ -88,6 +89,7 @@ and produces a comprehensive API specification with validation constraints.`,
 	cmd.Flags().StringVar(&opts.LicenseURL, "license-url", "", "info.license.url")
 	cmd.Flags().StringVar(&opts.Format, "format", "", "Output format: yaml (default) or json")
 	cmd.Flags().BoolVar(&opts.DisableTenantAuth, "no-tenant-security", false, "Omit the X-Tenant-ID security scheme (single-tenant)")
+	cmd.Flags().StringVar(&opts.TenantHeader, "tenant-header", "", "Header name for the tenant security scheme (default X-Tenant-ID)")
 	cmd.Flags().BoolVar(&opts.Strict, "strict", false, "Exit non-zero if the spec has warnings (no modules/routes, untyped routes)")
 	cmd.Flags().BoolVar(&opts.Validate, "validate", false, "Validate the generated spec (OpenAPI 3.0) before writing; fails if invalid")
 
@@ -216,6 +218,7 @@ func buildGeneratorConfig(opts *GenerateOptions) *generator.Config {
 		Description:           opts.Description,
 		Servers:               opts.Servers,
 		DisableTenantSecurity: opts.DisableTenantAuth,
+		TenantHeader:          opts.TenantHeader,
 	}
 	if opts.License != "" {
 		cfg.License = &generator.License{Name: opts.License, URL: opts.LicenseURL}

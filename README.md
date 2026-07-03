@@ -76,13 +76,49 @@ go-bricks-openapi version
 | `--license`             | License name                                             |
 | `--license-url`         | License URL                                              |
 | `--no-tenant-security`  | Omit the `X-Tenant-ID` security scheme                   |
+| `--tenant-header`       | Header name for the tenant security scheme (default `X-Tenant-ID`) |
 | `--strict`              | Treat analyzer warnings as failures                      |
 | `--verbose, -v`         | Verbose output                                           |
+
+### Marking a route as public
+
+By default every operation carries the tenant security scheme. A route that
+needs no auth (health checks, login, webhooks) can opt out with an
+`//openapi:public` comment directive on the line directly above its
+registration call:
+
+```go
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	//openapi:public
+	server.GET(hr, r, "/ping", ping, server.WithTags("health"))
+}
+```
+
+The generator emits `security: []` for that operation. go-bricks itself has
+no per-route tenant opt-out API as of v0.45.0, so this directive is the
+tool's own annotation — it has no runtime effect.
 
 ## Requirements
 
 - **Go 1.25+** to build/run the tool.
-- Targets **GoBricks v0.13.0+** projects (the `doctor` command enforces this floor).
+- Targets **GoBricks v0.13.0+** projects (verified through **v0.45.0**; the
+  `doctor` command enforces the floor).
+
+## Known limitations
+
+- Raw/untyped routes (`r.Add`, `RegisterReadyHandler`) are discovered but
+  have no request/response schema — they show up as untyped in `doctor`
+  diagnostics.
+- Routes registered outside a module's `RegisterRoutes` (e.g. via
+  `RootGroup()` in `main`) are not discovered.
+- Embedded-module method promotion is not resolved.
+- Response trace headers (`traceparent`, `X-Request-ID`) are not modeled in
+  the generated spec.
+- JOSE `jose:` tags are recognized only on the `_` sentinel field.
+- `server.WithMiddleware(...)` is intentionally ignored — middleware names
+  carry no spec semantics.
+- Tenant enforcement is not derived from runtime config; the security scheme
+  reflects static analysis of route registration only.
 
 ## Development
 

@@ -38,6 +38,12 @@ const (
 	minGoVersion   = "go1.25"
 	minGoBricksVer = "v0.13.0"
 
+	// verifiedGoBricksVer is the newest go-bricks release the analyzer's
+	// recognized patterns and the generator's emitted runtime contract have
+	// been verified against (fixtures + the demo-project acceptance run).
+	// Bump it as part of each framework-compatibility pass.
+	verifiedGoBricksVer = "v0.45.0"
+
 	// File patterns
 	goFileExt   = ".go"
 	testFileExt = "_test.go"
@@ -300,7 +306,7 @@ func checkGoBricksCompatibility(goModPath string, verbose bool) error {
 		fmt.Printf("❌ %v\n   → OpenAPI generation requires %s %s+\n", err, goBricksDep, minGoBricksVer)
 		return err
 	}
-	fmt.Printf("✅ %s version compatible\n", goBricksDep)
+	fmt.Printf("✅ %s version compatible (floor %s, verified through %s)\n", goBricksDep, minGoBricksVer, verifiedGoBricksVer)
 	return nil
 }
 

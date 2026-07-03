@@ -38,6 +38,19 @@ const (
 	schemaSuccessResponse   = "SuccessResponse"
 )
 
+// maxValidationErrorItems bounds the documented validationErrors array
+// (SAST hygiene, CKV_OPENAPI_21): validators emit one entry per failed
+// field/rule, so this is a generous ceiling for any real request struct.
+const maxValidationErrorItems = 100
+
+// intPtr returns a pointer to v, for optional numeric schema fields.
+func intPtr(v int) *int { return &v }
+
+// joseAuthFailureCodes is the pre-trust 401 catalog (decrypt/verify/kid
+// failures), single-sourced so the 401 response description and the
+// JOSEErrorEnvelope code-field description cannot drift apart.
+const joseAuthFailureCodes = "JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN, JOSE_KID_MISSING"
+
 // HTTP method names used in switch discriminants and operation generation.
 const (
 	httpMethodGet     = "GET"
@@ -107,16 +120,20 @@ type Config struct {
 	// DisableTenantSecurity omits the X-Tenant-ID security scheme + root security
 	// (for single-tenant services).
 	DisableTenantSecurity bool
+	// TenantHeader overrides the header name in the tenant security scheme
+	// (default X-Tenant-ID; go-bricks header resolvers are configurable).
+	TenantHeader string
 }
 
 // OpenAPIGenerator creates OpenAPI specifications from project models
 type OpenAPIGenerator struct {
-	title       string
-	version     string
-	description string
-	servers     []string
-	license     *License
-	tenantAuth  bool
+	title        string
+	version      string
+	description  string
+	servers      []string
+	license      *License
+	tenantAuth   bool
+	tenantHeader string
 }
 
 // openAPILicense is the emitted info.license object.
@@ -244,13 +261,18 @@ func NewWithConfig(cfg *Config) *OpenAPIGenerator {
 		copied := *cfg.License
 		license = &copied
 	}
+	tenantHeader := strings.TrimSpace(cfg.TenantHeader)
+	if tenantHeader == "" {
+		tenantHeader = defaultTenantHeader
+	}
 	return &OpenAPIGenerator{
-		title:       cfg.Title,
-		version:     cfg.Version,
-		description: cfg.Description,
-		servers:     servers,
-		license:     license,
-		tenantAuth:  !cfg.DisableTenantSecurity,
+		title:        cfg.Title,
+		version:      cfg.Version,
+		description:  cfg.Description,
+		servers:      servers,
+		license:      license,
+		tenantAuth:   !cfg.DisableTenantSecurity,
+		tenantHeader: tenantHeader,
 	}
 }
 
@@ -329,7 +351,7 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	// Tenant security is opt-out (single-tenant services). When on, the scheme must
 	// be declared (security-defined) and referenced at the root.
 	if g.tenantAuth {
-		components["securitySchemes"] = securitySchemes()
+		components["securitySchemes"] = g.securitySchemes()
 	}
 
 	componentsYAML, err := g.marshalYAMLSection("components", components)
@@ -370,8 +392,20 @@ func (g *OpenAPIGenerator) configuredServers() []openAPIServer {
 	return out
 }
 
-// tenantSecurityScheme is the component name for the X-Tenant-ID apiKey scheme.
+// tenantSecurityScheme is the component name for the tenant apiKey scheme.
 const tenantSecurityScheme = "TenantID"
+
+// defaultTenantHeader is the header name used when Config.TenantHeader is
+// unset. go-bricks' default header-based tenant resolver reads this header.
+const defaultTenantHeader = "X-Tenant-ID"
+
+// tenantSchemeDescription is deliberately honest about v0.45 semantics: the
+// header is enforced only for multi-tenant deployments using a header
+// resolver, the failure mode is 400 (not the 401 an apiKey scheme usually
+// implies), and subdomain/path resolvers never read it.
+const tenantSchemeDescription = "Tenant identifier. Enforced only when the service runs with " +
+	"multitenancy enabled and a header-based tenant resolver; a missing or invalid tenant yields " +
+	"HTTP 400. Deployments resolving the tenant from the subdomain or URL path do not read this header."
 
 // openAPIServer is a Server Object.
 type openAPIServer struct {
@@ -381,9 +415,10 @@ type openAPIServer struct {
 
 // securityScheme is a Security Scheme Object (apiKey form).
 type securityScheme struct {
-	Type string `yaml:"type"`
-	In   string `yaml:"in,omitempty"`
-	Name string `yaml:"name,omitempty"`
+	Type        string `yaml:"type"`
+	In          string `yaml:"in,omitempty"`
+	Name        string `yaml:"name,omitempty"`
+	Description string `yaml:"description,omitempty"`
 }
 
 // defaultServers returns the default servers block: a single relative-root entry.
@@ -393,11 +428,12 @@ func defaultServers() []openAPIServer {
 }
 
 // securitySchemes returns the components.securitySchemes map. The framework
-// resolves the tenant from the X-Tenant-ID request header (apiKey-in-header);
-// bearer/oauth schemes can be added here later without restructuring.
-func securitySchemes() map[string]securityScheme {
+// resolves the tenant from a request header (apiKey-in-header, default
+// X-Tenant-ID, overridable via Config.TenantHeader); bearer/oauth schemes can
+// be added here later without restructuring.
+func (g *OpenAPIGenerator) securitySchemes() map[string]securityScheme {
 	return map[string]securityScheme{
-		tenantSecurityScheme: {Type: "apiKey", In: paramTypeHeader, Name: "X-Tenant-ID"},
+		tenantSecurityScheme: {Type: "apiKey", In: paramTypeHeader, Name: g.tenantHeader, Description: tenantSchemeDescription},
 	}
 }
 
@@ -659,11 +695,13 @@ func jsonMediaRef(name string) map[string]*OpenAPIMediaType {
 //     which is what finally references the response component the analyzer
 //     discovered (closing the "orphan component" window).
 //
-// Error responses: 400 and 500 are always present; 422 is added when the request
-// type carries validation tags (the framework returns 422 on validation
-// failure). The error schema is JOSEErrorEnvelope for JOSE routes (pre-trust
-// failures leak nothing beyond {code,message}), RawErrorResponse for raw routes,
-// and ErrorResponse otherwise.
+// Error responses: 400 and 500 are always present. 400 covers binding AND
+// validation failures — v0.45 returns 400 with details.validationErrors for
+// both; 422 only arises from handler-level BusinessLogicError, which is
+// invisible to static analysis, so it is never emitted here. The error schema
+// is JOSEErrorEnvelope for JOSE routes (pre-trust failures leak nothing beyond
+// {code,message}), RawErrorResponse for raw routes, and ErrorResponse
+// otherwise.
 //
 // JOSE 4xx schema selection is driven by EITHER side carrying jose tags. The
 // runtime enforces bidirectional symmetry at registration, but the analyzer runs
@@ -697,11 +735,24 @@ func (g *OpenAPIGenerator) buildResponses(route *models.Route) map[string]*OpenA
 	errorSchema := errorSchemaName(route)
 
 	responses := map[string]*OpenAPIResponse{
-		"400": {Description: "Bad Request", Content: jsonMediaRef(errorSchema)},
+		"400": {Description: "Bad Request — malformed request or failed validation", Content: jsonMediaRef(errorSchema)},
 		"500": {Description: "Internal Server Error", Content: jsonMediaRef(errorSchema)},
 	}
-	if routeHasValidation(route.Request) {
-		responses["422"] = &OpenAPIResponse{Description: "Unprocessable Entity", Content: jsonMediaRef(errorSchema)}
+	// JOSE routes carry the full pre-trust failure catalog: 401 for
+	// decrypt/verify/kid failures (the primary class), 415 for a plaintext
+	// request on a sealed route. Post-trust failures (after inbound verify)
+	// are sealed application/jose envelopes; pre-trust ones cannot be (no
+	// established keys), hence the dual 500 content.
+	if errorSchema == schemaJOSEErrorEnvelope {
+		responses["401"] = &OpenAPIResponse{
+			Description: "Unauthorized — JOSE decrypt/verify failure (" + joseAuthFailureCodes + ")",
+			Content:     jsonMediaRef(errorSchema),
+		}
+		responses["415"] = &OpenAPIResponse{
+			Description: "Unsupported Media Type — plaintext request on a JOSE route (JOSE_PLAINTEXT_REJECTED)",
+			Content:     jsonMediaRef(errorSchema),
+		}
+		responses["500"].Content[mediaJOSE] = &OpenAPIMediaType{Schema: joseTokenSchema()}
 	}
 	// Assign the success entry LAST so a success status that overlaps an error code
 	// (e.g. a handler that returns NewResult(400, ...) as a non-error Result) keeps
@@ -785,21 +836,6 @@ func responsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
 		return &OpenAPIProperty{Type: typeObject}
 	}
 	return &OpenAPIProperty{Ref: refPath(schemaName(response))}
-}
-
-// routeHasValidation reports whether the request type carries any validation
-// constraints, which is what makes a 422 (Unprocessable Entity) reachable.
-func routeHasValidation(request *models.TypeInfo) bool {
-	if request == nil {
-		return false
-	}
-	for i := range request.Fields {
-		f := &request.Fields[i]
-		if f.Required || f.RawValidation != "" {
-			return true
-		}
-	}
-	return false
 }
 
 // getOperationID generates an operation ID for a route
@@ -1004,12 +1040,46 @@ func successResponseSchema() *OpenAPISchema {
 	}
 }
 
+// errorResponseSchema mirrors go-bricks' error envelope:
+// {error:{code,message,details?}, meta:{timestamp,traceId}}. details carries
+// contextual payloads — a 400 validation failure holds
+// validationErrors: [{field,message,value}] — and is emitted only in
+// development environments, so it is documented but not required.
 func errorResponseSchema() *OpenAPISchema {
 	return &OpenAPISchema{
 		Type: typeObject,
 		Properties: map[string]*OpenAPIProperty{
-			propNameError: {Type: typeObject, Description: "Error details with code and message"},
-			propNameMeta:  {Type: typeObject, Description: "Response metadata"},
+			propNameError: {
+				Type:        typeObject,
+				Description: "Error details",
+				Properties: map[string]*OpenAPIProperty{
+					propNameCode:    {Type: typeString, Description: "Machine-readable error code (e.g. BAD_REQUEST, NOT_FOUND, INTERNAL_ERROR, or a custom business code)"},
+					propNameMessage: {Type: typeString, Description: "Human-readable error message"},
+					"details": {
+						Type:        typeObject,
+						Description: "Contextual error payload, emitted in development environments only",
+						Properties: map[string]*OpenAPIProperty{
+							"validationErrors": {
+								Type: typeArray,
+								// Bounded for SAST hygiene (CKV_OPENAPI_21): validators
+								// emit one entry per failed field/rule; 100 is a
+								// generous ceiling for any real request struct.
+								MaxItems:    intPtr(maxValidationErrorItems),
+								Description: "Per-field validation failures (400 validation errors)",
+								Items: &OpenAPIProperty{
+									Type: typeObject,
+									Properties: map[string]*OpenAPIProperty{
+										"field":   {Type: typeString, Description: "Field that failed validation"},
+										"message": {Type: typeString, Description: "Violated validation rule"},
+										"value":   {Description: "Submitted value (any type)"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			propNameMeta: metaEnvelopeSchema(),
 		},
 		Required: []string{propNameError},
 	}
@@ -1022,7 +1092,7 @@ func joseErrorEnvelopeSchema() *OpenAPISchema {
 	return &OpenAPISchema{
 		Type: typeObject,
 		Properties: map[string]*OpenAPIProperty{
-			propNameCode:    {Type: typeString, Description: "Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)"},
+			propNameCode:    {Type: typeString, Description: "Machine-readable JOSE error code (e.g., " + joseAuthFailureCodes + ", JOSE_PLAINTEXT_REJECTED)"},
 			propNameMessage: {Type: typeString, Description: "Constant-time generic message — never reveals which key was tried or which library detected the failure"},
 		},
 		Required: []string{propNameCode, propNameMessage},

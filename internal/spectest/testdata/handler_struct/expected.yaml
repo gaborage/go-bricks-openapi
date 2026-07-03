@@ -40,13 +40,7 @@ paths:
                         type: string
                         description: W3C trace identifier for the request
         "400":
-          description: Bad Request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        "422":
-          description: Unprocessable Entity
+          description: Bad Request — malformed request or failed validation
           content:
             application/json:
               schema:
@@ -91,13 +85,7 @@ paths:
                         type: string
                         description: W3C trace identifier for the request
         "400":
-          description: Bad Request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        "422":
-          description: Unprocessable Entity
+          description: Bad Request — malformed request or failed validation
           content:
             application/json:
               schema:
@@ -124,13 +112,7 @@ paths:
         "204":
           description: No Content
         "400":
-          description: Bad Request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        "422":
-          description: Unprocessable Entity
+          description: Bad Request — malformed request or failed validation
           content:
             application/json:
               schema:
@@ -161,10 +143,43 @@ components:
       properties:
         error:
           type: object
-          description: Error details with code and message
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code (e.g. BAD_REQUEST, NOT_FOUND, INTERNAL_ERROR, or a custom business code)
+            details:
+              type: object
+              properties:
+                validationErrors:
+                  type: array
+                  description: Per-field validation failures (400 validation errors)
+                  items:
+                    type: object
+                    properties:
+                      field:
+                        type: string
+                        description: Field that failed validation
+                      message:
+                        type: string
+                        description: Violated validation rule
+                      value:
+                        description: Submitted value (any type)
+                  maxItems: 100
+              description: Contextual error payload, emitted in development environments only
+            message:
+              type: string
+              description: Human-readable error message
+          description: Error details
         meta:
           type: object
-          description: Response metadata
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+              description: RFC3339 response timestamp
+            traceId:
+              type: string
+              description: W3C trace identifier for the request
       required:
         - error
     User:
@@ -182,5 +197,6 @@ components:
       type: apiKey
       in: header
       name: X-Tenant-ID
+      description: Tenant identifier. Enforced only when the service runs with multitenancy enabled and a header-based tenant resolver; a missing or invalid tenant yields HTTP 400. Deployments resolving the tenant from the subdomain or URL path do not read this header.
 security:
   - TenantID: []

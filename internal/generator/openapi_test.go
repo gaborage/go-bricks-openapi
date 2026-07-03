@@ -1572,11 +1572,6 @@ func TestGenerateWithTypedRequestResponse(t *testing.T) {
 	}
 }
 
-// Helper functions for pointer creation in tests
-func intPtr(i int) *int {
-	return &i
-}
-
 func float64Ptr(f float64) *float64 {
 	return &f
 }
@@ -2406,8 +2401,10 @@ func TestBuildResponsesNonJOSE(t *testing.T) {
 	require.Contains(t, resps, "500")
 	assert.Equal(t, refPath(schemaErrorResponse), resps["500"].Content[mediaJSON].Schema.Ref)
 
-	// No request validation -> no 422.
-	assert.NotContains(t, resps, "422", "route without a validated request must not advertise 422")
+	// No route ever advertises 422: v0.45 returns 400 for both binding and
+	// validation failures; 422 only arises from handler-level BusinessLogicError,
+	// which is invisible to static analysis.
+	assert.NotContains(t, resps, "422", "no route may advertise 422")
 }
 
 func TestBuildResponsesStatusCodes(t *testing.T) {
@@ -2486,17 +2483,31 @@ func TestSuccessPlaintextSchemaFallsBackToSuccessResponse(t *testing.T) {
 	assert.Equal(t, "TokenResponse", got)
 }
 
-func TestBuildResponsesValidationAdds422(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
-	resps := gen.buildResponses(&models.Route{
-		Method: "POST",
-		Request: &models.TypeInfo{Name: "CreateReq", Fields: []models.FieldInfo{
-			{Name: "Email", Required: true},
+// TestNo422AndTypedErrorEnvelope locks the v0.45 error contract: validation
+// failures surface as the framework's 400 (422 only arises from explicit
+// BusinessLogicError, invisible to static analysis), and ErrorResponse models
+// the real envelope {error:{code,message,details}, meta:{timestamp,traceId}}.
+func TestNo422AndTypedErrorEnvelope(t *testing.T) {
+	project := &models.Project{
+		Name: "svc", Version: "1.0.0",
+		Modules: []models.Module{{
+			Name: "users", Package: "users",
+			Routes: []models.Route{{
+				Method: "POST", Path: "/users", HandlerName: "create", Module: "users", Package: "users",
+				Request: &models.TypeInfo{Name: "CreateUser", Package: "users", Fields: []models.FieldInfo{
+					{Name: "Email", Type: "string", JSONName: "email", Required: true, RawValidation: "required,email"},
+				}},
+			}},
 		}},
-		Response: &models.TypeInfo{Name: "User"},
-	})
-	require.Contains(t, resps, "422", "a validated request body must advertise 422")
-	assert.Equal(t, refPath(schemaErrorResponse), resps["422"].Content[mediaJSON].Schema.Ref)
+		Types: map[string]*models.TypeInfo{},
+	}
+	spec, err := New("", "", "").Generate(project)
+	require.NoError(t, err)
+
+	assert.NotContains(t, spec, `"422"`, "no 422: the framework returns 400 on validation failure")
+	assert.Contains(t, spec, "Bad Request", "400 remains the validation-failure response")
+	assert.Contains(t, spec, "validationErrors", "the 400 details contract is documented")
+	assert.Contains(t, spec, "traceId", "meta is typed, not a bare object")
 }
 
 // TestAssignOperationIDs covers module-qualification, explicit WithHandlerName
@@ -2697,6 +2708,28 @@ func TestNewWithConfig(t *testing.T) {
 	})
 }
 
+// TestTenantSchemeHonestyAndHeaderOverride verifies the tenant scheme
+// documents its deployment-dependent enforcement (400 on failure, not 401)
+// and that --tenant-header renames the header.
+func TestTenantSchemeHonestyAndHeaderOverride(t *testing.T) {
+	project := &models.Project{Name: "svc", Version: "1.0.0", Modules: []models.Module{}, Types: map[string]*models.TypeInfo{}}
+
+	spec, err := New("", "", "").Generate(project)
+	require.NoError(t, err)
+	assert.Contains(t, spec, "X-Tenant-ID", "default header name")
+	assert.Contains(t, spec, "multitenancy", "description states enforcement is deployment-dependent")
+	assert.Contains(t, spec, "400", "description states failure mode is 400")
+
+	custom, err := NewWithConfig(&Config{TenantHeader: "X-Org-ID"}).Generate(project)
+	require.NoError(t, err)
+	assert.Contains(t, custom, "X-Org-ID")
+	assert.NotContains(t, custom, "X-Tenant-ID")
+
+	blank, err := NewWithConfig(&Config{TenantHeader: "   "}).Generate(project)
+	require.NoError(t, err)
+	assert.Contains(t, blank, "X-Tenant-ID", "whitespace-only --tenant-header must fall back to the default")
+}
+
 // TestBuildOperationPublicSecurityOverride covers the per-operation security
 // opt-out: a route.Public route emits operation-level `security: []` only when
 // the document carries a root tenant-security requirement to override.
@@ -2753,4 +2786,32 @@ func TestOperationSecurityYAMLMarshal(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(out), "security", "nil pointer must omit the security key")
 	})
+}
+
+// TestJOSEErrorCatalog locks the v0.45 JOSE failure contract: pre-trust
+// failures are application/json minimal envelopes on 400 (malformed), 401
+// (decrypt/signature/kid — the primary auth-failure class), and 415 (plaintext
+// rejected); post-trust failures are sealed application/jose, modeled as an
+// alternate 500 content type.
+func TestJOSEErrorCatalog(t *testing.T) {
+	project := &models.Project{
+		Name: "svc", Version: "1.0.0",
+		Modules: []models.Module{{
+			Name: "vault", Package: "vault",
+			Routes: []models.Route{{
+				Method: "POST", Path: "/seal", HandlerName: "seal", Module: "vault", Package: "vault",
+				Request: &models.TypeInfo{Name: "SealReq", Package: "vault", JOSE: true, Fields: []models.FieldInfo{
+					{Name: "Payload", Type: "string", JSONName: "payload"},
+				}},
+			}},
+		}},
+		Types: map[string]*models.TypeInfo{},
+	}
+	spec, err := New("", "", "").Generate(project)
+	require.NoError(t, err)
+
+	assert.Contains(t, spec, `"401"`, "JOSE decrypt/verify failures are 401")
+	assert.Contains(t, spec, `"415"`, "plaintext on a JOSE route is 415")
+	assert.Contains(t, spec, "JOSE_PLAINTEXT_REJECTED")
+	assert.Contains(t, spec, "application/jose", "post-trust errors are sealed")
 }
