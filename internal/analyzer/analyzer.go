@@ -53,6 +53,12 @@ const (
 	groupMethodName        = "Group"
 	routeRegistrarTypeName = "RouteRegistrar"
 
+	// RouteRegistrar.Add(method, path, handler, middleware...) — the raw route
+	// form. go-bricks v0.47 (#638) made it emit a RouteDescriptor so raw routes
+	// are discoverable alongside typed ones; recognized here as a bare route (no
+	// request/response body).
+	addMethodName = "Add"
+
 	// Go primitive type names used in AST inspection
 	goTypeString = "string"
 
@@ -734,6 +740,10 @@ func (w *routeWalker) walkBody(body *ast.BlockStmt, seed map[string]string) {
 			w.routes = append(w.routes, *route)
 			return true
 		}
+		if route := w.routeFromAddCall(call, prefixes); route != nil {
+			w.routes = append(w.routes, *route)
+			return true
+		}
 		w.maybeRecurseHelper(call, prefixes)
 		return true
 	})
@@ -815,6 +825,69 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes map[string]stri
 	for i := shape.optsIdx(); i < len(call.Args); i++ {
 		w.a.extractRouteMetadata(call.Args[i], route, w.serverAliases)
 	}
+	if w.a.isPublicRoute(call.Pos()) {
+		route.Public = true
+	}
+	return route
+}
+
+// addCallPrefix resolves a <registrar>.Add(...) call to its known group prefix.
+// It returns ok=false (silently) unless the call is `<ident>.Add(...)` and the
+// receiver ident is a known registrar (present in prefixes — the comma-ok
+// membership check is the registrar discriminator: a plain lookup returns "" for
+// both a prefix-less root registrar and an unrelated .Add on a map/slice/other
+// var, so only membership tells them apart). recv is the receiver var name, used
+// for warning text on a recognized-but-malformed registrar route.
+func addCallPrefix(call *ast.CallExpr, prefixes map[string]string) (prefix, recv string, ok bool) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != addMethodName {
+		return "", "", false
+	}
+	ident, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return "", "", false
+	}
+	prefix, ok = prefixes[ident.Name]
+	if !ok {
+		return "", "", false
+	}
+	return prefix, ident.Name, true
+}
+
+// routeFromAddCall builds a bare route from a <registrar>.Add(method, path,
+// handler, middleware...) call, or nil if the call is not a raw route
+// registration on a known registrar. Unlike routeFromCall, Add carries no
+// request/response models (its variadic is ...MiddlewareFunc, not RouteOption),
+// so the emitted route has nil Request/Response — a bare route, matching what
+// the framework records in its RouteDescriptor at runtime.
+func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, prefixes map[string]string) *models.Route {
+	prefix, recv, ok := addCallPrefix(call, prefixes)
+	if !ok {
+		return nil
+	}
+	if len(call.Args) < 3 {
+		return nil
+	}
+
+	m, ok := w.a.staticHTTPMethod(call.Args[0])
+	if !ok || !w.a.isHTTPMethod(m) {
+		w.a.addWarningf("skipping a %s.Add route: its method argument is not a static HTTP method (string literal or http.MethodX constant)", recv)
+		return nil
+	}
+	rawPath, resolved := w.a.extractPathFromArg(call.Args[1])
+	if !resolved {
+		w.a.addWarningf("skipping a %s.Add route: its path argument could not be resolved to a literal string", recv)
+		return nil
+	}
+
+	route := &models.Route{
+		Method: strings.ToUpper(m),
+		Tags:   []string{},
+		Path:   normalizePath(prefix + rawPath),
+		Module: w.moduleName,
+	}
+	route.HandlerName, route.Request, route.Response, route.SuccessStatus =
+		w.a.extractHandlerInfo(call.Args[2], w.astFile, w.filePath, w.structName)
 	if w.a.isPublicRoute(call.Pos()) {
 		route.Public = true
 	}
