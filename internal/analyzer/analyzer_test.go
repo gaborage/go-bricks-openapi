@@ -4680,3 +4680,155 @@ func (h *Handler) get(ctx server.HandlerContext) (server.Result[Item], server.IA
 	routeForPath(t, routes, "GET /alpha")
 	routeForPath(t, routes, "GET /beta")
 }
+
+// rawAddModuleSrc builds a rawadd-style module source whose RegisterRoutes body
+// is the caller-supplied statements, for exercising <registrar>.Add recognition.
+func rawAddModuleSrc(body string) string {
+	return `package rawadd
+import (
+	"net/http"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "rawadd" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+` + body + `
+}
+type sink struct{}
+func (s *sink) Add(method, path string, handler any) {}
+type CreateReq struct {
+	Name string
+}
+type User struct {
+	ID int64
+}
+func (m *Module) ping(ctx server.HandlerContext) error { return nil }
+func (m *Module) typed(req CreateReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
+	return server.NewResult(http.StatusOK, User{}), nil
+}
+`
+}
+
+func rawAddRoutes(t *testing.T, body string) []models.Route {
+	t.Helper()
+	dir := writeAnalyzerProject(t, "module.go", rawAddModuleSrc(body))
+	a := New(dir)
+	project, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	require.Len(t, project.Modules, 1)
+	return project.Modules[0].Routes
+}
+
+// TestRawAddRootRegistrar verifies a root-registrar r.Add(...) raw route is
+// discovered as a bare route (method+path+handler set, no request/response).
+func TestRawAddRootRegistrar(t *testing.T) {
+	routes := rawAddRoutes(t, `r.Add(http.MethodGet, "/ping", m.ping)`)
+	require.Len(t, routes, 1)
+	route := routes[0]
+	assert.Equal(t, "GET", route.Method)
+	assert.Equal(t, "/ping", route.Path)
+	assert.Equal(t, "ping", route.HandlerName)
+	assert.Nil(t, route.Request)
+	assert.Nil(t, route.Response)
+}
+
+// TestRawAddGroupedRegistrar verifies a grouped registrar's .Add route inherits
+// the group's accumulated path prefix.
+func TestRawAddGroupedRegistrar(t *testing.T) {
+	routes := rawAddRoutes(t, `api := r.Group("/v1")
+	api.Add(http.MethodPost, "/things", m.ping)`)
+	require.Len(t, routes, 1)
+	route := routes[0]
+	assert.Equal(t, "POST", route.Method)
+	assert.Equal(t, "/v1/things", route.Path)
+	assert.Equal(t, "ping", route.HandlerName)
+}
+
+// TestRawAddNonRegistrarIgnored verifies .Add on a non-registrar receiver is
+// silently dropped (the comma-ok registrar gate), with no route and no warning.
+func TestRawAddNonRegistrarIgnored(t *testing.T) {
+	dir := writeAnalyzerProject(t, "module.go", rawAddModuleSrc(
+		`notReg := &sink{}
+	notReg.Add(http.MethodGet, "/nope", m.ping)`))
+	a := New(dir)
+	project, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	require.Len(t, project.Modules, 1)
+	assert.Empty(t, project.Modules[0].Routes, "a .Add on a non-registrar must not be discovered")
+	for _, w := range a.Warnings(t.Context()) {
+		assert.NotContains(t, w, ".Add", "a non-registrar .Add must be dropped silently")
+	}
+}
+
+// TestRawAddNonStaticMethodSkipped verifies an .Add whose method arg is not a
+// static HTTP method is skipped with a warning.
+func TestRawAddNonStaticMethodSkipped(t *testing.T) {
+	dir := writeAnalyzerProject(t, "module.go", rawAddModuleSrc(
+		`verb := "GET"
+	r.Add(verb, "/ping", m.ping)`))
+	a := New(dir)
+	project, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	require.Len(t, project.Modules, 1)
+	assert.Empty(t, project.Modules[0].Routes)
+	require.True(t, containsRawAddSubstr(a.Warnings(t.Context()), "r.Add route: its method argument is not a static HTTP method"),
+		"expected a non-static-method warning, got: %v", a.Warnings(t.Context()))
+}
+
+// TestRawAddUnresolvedPathSkipped verifies an .Add whose path arg cannot be
+// resolved to a literal string is skipped with a warning.
+func TestRawAddUnresolvedPathSkipped(t *testing.T) {
+	dir := writeAnalyzerProject(t, "module.go", rawAddModuleSrc(
+		`path := somePath()
+	r.Add(http.MethodGet, path, m.ping)`))
+	a := New(dir)
+	project, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	require.Len(t, project.Modules, 1)
+	assert.Empty(t, project.Modules[0].Routes)
+	require.True(t, containsRawAddSubstr(a.Warnings(t.Context()), "r.Add route: its path argument could not be resolved"),
+		"expected an unresolved-path warning, got: %v", a.Warnings(t.Context()))
+}
+
+// containsRawAddSubstr reports whether any string in ss contains sub.
+func containsRawAddSubstr(ss []string, sub string) bool {
+	for _, s := range ss {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRawAddStaysSchemaFree verifies a raw Add route carries no request/response
+// models even when a typed handler is referenced: raw routes are schema-free by
+// contract (the framework records them with zero-valued type fields), so only the
+// handler name is resolved.
+func TestRawAddStaysSchemaFree(t *testing.T) {
+	routes := rawAddRoutes(t, `r.Add(http.MethodPost, "/things", m.typed)`)
+	require.Len(t, routes, 1)
+	route := routes[0]
+	assert.Equal(t, "POST", route.Method)
+	assert.Equal(t, "/things", route.Path)
+	assert.Equal(t, "typed", route.HandlerName)
+	assert.Nil(t, route.Request, "a raw Add route must not carry a request schema")
+	assert.Nil(t, route.Response, "a raw Add route must not carry a response schema")
+}
+
+// TestRawAddTooFewArgsWarns verifies a registrar .Add call with fewer than the
+// required (method, path, handler) arguments is skipped with a warning, matching
+// the other rejection paths rather than dropping silently.
+func TestRawAddTooFewArgsWarns(t *testing.T) {
+	dir := writeAnalyzerProject(t, "module.go", rawAddModuleSrc(`r.Add(http.MethodGet)`))
+	a := New(dir)
+	project, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	require.Len(t, project.Modules, 1)
+	assert.Empty(t, project.Modules[0].Routes)
+	require.True(t, containsRawAddSubstr(a.Warnings(t.Context()), "r.Add route: expected at least 3 arguments"),
+		"expected a too-few-arguments warning, got: %v", a.Warnings(t.Context()))
+}
