@@ -866,6 +866,7 @@ func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, prefixes map[string]s
 		return nil
 	}
 	if len(call.Args) < 3 {
+		w.a.addWarningf("skipping a %s.Add route: expected at least 3 arguments (method, path, handler), got %d", recv, len(call.Args))
 		return nil
 	}
 
@@ -886,8 +887,12 @@ func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, prefixes map[string]s
 		Path:   normalizePath(prefix + rawPath),
 		Module: w.moduleName,
 	}
-	route.HandlerName, route.Request, route.Response, route.SuccessStatus =
-		w.a.extractHandlerInfo(call.Args[2], w.astFile, w.filePath, w.structName)
+	// Raw Add routes are schema-free: the framework records them with zero-valued
+	// type fields (no request/response models), so resolve only the handler name
+	// — never the request/response schema — even if a typed handler is referenced.
+	if name, _, _, ok := w.a.resolveHandler(call.Args[2], w.structName, w.astFile, w.filePath); ok {
+		route.HandlerName = name
+	}
 	if w.a.isPublicRoute(call.Pos()) {
 		route.Public = true
 	}

@@ -4700,7 +4700,16 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 type sink struct{}
 func (s *sink) Add(method, path string, handler any) {}
+type CreateReq struct {
+	Name string
+}
+type User struct {
+	ID int64
+}
 func (m *Module) ping(ctx server.HandlerContext) error { return nil }
+func (m *Module) typed(req CreateReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
+	return server.NewResult(http.StatusOK, User{}), nil
+}
 `
 }
 
@@ -4793,4 +4802,33 @@ func containsRawAddSubstr(ss []string, sub string) bool {
 		}
 	}
 	return false
+}
+
+// TestRawAddStaysSchemaFree verifies a raw Add route carries no request/response
+// models even when a typed handler is referenced: raw routes are schema-free by
+// contract (the framework records them with zero-valued type fields), so only the
+// handler name is resolved.
+func TestRawAddStaysSchemaFree(t *testing.T) {
+	routes := rawAddRoutes(t, `r.Add(http.MethodPost, "/things", m.typed)`)
+	require.Len(t, routes, 1)
+	route := routes[0]
+	assert.Equal(t, "POST", route.Method)
+	assert.Equal(t, "/things", route.Path)
+	assert.Equal(t, "typed", route.HandlerName)
+	assert.Nil(t, route.Request, "a raw Add route must not carry a request schema")
+	assert.Nil(t, route.Response, "a raw Add route must not carry a response schema")
+}
+
+// TestRawAddTooFewArgsWarns verifies a registrar .Add call with fewer than the
+// required (method, path, handler) arguments is skipped with a warning, matching
+// the other rejection paths rather than dropping silently.
+func TestRawAddTooFewArgsWarns(t *testing.T) {
+	dir := writeAnalyzerProject(t, "module.go", rawAddModuleSrc(`r.Add(http.MethodGet)`))
+	a := New(dir)
+	project, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	require.Len(t, project.Modules, 1)
+	assert.Empty(t, project.Modules[0].Routes)
+	require.True(t, containsRawAddSubstr(a.Warnings(t.Context()), "r.Add route: expected at least 3 arguments"),
+		"expected a too-few-arguments warning, got: %v", a.Warnings(t.Context()))
 }
