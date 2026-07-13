@@ -95,13 +95,13 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 ```
 
 The generator emits `security: []` for that operation. go-bricks itself has
-no per-route tenant opt-out API as of v0.45.0, so this directive is the
+no per-route tenant opt-out API as of v0.49.0, so this directive is the
 tool's own annotation — it has no runtime effect.
 
 ## Requirements
 
 - **Go 1.25+** to build/run the tool.
-- Targets **GoBricks v0.13.0+** projects (verified through **v0.45.0**; the
+- Targets **GoBricks v0.13.0+** projects (verified through **v0.49.0**; the
   `doctor` command enforces the floor).
 
 ## Known limitations
