@@ -115,6 +115,13 @@ type ProjectAnalyzer struct {
 
 // New creates a new project analyzer
 func New(projectRoot string) *ProjectAnalyzer {
+	// Resolve to an absolute path so filepath.Walk sees the root by its real
+	// directory name. A relative root of "." (the CLI default and the
+	// README's documented invocation) otherwise reaches shouldSkipDir as the
+	// name ".", which skips the walk root and discovers zero modules.
+	if abs, err := filepath.Abs(projectRoot); err == nil {
+		projectRoot = abs
+	}
 	return &ProjectAnalyzer{
 		projectRoot:      projectRoot,
 		fileSet:          token.NewFileSet(),

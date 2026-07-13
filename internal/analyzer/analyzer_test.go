@@ -186,8 +186,15 @@ func TestNew(t *testing.T) {
 		t.Fatal("New() returned nil")
 	}
 
-	if analyzer.projectRoot != testPath {
-		t.Errorf("Expected project root '%s', got '%s'", testPath, analyzer.projectRoot)
+	// New now normalizes the project root to an absolute path (so filepath.Walk
+	// sees the root by its real directory name, not "."), which is what fixes the
+	// `--project .` empty-spec bug. Assert on that absolute form.
+	absPath, err := filepath.Abs(testPath)
+	if err != nil {
+		t.Fatalf("filepath.Abs(%q): %v", testPath, err)
+	}
+	if analyzer.projectRoot != absPath {
+		t.Errorf("Expected absolute project root '%s', got '%s'", absPath, analyzer.projectRoot)
 	}
 
 	if analyzer.fileSet == nil {
@@ -4831,4 +4838,56 @@ func TestRawAddTooFewArgsWarns(t *testing.T) {
 	assert.Empty(t, project.Modules[0].Routes)
 	require.True(t, containsRawAddSubstr(a.Warnings(t.Context()), "r.Add route: expected at least 3 arguments"),
 		"expected a too-few-arguments warning, got: %v", a.Warnings(t.Context()))
+}
+
+// TestAnalyzeProjectRelativeDotRoot verifies that New(".") and New("./") — the
+// CLI default and the README's documented invocation — discover modules
+// instead of silently walking zero files. filepath.Walk's first callback for a
+// relative "." root has info.Name() == ".", which shouldSkipDir would treat as
+// a dotfile and abort the walk via filepath.SkipDir before New absolutized the
+// root; this locks in the fix.
+func TestAnalyzeProjectRelativeDotRoot(t *testing.T) {
+	const modSrc = `package catalog
+
+import (
+	"net/http"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "catalog" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+type Product struct {
+	ID int64 ` + "`json:\"id\"`" + `
+}
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/products", m.list, server.WithTags("catalog"))
+}
+
+func (m *Module) list(ctx server.HandlerContext) (server.Result[Product], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Product{}), nil
+}
+`
+	const goMod = "module github.com/example/catalog\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.45.0\n"
+
+	for _, root := range []string{".", "./"} {
+		t.Run("root="+root, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "catalog.go"), []byte(modSrc), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o600))
+
+			t.Chdir(dir)
+
+			project, err := New(root).AnalyzeProject()
+			require.NoError(t, err)
+			require.Len(t, project.Modules, 1, "relative dot root %q must discover the module", root)
+			require.Len(t, project.Modules[0].Routes, 1)
+		})
+	}
 }
