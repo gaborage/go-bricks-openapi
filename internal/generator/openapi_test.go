@@ -951,6 +951,26 @@ func TestTypeInfoToSchema(t *testing.T) {
 			expectedProps: 1,
 			expectedReq:   []string{},
 		},
+		{
+			// Path/query/header params must be excluded from the request-body
+			// component schema — they are emitted as OpenAPI `parameters` by
+			// extractParameters instead. See plan 002.
+			name: "mixed param and body fields",
+			typeInfo: &models.TypeInfo{
+				Name:    "UpdateUserReq",
+				Package: "users",
+				Fields: []models.FieldInfo{
+					{Name: "ID", Type: "string", ParamType: "path", ParamName: "id", Required: true},
+					{Name: "Token", Type: "string", ParamType: "header", ParamName: "X-Api-Token"},
+					{Name: "Name", Type: "string", JSONName: "name", Required: true},
+					{Name: "Email", Type: "string", JSONName: "email", Required: true},
+				},
+			},
+			expectNil:     false,
+			expectedType:  typeObject,
+			expectedProps: 2,
+			expectedReq:   []string{"email", "name"}, // Sorted; no param fields
+		},
 	}
 
 	for _, tt := range tests {
