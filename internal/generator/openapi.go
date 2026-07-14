@@ -1159,6 +1159,15 @@ func (g *OpenAPIGenerator) generateSchemasFromTypes(types map[string]*models.Typ
 // Scanning request types here would instead force ORPHAN components for every
 // params-only request type by flipping the guard in generateSchemasFromTypes
 // (redocly's no-unused-components). Do not add them.
+//
+// The other half of that invariant lives in generateSchemasFromTypes: a type with
+// non-empty Fields but ZERO serializable properties (e.g. every field json:"-")
+// still gets a non-nil schema from typeInfoToSchema and MUST keep being emitted
+// unconditionally — a requestBody $ref points at it (extractParameters keys on
+// param tags, not json tags, so such fields are body fields), and that type is
+// not in this set. Do not "optimize" the `schema == nil` check there into a
+// zero-properties check: it would drop the component and dangle that $ref. The
+// json_excluded_request golden fixture locks this.
 func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeInfo) map[string]bool {
 	out := make(map[string]bool)
 	for i := range routes {
@@ -1185,8 +1194,16 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 // addFieldSchemaRefs marks every component named by a field or map-value $ref
 // across all registered types, so a type reachable only from another type's
 // field (rather than from a route) is still emitted.
+//
+// Nil entries are skipped. This guard is load-bearing: referencedSchemaNames is
+// evaluated as an ARGUMENT to generateSchemasFromTypes, so this scan runs first
+// and a nil entry would panic here before that function's own nil guard is ever
+// reached.
 func addFieldSchemaRefs(out map[string]bool, types map[string]*models.TypeInfo) {
 	for _, ti := range types {
+		if ti == nil {
+			continue
+		}
 		for j := range ti.Fields {
 			if n := ti.Fields[j].RefName; n != "" {
 				out[n] = true
