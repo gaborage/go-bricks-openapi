@@ -1104,7 +1104,19 @@ func (s routeCallShape) optsIdx() int    { return s.pathIdx + 2 }
 // literal or http.MethodX constant is warned about and skipped (the route
 // cannot be documented without a static method).
 func (a *ProjectAnalyzer) validateServerCall(callExpr *ast.CallExpr, serverAliases map[string]struct{}) (routeCallShape, bool) {
-	selExpr, ok := callExpr.Fun.(*ast.SelectorExpr)
+	// An explicitly-instantiated generic call — server.RegisterHandler[Req, Resp](...)
+	// — has Fun of *ast.IndexExpr (one type arg) or *ast.IndexListExpr (two+),
+	// wrapping the server.RegisterHandler selector. Unwrap to the selector so the
+	// route is recognized; the call's ARGUMENTS are identical to the inferred form.
+	fun := callExpr.Fun
+	switch idx := fun.(type) {
+	case *ast.IndexExpr:
+		fun = idx.X
+	case *ast.IndexListExpr:
+		fun = idx.X
+	}
+
+	selExpr, ok := fun.(*ast.SelectorExpr)
 	if !ok {
 		return routeCallShape{}, false
 	}
