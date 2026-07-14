@@ -1163,21 +1163,29 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 	out := make(map[string]bool)
 	for i := range routes {
 		r := &routes[i]
-		// Typed, non-JOSE responses are emitted as data.$ref (or a raw $ref).
-		if r.Response != nil && r.Response.Name != "" && !r.Response.JOSE {
+		// Every named response is referenced, JOSE or not. A non-JOSE response is
+		// emitted as a real data.$ref (or a raw $ref). A JOSE response's wire
+		// schema is a string token rather than a $ref, but joseDescription names
+		// the plaintext component in prose ("see #/components/schemas/<Name>"), so
+		// the component must exist for that cross-reference to resolve either way.
+		if r.Response != nil && r.Response.Name != "" {
 			out[schemaName(r.Response)] = true
 		}
-		// A JOSE route's wire schema is a string token, not a $ref — but
-		// joseDescription names the plaintext component in prose
-		// ("see #/components/schemas/<Name>"), so the component must exist for
-		// that cross-reference to resolve. Both directions carry a description.
-		if r.Response != nil && r.Response.JOSE && r.Response.Name != "" {
-			out[schemaName(r.Response)] = true
-		}
+		// Requests, by contrast, are referenced ONLY when JOSE — for the same
+		// joseDescription prose reason. See the note above on why non-JOSE request
+		// types must not be added here.
 		if r.Request != nil && r.Request.JOSE && r.Request.Name != "" {
 			out[schemaName(r.Request)] = true
 		}
 	}
+	addFieldSchemaRefs(out, types)
+	return out
+}
+
+// addFieldSchemaRefs marks every component named by a field or map-value $ref
+// across all registered types, so a type reachable only from another type's
+// field (rather than from a route) is still emitted.
+func addFieldSchemaRefs(out map[string]bool, types map[string]*models.TypeInfo) {
 	for _, ti := range types {
 		for j := range ti.Fields {
 			if n := ti.Fields[j].RefName; n != "" {
@@ -1188,7 +1196,6 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 			}
 		}
 	}
-	return out
 }
 
 // isParamsOnlyType reports whether a type's every field is a path/query/header
