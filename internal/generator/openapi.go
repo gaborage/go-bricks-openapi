@@ -1146,10 +1146,19 @@ func (g *OpenAPIGenerator) generateSchemasFromTypes(types map[string]*models.Typ
 	return schemas
 }
 
-// referencedSchemaNames collects every component name reachable via a real $ref:
-// typed (non-JOSE) response payloads, and field/map-value refs across all types.
-// Used so a params-only type that is also referenced is not skipped (which would
-// leave a dangling $ref).
+// referencedSchemaNames collects every component name a document points at:
+// typed (non-JOSE) response payloads, field/map-value refs across all types, and
+// the plaintext types of JOSE routes. Used so a type that is referenced is not
+// skipped (which would leave the reference pointing at nothing).
+//
+// Non-JOSE REQUEST types are deliberately NOT scanned, and that is safe: a
+// request $ref is emitted only by buildRequestBody's non-JOSE jsonMediaRef
+// branch, which is reachable only when len(bodyFields) > 0, which implies
+// len(Fields) > 0, which implies typeInfoToSchema returns non-nil — and a
+// non-nil schema is emitted unconditionally. So a request $ref can never dangle.
+// Scanning request types here would instead force ORPHAN components for every
+// params-only request type by flipping the guard in generateSchemasFromTypes
+// (redocly's no-unused-components). Do not add them.
 func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeInfo) map[string]bool {
 	out := make(map[string]bool)
 	for i := range routes {
@@ -1157,6 +1166,16 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 		// Typed, non-JOSE responses are emitted as data.$ref (or a raw $ref).
 		if r.Response != nil && r.Response.Name != "" && !r.Response.JOSE {
 			out[schemaName(r.Response)] = true
+		}
+		// A JOSE route's wire schema is a string token, not a $ref — but
+		// joseDescription names the plaintext component in prose
+		// ("see #/components/schemas/<Name>"), so the component must exist for
+		// that cross-reference to resolve. Both directions carry a description.
+		if r.Response != nil && r.Response.JOSE && r.Response.Name != "" {
+			out[schemaName(r.Response)] = true
+		}
+		if r.Request != nil && r.Request.JOSE && r.Request.Name != "" {
+			out[schemaName(r.Request)] = true
 		}
 	}
 	for _, ti := range types {

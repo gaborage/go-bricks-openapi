@@ -853,6 +853,56 @@ func TestGenerateSchemasFromTypesPropertyLessType(t *testing.T) {
 		_, exists := schemas["X"]
 		assert.False(t, exists, "expected no component for a nil type entry")
 	})
+
+	// A JOSE plaintext type with only the sentinel field has no serializable
+	// properties, but joseDescription names its component in prose. It is marked
+	// referenced by referencedSchemaNames, so it must be emitted as an empty
+	// object rather than dropped (which would leave a dead cross-reference).
+	t.Run("referenced property-less JOSE type emits empty object schema", func(t *testing.T) {
+		joseAck := &models.TypeInfo{Name: "AttestAck", Package: "attest", JOSE: true}
+		types := map[string]*models.TypeInfo{"AttestAck": joseAck}
+		referenced := map[string]bool{"AttestAck": true}
+
+		schemas := gen.generateSchemasFromTypes(types, referenced)
+
+		schema, exists := schemas["AttestAck"]
+		assert.True(t, exists, "expected a property-less JOSE type to be emitted when referenced")
+		if exists {
+			assert.Equal(t, typeObject, schema.Type)
+			assert.Empty(t, schema.Properties)
+		}
+	})
+}
+
+// TestReferencedSchemaNamesJOSE pins which route types referencedSchemaNames
+// treats as referenced. JOSE plaintext types (request AND response) are named in
+// prose by joseDescription, so their components must exist. Non-JOSE REQUEST
+// types are deliberately excluded: a request $ref cannot dangle (it is only
+// emitted when the type has body fields, which guarantees a component), and
+// including them would force orphan components for params-only request types.
+func TestReferencedSchemaNamesJOSE(t *testing.T) {
+	joseReq := &models.TypeInfo{Name: "AttestRequest", Package: "attest", JOSE: true}
+	joseResp := &models.TypeInfo{Name: "AttestAck", Package: "attest", JOSE: true}
+	plainReq := &models.TypeInfo{
+		Name: "CreateUserReq", Package: "users",
+		Fields: []models.FieldInfo{{Name: "Name", Type: "string", JSONName: "name"}},
+	}
+	plainResp := &models.TypeInfo{
+		Name: "User", Package: "users",
+		Fields: []models.FieldInfo{{Name: "ID", Type: "int64", JSONName: "id"}},
+	}
+
+	routes := []models.Route{
+		{Method: "POST", Path: "/v1/attestations", Request: joseReq, Response: joseResp},
+		{Method: "POST", Path: "/users", Request: plainReq, Response: plainResp},
+	}
+
+	got := referencedSchemaNames(routes, map[string]*models.TypeInfo{})
+
+	assert.True(t, got["AttestRequest"], "JOSE request type must be referenced (named in joseDescription prose)")
+	assert.True(t, got["AttestAck"], "JOSE response type must be referenced (named in joseDescription prose)")
+	assert.True(t, got["User"], "non-JOSE response type must be referenced (emitted as data.$ref)")
+	assert.False(t, got["CreateUserReq"], "non-JOSE request type must NOT be referenced (would force orphan params-only components)")
 }
 
 func validateSuccessResponseSchema(t *testing.T, schemas map[string]*OpenAPISchema) {
