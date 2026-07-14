@@ -1128,9 +1128,20 @@ func (g *OpenAPIGenerator) generateSchemasFromTypes(types map[string]*models.Typ
 		if isParamsOnlyType(ti) && !referenced[schemaName(ti)] {
 			continue
 		}
-		if schema := g.typeInfoToSchema(ti); schema != nil {
-			schemas[schemaName(ti)] = schema
+		schema := g.typeInfoToSchema(ti)
+		if schema == nil {
+			// A nil entry, or a registered type with no serializable properties
+			// (empty struct, all-unexported, or all json:"-"). If something
+			// $refs the latter (a response payload or a field ref), emit an
+			// empty object so the reference resolves; otherwise skip it (no
+			// orphan component). schemaName has no nil guard, so nil is
+			// screened out before it is reached.
+			if ti == nil || !referenced[schemaName(ti)] {
+				continue
+			}
+			schema = &OpenAPISchema{Type: typeObject}
 		}
+		schemas[schemaName(ti)] = schema
 	}
 	return schemas
 }

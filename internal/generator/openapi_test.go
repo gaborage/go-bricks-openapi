@@ -802,6 +802,59 @@ func validateMinimalErrorEnvelope(t *testing.T, schemas map[string]*OpenAPISchem
 	}
 }
 
+// TestGenerateSchemasFromTypesPropertyLessType covers a registered type with no
+// serializable properties (e.g. an empty ack struct). typeInfoToSchema returns
+// nil for it; generateSchemasFromTypes must still emit an empty-object
+// component when something $refs it (so the $ref resolves), and must skip it
+// when nothing references it (so no orphan component is emitted). A nil map
+// entry hits the same branch and must be skipped, not dereferenced.
+func TestGenerateSchemasFromTypesPropertyLessType(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	deleteAck := &models.TypeInfo{Name: "DeleteAck", Package: "items"}
+
+	t.Run("referenced empty type emits empty object schema", func(t *testing.T) {
+		types := map[string]*models.TypeInfo{"DeleteAck": deleteAck}
+		referenced := map[string]bool{"DeleteAck": true}
+
+		schemas := gen.generateSchemasFromTypes(types, referenced)
+
+		schema, exists := schemas["DeleteAck"]
+		assert.True(t, exists, "expected DeleteAck to be emitted when referenced")
+		if exists {
+			assert.Equal(t, typeObject, schema.Type)
+			assert.Empty(t, schema.Properties)
+		}
+	})
+
+	t.Run("unreferenced empty type is skipped", func(t *testing.T) {
+		types := map[string]*models.TypeInfo{"DeleteAck": deleteAck}
+		referenced := map[string]bool{}
+
+		schemas := gen.generateSchemasFromTypes(types, referenced)
+
+		_, exists := schemas["DeleteAck"]
+		assert.False(t, exists, "expected unreferenced DeleteAck to be skipped (no orphan component)")
+	})
+
+	// A nil map entry reaches the same nil-schema branch (typeInfoToSchema and
+	// isParamsOnlyType both nil-guard and fall through to it). It must be
+	// skipped rather than dereferenced by schemaName, which has no nil guard.
+	t.Run("nil type entry is skipped without panicking", func(t *testing.T) {
+		types := map[string]*models.TypeInfo{"X": nil}
+		referenced := map[string]bool{}
+
+		var schemas map[string]*OpenAPISchema
+		assert.NotPanics(t, func() {
+			schemas = gen.generateSchemasFromTypes(types, referenced)
+		})
+
+		assert.Empty(t, schemas, "expected a nil type entry to be skipped")
+		_, exists := schemas["X"]
+		assert.False(t, exists, "expected no component for a nil type entry")
+	})
+}
+
 func validateSuccessResponseSchema(t *testing.T, schemas map[string]*OpenAPISchema) {
 	t.Helper()
 	successSchema, exists := schemas["SuccessResponse"]
