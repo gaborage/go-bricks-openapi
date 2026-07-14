@@ -802,6 +802,152 @@ func validateMinimalErrorEnvelope(t *testing.T, schemas map[string]*OpenAPISchem
 	}
 }
 
+// TestGenerateSchemasFromTypesPropertyLessType covers a registered type with no
+// serializable properties (e.g. an empty ack struct). typeInfoToSchema returns
+// nil for it; generateSchemasFromTypes must still emit an empty-object
+// component when something $refs it (so the $ref resolves), and must skip it
+// when nothing references it (so no orphan component is emitted). A nil map
+// entry hits the same branch and must be skipped, not dereferenced.
+func TestGenerateSchemasFromTypesPropertyLessType(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	deleteAck := &models.TypeInfo{Name: "DeleteAck", Package: "items"}
+
+	t.Run("referenced empty type emits empty object schema", func(t *testing.T) {
+		types := map[string]*models.TypeInfo{"DeleteAck": deleteAck}
+		referenced := map[string]bool{"DeleteAck": true}
+
+		schemas := gen.generateSchemasFromTypes(types, referenced)
+
+		schema, exists := schemas["DeleteAck"]
+		assert.True(t, exists, "expected DeleteAck to be emitted when referenced")
+		if exists {
+			assert.Equal(t, typeObject, schema.Type)
+			assert.Empty(t, schema.Properties)
+		}
+	})
+
+	t.Run("unreferenced empty type is skipped", func(t *testing.T) {
+		types := map[string]*models.TypeInfo{"DeleteAck": deleteAck}
+		referenced := map[string]bool{}
+
+		schemas := gen.generateSchemasFromTypes(types, referenced)
+
+		_, exists := schemas["DeleteAck"]
+		assert.False(t, exists, "expected unreferenced DeleteAck to be skipped (no orphan component)")
+	})
+
+	// A nil map entry reaches the same nil-schema branch (typeInfoToSchema and
+	// isParamsOnlyType both nil-guard and fall through to it). It must be
+	// skipped rather than dereferenced by schemaName, which has no nil guard.
+	t.Run("nil type entry is skipped without panicking", func(t *testing.T) {
+		types := map[string]*models.TypeInfo{"X": nil}
+		referenced := map[string]bool{}
+
+		var schemas map[string]*OpenAPISchema
+		assert.NotPanics(t, func() {
+			schemas = gen.generateSchemasFromTypes(types, referenced)
+		})
+
+		assert.Empty(t, schemas, "expected a nil type entry to be skipped")
+		_, exists := schemas["X"]
+		assert.False(t, exists, "expected no component for a nil type entry")
+	})
+
+	// Same as above but with the name REFERENCED, so the `ti == nil ||` guard is
+	// what short-circuits rather than the `!referenced[...]` lookup. Without the
+	// nil check first, this would sail past the referenced lookup and panic on
+	// the trailing schemas[schemaName(ti)] assignment.
+	t.Run("referenced nil type entry is skipped without panicking", func(t *testing.T) {
+		types := map[string]*models.TypeInfo{"X": nil}
+		referenced := map[string]bool{"X": true}
+
+		var schemas map[string]*OpenAPISchema
+		assert.NotPanics(t, func() {
+			schemas = gen.generateSchemasFromTypes(types, referenced)
+		})
+
+		assert.Empty(t, schemas, "expected a referenced nil type entry to be skipped")
+		_, exists := schemas["X"]
+		assert.False(t, exists, "expected no component for a referenced nil type entry")
+	})
+
+	// A JOSE plaintext type with only the sentinel field has no serializable
+	// properties, but joseDescription names its component in prose. It is marked
+	// referenced by referencedSchemaNames, so it must be emitted as an empty
+	// object rather than dropped (which would leave a dead cross-reference).
+	t.Run("referenced property-less JOSE type emits empty object schema", func(t *testing.T) {
+		joseAck := &models.TypeInfo{Name: "AttestAck", Package: "attest", JOSE: true}
+		types := map[string]*models.TypeInfo{"AttestAck": joseAck}
+		referenced := map[string]bool{"AttestAck": true}
+
+		schemas := gen.generateSchemasFromTypes(types, referenced)
+
+		schema, exists := schemas["AttestAck"]
+		assert.True(t, exists, "expected a property-less JOSE type to be emitted when referenced")
+		if exists {
+			assert.Equal(t, typeObject, schema.Type)
+			assert.Empty(t, schema.Properties)
+		}
+	})
+}
+
+// TestReferencedSchemaNamesJOSE pins which route types referencedSchemaNames
+// treats as referenced. JOSE plaintext types (request AND response) are named in
+// prose by joseDescription, so their components must exist. Non-JOSE REQUEST
+// types are deliberately excluded: a request $ref cannot dangle (it is only
+// emitted when the type has body fields, which guarantees a component), and
+// including them would force orphan components for params-only request types.
+func TestReferencedSchemaNamesJOSE(t *testing.T) {
+	joseReq := &models.TypeInfo{Name: "AttestRequest", Package: "attest", JOSE: true}
+	joseResp := &models.TypeInfo{Name: "AttestAck", Package: "attest", JOSE: true}
+	plainReq := &models.TypeInfo{
+		Name: "CreateUserReq", Package: "users",
+		Fields: []models.FieldInfo{{Name: "Name", Type: "string", JSONName: "name"}},
+	}
+	plainResp := &models.TypeInfo{
+		Name: "User", Package: "users",
+		Fields: []models.FieldInfo{{Name: "ID", Type: "int64", JSONName: "id"}},
+	}
+
+	routes := []models.Route{
+		{Method: "POST", Path: "/v1/attestations", Request: joseReq, Response: joseResp},
+		{Method: "POST", Path: "/users", Request: plainReq, Response: plainResp},
+	}
+
+	got := referencedSchemaNames(routes, map[string]*models.TypeInfo{})
+
+	assert.True(t, got["AttestRequest"], "JOSE request type must be referenced (named in joseDescription prose)")
+	assert.True(t, got["AttestAck"], "JOSE response type must be referenced (named in joseDescription prose)")
+	assert.True(t, got["User"], "non-JOSE response type must be referenced (emitted as data.$ref)")
+	assert.False(t, got["CreateUserReq"], "non-JOSE request type must NOT be referenced (would force orphan params-only components)")
+}
+
+// TestReferencedSchemaNamesNilTypeEntry pins that a nil entry in the types map
+// does not panic the field/map-ref scan. This runs BEFORE generateSchemasFromTypes
+// in the real pipeline (referencedSchemaNames is evaluated as its argument), so
+// the nil guard in generateSchemasFromTypes cannot protect this path — the guard
+// in addFieldSchemaRefs is the only thing standing between a nil entry and a
+// panic during a real Generate call.
+func TestReferencedSchemaNamesNilTypeEntry(t *testing.T) {
+	withRef := &models.TypeInfo{
+		Name: "Order", Package: "orders",
+		Fields: []models.FieldInfo{{Name: "Customer", Type: "Customer", RefName: "Customer"}},
+	}
+	types := map[string]*models.TypeInfo{
+		"X":     nil,
+		"Order": withRef,
+	}
+
+	var got map[string]bool
+	assert.NotPanics(t, func() {
+		got = referencedSchemaNames(nil, types)
+	})
+
+	assert.True(t, got["Customer"], "a field $ref alongside a nil entry must still be collected")
+	assert.False(t, got["X"], "a nil entry must not be marked referenced")
+}
+
 func validateSuccessResponseSchema(t *testing.T, schemas map[string]*OpenAPISchema) {
 	t.Helper()
 	successSchema, exists := schemas["SuccessResponse"]

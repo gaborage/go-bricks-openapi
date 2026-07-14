@@ -1128,27 +1128,82 @@ func (g *OpenAPIGenerator) generateSchemasFromTypes(types map[string]*models.Typ
 		if isParamsOnlyType(ti) && !referenced[schemaName(ti)] {
 			continue
 		}
-		if schema := g.typeInfoToSchema(ti); schema != nil {
-			schemas[schemaName(ti)] = schema
+		schema := g.typeInfoToSchema(ti)
+		if schema == nil {
+			// A nil entry, or a registered type with no serializable properties
+			// (empty struct, all-unexported, or all json:"-"). If something
+			// $refs the latter (a response payload or a field ref), emit an
+			// empty object so the reference resolves; otherwise skip it (no
+			// orphan component). schemaName has no nil guard, so nil is
+			// screened out before it is reached.
+			if ti == nil || !referenced[schemaName(ti)] {
+				continue
+			}
+			schema = &OpenAPISchema{Type: typeObject}
 		}
+		schemas[schemaName(ti)] = schema
 	}
 	return schemas
 }
 
-// referencedSchemaNames collects every component name reachable via a real $ref:
-// typed (non-JOSE) response payloads, and field/map-value refs across all types.
-// Used so a params-only type that is also referenced is not skipped (which would
-// leave a dangling $ref).
+// referencedSchemaNames collects every component name a document points at:
+// typed (non-JOSE) response payloads, field/map-value refs across all types, and
+// the plaintext types of JOSE routes. Used so a type that is referenced is not
+// skipped (which would leave the reference pointing at nothing).
+//
+// Non-JOSE REQUEST types are deliberately NOT scanned, and that is safe: a
+// request $ref is emitted only by buildRequestBody's non-JOSE jsonMediaRef
+// branch, which is reachable only when len(bodyFields) > 0, which implies
+// len(Fields) > 0, which implies typeInfoToSchema returns non-nil — and a
+// non-nil schema is emitted unconditionally. So a request $ref can never dangle.
+// Scanning request types here would instead force ORPHAN components for every
+// params-only request type by flipping the guard in generateSchemasFromTypes
+// (redocly's no-unused-components). Do not add them.
+//
+// The other half of that invariant lives in generateSchemasFromTypes: a type with
+// non-empty Fields but ZERO serializable properties (e.g. every field json:"-")
+// still gets a non-nil schema from typeInfoToSchema and MUST keep being emitted
+// unconditionally — a requestBody $ref points at it (extractParameters keys on
+// param tags, not json tags, so such fields are body fields), and that type is
+// not in this set. Do not "optimize" the `schema == nil` check there into a
+// zero-properties check: it would drop the component and dangle that $ref. The
+// json_excluded_request golden fixture locks this.
 func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeInfo) map[string]bool {
 	out := make(map[string]bool)
 	for i := range routes {
 		r := &routes[i]
-		// Typed, non-JOSE responses are emitted as data.$ref (or a raw $ref).
-		if r.Response != nil && r.Response.Name != "" && !r.Response.JOSE {
+		// Every named response is referenced, JOSE or not. A non-JOSE response is
+		// emitted as a real data.$ref (or a raw $ref). A JOSE response's wire
+		// schema is a string token rather than a $ref, but joseDescription names
+		// the plaintext component in prose ("see #/components/schemas/<Name>"), so
+		// the component must exist for that cross-reference to resolve either way.
+		if r.Response != nil && r.Response.Name != "" {
 			out[schemaName(r.Response)] = true
 		}
+		// Requests, by contrast, are referenced ONLY when JOSE — for the same
+		// joseDescription prose reason. See the note above on why non-JOSE request
+		// types must not be added here.
+		if r.Request != nil && r.Request.JOSE && r.Request.Name != "" {
+			out[schemaName(r.Request)] = true
+		}
 	}
+	addFieldSchemaRefs(out, types)
+	return out
+}
+
+// addFieldSchemaRefs marks every component named by a field or map-value $ref
+// across all registered types, so a type reachable only from another type's
+// field (rather than from a route) is still emitted.
+//
+// Nil entries are skipped. This guard is load-bearing: referencedSchemaNames is
+// evaluated as an ARGUMENT to generateSchemasFromTypes, so this scan runs first
+// and a nil entry would panic here before that function's own nil guard is ever
+// reached.
+func addFieldSchemaRefs(out map[string]bool, types map[string]*models.TypeInfo) {
 	for _, ti := range types {
+		if ti == nil {
+			continue
+		}
 		for j := range ti.Fields {
 			if n := ti.Fields[j].RefName; n != "" {
 				out[n] = true
@@ -1158,7 +1213,6 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 			}
 		}
 	}
-	return out
 }
 
 // isParamsOnlyType reports whether a type's every field is a path/query/header
