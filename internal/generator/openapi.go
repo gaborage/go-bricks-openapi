@@ -1222,8 +1222,14 @@ func (g *OpenAPIGenerator) typeInfoToSchema(typeInfo *models.TypeInfo) *OpenAPIS
 	for i := range typeInfo.Fields {
 		field := &typeInfo.Fields[i]
 
+		// Path/query/header params are emitted as OpenAPI parameters
+		// (extractParameters), never as request-body properties.
+		if field.ParamType != "" {
+			continue
+		}
+
 		// Skip fields explicitly marked with json:"-"
-		if field.JSONName == "-" && field.ParamType == "" {
+		if field.JSONName == "-" {
 			continue
 		}
 
