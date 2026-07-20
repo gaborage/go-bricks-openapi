@@ -21,3 +21,13 @@ gosec-output.txt
 
 # OS / editor cruft
 .DS_Store
+
+# Local agent tooling: the `improve` skill install and Claude Code scratch
+# (agent worktrees, skill symlink). Personal/local, not project sources.
+/.agents/
+/.claude/
+/skills-lock.json
+
+# Local implementation-plan scratch (audit output). Landed fixes ship as PRs;
+# remaining roadmap items are tracked separately.
+/plans/
