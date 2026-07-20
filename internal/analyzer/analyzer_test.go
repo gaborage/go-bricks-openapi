@@ -4598,6 +4598,43 @@ var someVar = "PUT"
 	assert.Contains(t, warnings[0], "RegisterHandler")
 }
 
+// TestRegisterHandlerExplicitInstantiation verifies the analyzer recognizes an
+// explicitly-instantiated generic registration — server.RegisterHandler[Req,
+// Resp](hr, r, method, path, handler, opts...) — whose Fun is an
+// *ast.IndexListExpr rather than a bare selector.
+func TestRegisterHandlerExplicitInstantiation(t *testing.T) {
+	src := `package mod
+import (
+	"net/http"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Req struct{ Q string ` + "`json:\"q\"`" + ` }
+type Resp struct{ ID int64 ` + "`json:\"id\"`" + ` }
+func (m *Module) create(req Req, ctx server.HandlerContext) (server.Result[Resp], server.IAPIError) { return server.Created(Resp{}), nil }
+func (m *Module) get(ctx server.HandlerContext) (server.Result[Resp], server.IAPIError) { return server.NewResult(200, Resp{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.RegisterHandler[Req, Resp](hr, r, http.MethodPost, "/explicit", m.create, server.WithTags("things"))
+	server.RegisterHandler[Resp](hr, r, "GET", "/single", m.get)
+}
+`
+	_, routes := analyzeSingleModule(t, src)
+	require.Len(t, routes, 2)
+
+	create := routeForPath(t, routes, "POST /explicit")
+	assert.Equal(t, "create", create.HandlerName)
+	assert.Equal(t, []string{"things"}, create.Tags, "options after explicit type args must still parse")
+	require.NotNil(t, create.Request)
+
+	get := routeForPath(t, routes, "GET /single")
+	assert.Equal(t, "get", get.HandlerName)
+}
+
 // TestNestedDelegationSameStructNameAcrossPackages guards the cycle-guard key
 // against cross-package collisions: a nested delegation chain in which two
 // DIFFERENT packages both name their delegate struct Handler must contribute
