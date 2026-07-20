@@ -121,8 +121,9 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 		}
 	}
 
+	analyzerWarnings := projectAnalyzer.Warnings(ctx)
 	// Surface non-fatal analysis diagnostics on stderr so they don't corrupt the spec.
-	for _, w := range projectAnalyzer.Warnings(ctx) {
+	for _, w := range analyzerWarnings {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
 
@@ -131,10 +132,12 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 		return err
 	}
 
-	// Content warnings (empty/untyped) on stderr. With --strict they are fatal
-	// BEFORE we persist, so a failed strict run never prints a success line and
-	// leaves no consumable artifact (see failStrict).
-	if emitContentWarnings(project) && opts.Strict {
+	// Content warnings (empty/untyped) are printed here; analyzer warnings were
+	// printed above. With --strict, EITHER is fatal BEFORE we persist, so a
+	// failed strict run never prints a success line and leaves no consumable
+	// artifact (see failStrict).
+	contentWarned := emitContentWarnings(project)
+	if shouldFailStrict(opts.Strict, contentWarned, len(analyzerWarnings)) {
 		return failStrict(opts)
 	}
 
@@ -188,6 +191,16 @@ func validateGeneratedSpec(ctx context.Context, opts *GenerateOptions, specConte
 		return fmt.Errorf("generated spec failed validation: %w", err)
 	}
 	return nil
+}
+
+// shouldFailStrict reports whether a --strict run must fail. It fails when
+// strict mode is on AND the run produced any diagnostic — either a content
+// warning (no modules/routes, untyped routes) or an analyzer diagnostic
+// (a dropped/unresolvable route, a near-miss module). Analyzer warnings signal
+// that operations were silently omitted from the spec, which is exactly what
+// --strict exists to catch.
+func shouldFailStrict(strict, contentWarned bool, analyzerWarningCount int) bool {
+	return strict && (contentWarned || analyzerWarningCount > 0)
 }
 
 // failStrict removes any pre-existing output so a stale spec from an earlier run

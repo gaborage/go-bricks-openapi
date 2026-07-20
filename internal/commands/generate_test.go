@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
 	"github.com/gaborage/go-bricks-openapi/internal/models"
@@ -1056,5 +1058,90 @@ func TestRunGenerateStrictNoArtifact(t *testing.T) {
 		if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
 			t.Errorf("strict failure must remove the stale artifact, but %s still exists", out)
 		}
+	})
+}
+
+// TestShouldFailStrict covers the pure strict-decision predicate: strict mode
+// only fails when it is on AND at least one diagnostic (content warning or
+// analyzer warning) fired.
+func TestShouldFailStrict(t *testing.T) {
+	cases := []struct {
+		name          string
+		strict        bool
+		contentWarned bool
+		analyzerWarns int
+		want          bool
+	}{
+		{"strict off, warnings present", false, true, 3, false},
+		{"strict on, no warnings", true, false, 0, false},
+		{"strict on, content warning", true, true, 0, true},
+		{"strict on, analyzer warning", true, false, 1, true},
+		{"strict on, both", true, true, 2, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, shouldFailStrict(tc.strict, tc.contentWarned, tc.analyzerWarns))
+		})
+	}
+}
+
+// TestRunGenerateStrictFailsOnAnalyzerWarning proves --strict fails end-to-end
+// when the analyzer drops a route (emits a warning), even though the spec
+// still has >=1 route and so triggers no content warning on its own.
+func TestRunGenerateStrictFailsOnAnalyzerWarning(t *testing.T) {
+	const modSrc = `package svc
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "svc" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+type Ping struct {
+	OK bool ` + "`json:\"ok\"`" + `
+}
+
+var dynamicPath = "/dynamic"
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/ping", m.ping, server.WithTags("svc"))
+	server.GET(hr, r, dynamicPath, m.ping, server.WithTags("svc")) // non-literal path: analyzer warns + drops
+}
+
+func (m *Module) ping(ctx server.HandlerContext) (server.Result[Ping], server.IAPIError) {
+	return server.NewResult(200, Ping{}), nil
+}
+`
+
+	const goMod = "module github.com/example/svc\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.45.0\n"
+
+	setup := func(t *testing.T) string {
+		t.Helper()
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "svc.go"), []byte(modSrc), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o600))
+		return dir
+	}
+
+	t.Run("strict fails", func(t *testing.T) {
+		dir := setup(t)
+		out := filepath.Join(t.TempDir(), "openapi.yaml")
+		err := runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out, Strict: true})
+		require.Error(t, err, "an analyzer warning (dropped route) must fail --strict")
+		if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
+			t.Errorf("strict failure must not leave an artifact at %s", out)
+		}
+	})
+
+	t.Run("non-strict succeeds", func(t *testing.T) {
+		dir := setup(t)
+		out := filepath.Join(t.TempDir(), "openapi.yaml")
+		err := runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out})
+		require.NoError(t, err, "a non-strict run must succeed despite the warning")
 	})
 }
