@@ -3580,6 +3580,352 @@ func TestRegisterTypeSkipsJSONExcludedFields(t *testing.T) {
 	assert.NotContains(t, project.Types, "Secret", `a type reachable only via a json:"-" field must not be registered`)
 }
 
+// TestAliasToStructResolves verifies a struct-backed alias (`type X = Y`)
+// resolves to Y's fields and is registered/ref'd under the ALIAS's own name X
+// (the name the route's $ref actually carries), not under Y.
+func TestAliasToStructResolves(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type User struct {
+	ID   int64  ` + "`json:\"id\"`" + `
+	Name string ` + "`json:\"name\"`" + `
+}
+type UserResp = User
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/user", m.get)
+}
+func (m *Module) get(ctx server.HandlerContext) (server.Result[UserResp], server.IAPIError) { return server.OK(UserResp{}), nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	route := routeForPath(t, routes, "GET /user")
+	require.NotNil(t, route.Response)
+	assert.Equal(t, "UserResp", route.Response.Name, "alias resolves and keeps the alias's own name as the schema key")
+
+	ti := a.typeRegistry["UserResp"]
+	require.NotNil(t, ti, "component must be registered under the alias name")
+	fieldNames := map[string]bool{}
+	for _, f := range ti.Fields {
+		fieldNames[f.Name] = true
+	}
+	assert.True(t, fieldNames["ID"], "alias must carry User's ID field")
+	assert.True(t, fieldNames["Name"], "alias must carry User's Name field")
+	assert.Empty(t, a.Warnings(t.Context()), "a struct-backed alias must not warn")
+}
+
+// TestDefinedTypeOverStructResolves verifies a defined type over a struct
+// (`type X Y` without `=`) resolves the same way an alias does.
+func TestDefinedTypeOverStructResolves(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type User struct {
+	ID   int64  ` + "`json:\"id\"`" + `
+	Name string ` + "`json:\"name\"`" + `
+}
+type UserDefined User
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/user", m.get)
+}
+func (m *Module) get(ctx server.HandlerContext) (server.Result[UserDefined], server.IAPIError) { return server.OK(UserDefined{}), nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	route := routeForPath(t, routes, "GET /user")
+	require.NotNil(t, route.Response)
+	assert.Equal(t, "UserDefined", route.Response.Name, "defined type resolves and keeps its own name as the schema key")
+
+	ti := a.typeRegistry["UserDefined"]
+	require.NotNil(t, ti, "component must be registered under the defined type's name")
+	fieldNames := map[string]bool{}
+	for _, f := range ti.Fields {
+		fieldNames[f.Name] = true
+	}
+	assert.True(t, fieldNames["ID"])
+	assert.True(t, fieldNames["Name"])
+	assert.Empty(t, a.Warnings(t.Context()), "a struct-backed defined type must not warn")
+}
+
+// TestChainedAliasResolves verifies a chain of named indirections (`type A = B;
+// type B User`) resolves all the way to the terminal struct, and registers it
+// ONCE under the ORIGINALLY REFERENCED name (A) rather than the intermediate
+// link's name (B) — the design point of resolveTypeSpecChain +
+// registerViaTypeSpec (resolve the whole chain first, then register once under
+// the name the caller asked for — not under whichever link the chain bottoms
+// out at).
+func TestChainedAliasResolves(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type User struct {
+	ID int64 ` + "`json:\"id\"`" + `
+}
+type B User
+type A = B
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/a", m.get)
+}
+func (m *Module) get(ctx server.HandlerContext) (server.Result[A], server.IAPIError) { return server.OK(A{}), nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	route := routeForPath(t, routes, "GET /a")
+	require.NotNil(t, route.Response)
+	assert.Equal(t, "A", route.Response.Name, "chained alias registers under the ORIGINALLY referenced name A, not the intermediate link B")
+
+	require.Contains(t, a.typeRegistry, "A", "component keyed under the alias name A")
+	assert.NotContains(t, a.typeRegistry, "B", "the intermediate link B must not get its own component")
+	assert.NotContains(t, a.typeRegistry, "User", "the intermediate link User must not get its own component either — only A is registered")
+
+	fieldNames := map[string]bool{}
+	for _, f := range a.typeRegistry["A"].Fields {
+		fieldNames[f.Name] = true
+	}
+	assert.True(t, fieldNames["ID"], "A carries User's ID field via the B indirection")
+	assert.Empty(t, a.Warnings(t.Context()), "a fully-resolved chained alias must not warn")
+}
+
+// TestAliasToQualifiedStructResolves verifies an alias to a cross-package
+// (in-module sibling package) struct — `type Resp = sub.Item` — resolves and
+// registers under the alias's own name (Resp), using the sub package's file
+// context to extract Item's fields.
+func TestAliasToQualifiedStructResolves(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(dir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
+		require.NoError(t, os.WriteFile(full, []byte(src), 0o644))
+	}
+
+	write("go.mod", "module example.com/aliasq\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.45.0\n")
+	write("module.go", `package mod
+
+import (
+	"example.com/aliasq/sub"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Resp = sub.Item
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/resp", m.get)
+}
+
+func (m *Module) get(ctx server.HandlerContext) (server.Result[Resp], server.IAPIError) {
+	return server.OK(Resp{}), nil
+}
+`)
+	write("sub/item.go", `package sub
+
+type Item struct {
+	ID int64 `+"`json:\"id\"`"+`
+}
+`)
+
+	a := New(dir)
+	project, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	require.Len(t, project.Modules, 1)
+
+	route := routeForPath(t, project.Modules[0].Routes, "GET /resp")
+	require.NotNil(t, route.Response)
+	assert.Equal(t, "Resp", route.Response.Name, "cross-package alias registers under the alias's own name")
+
+	ti := a.typeRegistry["Resp"]
+	require.NotNil(t, ti)
+	fieldNames := map[string]bool{}
+	for _, f := range ti.Fields {
+		fieldNames[f.Name] = true
+	}
+	assert.True(t, fieldNames["ID"])
+	assert.Empty(t, a.Warnings(t.Context()))
+}
+
+// TestQualifiedTypeNotShadowedByLocal verifies a qualified route response
+// (server.Result[types.Item]) resolves to the IMPORTED types.Item even when
+// the handler's OWN package coincidentally declares a local type of the same
+// bare name ("Item"). Before the registerType guard, an unqualified
+// findStructDefinition("Item") search over the handler's own package ran
+// FIRST (name carries no dot) and would find — and wrongly register — the
+// LOCAL Item, since the local search never consulted the import alias that
+// made the reference genuinely cross-package.
+func TestQualifiedTypeNotShadowedByLocal(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(dir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
+		require.NoError(t, os.WriteFile(full, []byte(src), 0o644))
+	}
+
+	write("go.mod", "module example.com/shadow\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.45.0\n")
+	write("module.go", `package mod
+
+import (
+	"example.com/shadow/types"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+// Item is a LOCAL type coincidentally sharing its bare name with the
+// cross-package types.Item referenced below — it must NOT shadow it.
+type Item struct {
+	LocalField string `+"`json:\"localField\"`"+`
+}
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/item", m.get)
+}
+
+func (m *Module) get(ctx server.HandlerContext) (server.Result[types.Item], server.IAPIError) {
+	return server.OK(types.Item{}), nil
+}
+`)
+	write("types/item.go", `package types
+
+// Item is the type actually referenced by the route (types.Item), distinct
+// from the handler package's own local Item.
+type Item struct {
+	ImportedField string `+"`json:\"importedField\"`"+`
+}
+`)
+
+	a := New(dir)
+	project, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	require.Len(t, project.Modules, 1)
+
+	route := routeForPath(t, project.Modules[0].Routes, "GET /item")
+	require.NotNil(t, route.Response)
+	assert.Equal(t, "Item", route.Response.Name, "qualified reference registers under its own bare name")
+
+	ti := project.Types["Item"]
+	require.NotNil(t, ti, "the qualified types.Item must be registered under the bare name Item")
+	fieldNames := map[string]bool{}
+	for _, f := range ti.Fields {
+		fieldNames[f.Name] = true
+	}
+	assert.True(t, fieldNames["ImportedField"], "the qualified types.Item's field must win")
+	assert.False(t, fieldNames["LocalField"], "the handler's own local Item must NOT shadow the qualified reference")
+	assert.Empty(t, a.Warnings(t.Context()), "a successfully-resolved qualified reference must not warn")
+}
+
+// TestNamedSliceWarnsAndClears verifies a named slice used as a route response
+// (`type UserList []User`) cannot resolve to a struct: the response's Name is
+// cleared to "" (so the generator's untyped-object fallback applies instead of
+// a dangling $ref), a warning naming the type fires, and neither the named
+// slice nor its dropped element type end up in the type registry.
+func TestNamedSliceWarnsAndClears(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type User struct {
+	ID int64 ` + "`json:\"id\"`" + `
+}
+type UserList []User
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/users", m.list)
+}
+func (m *Module) list(ctx server.HandlerContext) (server.Result[UserList], server.IAPIError) { return server.OK(UserList{}), nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	route := routeForPath(t, routes, "GET /users")
+	require.NotNil(t, route.Response)
+	assert.Empty(t, route.Response.Name, "a named slice response must clear to untyped rather than carry a dangling $ref name")
+
+	warnings := a.Warnings(t.Context())
+	require.NotEmpty(t, warnings, "a named-slice response must produce a warning")
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "UserList") {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected a warning mentioning UserList, got: %v", warnings)
+
+	assert.NotContains(t, a.typeRegistry, "UserList", "the named slice itself must not be registered")
+	assert.NotContains(t, a.typeRegistry, "User", "the element type is dropped along with the cleared response")
+}
+
+// TestAliasChainDepthCapped verifies a chain of named indirections deeper than
+// the depth cap (8) does not panic and does not resolve — the cap fires before
+// the terminal struct is ever examined, so registerViaTypeSpec returns nil and
+// the Step 3 warning fires exactly as it would for any other unresolvable local
+// non-struct declaration.
+func TestAliasChainDepthCapped(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type T0 = T1
+type T1 = T2
+type T2 = T3
+type T3 = T4
+type T4 = T5
+type T5 = T6
+type T6 = T7
+type T7 = T8
+type T8 = T9
+type T9 struct {
+	X int ` + "`json:\"x\"`" + `
+}
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/t", m.get)
+}
+func (m *Module) get(ctx server.HandlerContext) (server.Result[T0], server.IAPIError) { return server.OK(T0{}), nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	route := routeForPath(t, routes, "GET /t")
+	require.NotNil(t, route.Response)
+	assert.Empty(t, route.Response.Name, "a chain deeper than the depth cap must not resolve")
+
+	warnings := a.Warnings(t.Context())
+	require.NotEmpty(t, warnings, "the depth-capped chain must produce the Step 3 warning")
+}
+
 func TestAnalyzeProjectStampsModuleIdentity(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/app\n\ngo 1.25\n"), 0600))
