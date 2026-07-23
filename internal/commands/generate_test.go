@@ -1062,25 +1062,23 @@ func TestRunGenerateStrictNoArtifact(t *testing.T) {
 }
 
 // TestShouldFailStrict covers the pure strict-decision predicate: strict mode
-// only fails when it is on AND at least one diagnostic (content warning or
-// analyzer warning) fired.
+// only fails when it is on AND at least one diagnostic (content, analyzer, or
+// version-floor warning) fired.
 func TestShouldFailStrict(t *testing.T) {
 	cases := []struct {
-		name          string
-		strict        bool
-		contentWarned bool
-		analyzerWarns int
-		want          bool
+		name   string
+		strict bool
+		warned bool
+		want   bool
 	}{
-		{"strict off, warnings present", false, true, 3, false},
-		{"strict on, no warnings", true, false, 0, false},
-		{"strict on, content warning", true, true, 0, true},
-		{"strict on, analyzer warning", true, false, 1, true},
-		{"strict on, both", true, true, 2, true},
+		{"strict off, warned", false, true, false},
+		{"strict off, clean", false, false, false},
+		{"strict on, clean", true, false, false},
+		{"strict on, warned", true, true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, shouldFailStrict(tc.strict, tc.contentWarned, tc.analyzerWarns))
+			assert.Equal(t, tc.want, shouldFailStrict(tc.strict, tc.warned))
 		})
 	}
 }
@@ -1118,18 +1116,10 @@ func (m *Module) ping(ctx server.HandlerContext) (server.Result[Ping], server.IA
 }
 `
 
-	const goMod = "module github.com/example/svc\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.45.0\n"
-
-	setup := func(t *testing.T) string {
-		t.Helper()
-		dir := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "svc.go"), []byte(modSrc), 0o600))
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o600))
-		return dir
-	}
+	goMod := "module github.com/example/svc\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks " + minGoBricksVer + "\n"
 
 	t.Run("strict fails", func(t *testing.T) {
-		dir := setup(t)
+		dir := writeProject(t, goMod, modSrc)
 		out := filepath.Join(t.TempDir(), "openapi.yaml")
 		err := runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out, Strict: true})
 		require.Error(t, err, "an analyzer warning (dropped route) must fail --strict")
@@ -1139,9 +1129,108 @@ func (m *Module) ping(ctx server.HandlerContext) (server.Result[Ping], server.IA
 	})
 
 	t.Run("non-strict succeeds", func(t *testing.T) {
-		dir := setup(t)
+		dir := writeProject(t, goMod, modSrc)
 		out := filepath.Join(t.TempDir(), "openapi.yaml")
 		err := runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out})
 		require.NoError(t, err, "a non-strict run must succeed despite the warning")
+	})
+}
+
+// TestGoBricksVersionWarning covers generate's severity mapping over the
+// shared go-bricks verdict (resolveGoBricksStatus): a warning when the
+// dependency is missing or below the floor, silence when the floor is
+// satisfied or skipped (replace directive, pseudo-version), and silence for
+// structural go.mod problems (module discovery reports those).
+func TestGoBricksVersionWarning(t *testing.T) {
+	gomod := func(requireLine string) string {
+		return "module example.com/svc\n\ngo 1.26.0\n\nrequire " + requireLine + "\n"
+	}
+	tests := []struct {
+		name         string
+		goMod        string // "" = no go.mod in the project dir
+		wantContains []string
+	}{
+		{name: "at the floor is silent", goMod: gomod("github.com/gaborage/go-bricks " + minGoBricksVer)},
+		// Also guards the constants' invariant: the verified version satisfies the floor.
+		{name: "verified version is silent", goMod: gomod("github.com/gaborage/go-bricks " + verifiedGoBricksVer)},
+		{name: "below the floor warns", goMod: gomod("github.com/gaborage/go-bricks v0.44.0"),
+			wantContains: []string{msgBelowMinimum, minGoBricksVer, verifiedGoBricksVer}},
+		{name: "missing dependency warns", goMod: gomod("github.com/spf13/cobra v1.8.0"),
+			wantContains: []string{"not found"}},
+		{name: "replace directive is silent",
+			goMod: gomod("github.com/gaborage/go-bricks v0.0.0") + "replace github.com/gaborage/go-bricks => ../local-go-bricks\n"},
+		{name: "pseudo-version is silent", goMod: gomod("github.com/gaborage/go-bricks v0.0.0-20240101000000-abcdef123456")},
+		{name: "missing go.mod is silent"},
+		{name: "unparseable go.mod is silent", goMod: "not a modfile {{{\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.goMod != "" {
+				createTestGoFile(t, dir, goModFile, tt.goMod)
+			}
+			warning := goBricksVersionWarning(dir)
+			if len(tt.wantContains) == 0 {
+				assert.Empty(t, warning)
+				return
+			}
+			for _, want := range tt.wantContains {
+				assert.Contains(t, warning, want)
+			}
+		})
+	}
+}
+
+// TestRunGenerateBelowFloorStrict proves the floor is enforced end-to-end: a
+// project pinned below minGoBricksVer generates with a warning by default and
+// fails under --strict (leaving no artifact), even when the analysis itself is
+// diagnostic-free.
+func TestRunGenerateBelowFloorStrict(t *testing.T) {
+	const modSrc = `package svc
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "svc" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+type Ping struct {
+	OK bool ` + "`json:\"ok\"`" + `
+}
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/ping", m.ping, server.WithTags("svc"))
+}
+
+func (m *Module) ping(ctx server.HandlerContext) (server.Result[Ping], server.IAPIError) {
+	return server.NewResult(200, Ping{}), nil
+}
+`
+
+	const goMod = "module github.com/example/svc\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.44.0\n"
+
+	t.Run("strict fails", func(t *testing.T) {
+		dir := writeProject(t, goMod, modSrc)
+		out := filepath.Join(t.TempDir(), "openapi.yaml")
+		err := runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out, Strict: true})
+		require.Error(t, err, "a below-floor go-bricks version must fail --strict")
+		if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
+			t.Errorf("strict failure must not leave an artifact at %s", out)
+		}
+	})
+
+	t.Run("non-strict warns but succeeds", func(t *testing.T) {
+		dir := writeProject(t, goMod, modSrc)
+		out := filepath.Join(t.TempDir(), "openapi.yaml")
+		err := runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out})
+		require.NoError(t, err, "a non-strict run must still produce a spec below the floor")
+		if _, statErr := os.Stat(out); statErr != nil {
+			t.Errorf("non-strict run must write the spec: %v", statErr)
+		}
 	})
 }
