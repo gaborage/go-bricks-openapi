@@ -1136,6 +1136,55 @@ func (m *Module) ping(ctx server.HandlerContext) (server.Result[Ping], server.IA
 	})
 }
 
+// TestRunGenerateStrictFailsOnUnparsableFile proves --strict fails end-to-end
+// when a sibling .go file cannot be parsed: the analyzer warns about the drop
+// (PLAN009 defect 1) rather than silently discarding whatever module/routes
+// the broken file declared, and the strict gate turns that warning into a
+// hard failure.
+func TestRunGenerateStrictFailsOnUnparsableFile(t *testing.T) {
+	const modSrc = `package svc
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "svc" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+type Ping struct {
+	OK bool ` + "`json:\"ok\"`" + `
+}
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/ping", m.ping, server.WithTags("svc"))
+}
+
+func (m *Module) ping(ctx server.HandlerContext) (server.Result[Ping], server.IAPIError) {
+	return server.NewResult(200, Ping{}), nil
+}
+`
+
+	goMod := "module github.com/example/svc\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks " + minGoBricksVer + "\n"
+
+	dir := writeProject(t, goMod, modSrc)
+	brokenContent := "package svc\nfunc broken syntax here {"
+	if err := os.WriteFile(filepath.Join(dir, "broken.go"), []byte(brokenContent), 0644); err != nil {
+		t.Fatalf("failed to write broken sibling: %v", err)
+	}
+
+	out := filepath.Join(t.TempDir(), "openapi.yaml")
+	err := runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out, Strict: true})
+	require.Error(t, err, "an unparsable file (dropped module/routes) must fail --strict")
+	assert.Contains(t, err.Error(), "--strict")
+	if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
+		t.Errorf("strict failure must not leave an artifact at %s", out)
+	}
+}
+
 // TestGoBricksVersionWarning covers generate's severity mapping over the
 // shared go-bricks verdict (resolveGoBricksStatus): a warning when the
 // dependency is missing or below the floor, silence when the floor is

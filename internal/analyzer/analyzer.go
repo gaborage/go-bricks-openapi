@@ -280,7 +280,7 @@ type nearMissCandidate struct {
 type moduleDiscoverer struct {
 	analyzer   *ProjectAnalyzer
 	modules    []models.Module
-	seen       map[string]bool              // package names already added (dedup modules)
+	seen       map[string]bool              // module directories already added (dedup modules)
 	moduleDirs map[string]bool              // directories that produced a real module
 	nearMiss   map[string]nearMissCandidate // directory -> first near-miss struct
 }
@@ -291,8 +291,16 @@ func (d *moduleDiscoverer) walk(path string, info os.FileInfo, err error) error 
 		return nil // Skip errors to continue discovery
 	}
 
-	if info.IsDir() && shouldSkipDir(info.Name()) {
-		return filepath.SkipDir
+	if info.IsDir() {
+		if shouldSkipDir(info.Name()) {
+			return filepath.SkipDir
+		}
+		if filepath.Clean(path) != filepath.Clean(d.analyzer.projectRoot) {
+			if _, statErr := os.Stat(filepath.Join(path, goModFileName)); statErr == nil {
+				return filepath.SkipDir // nested Go module: not part of this service
+			}
+		}
+		return nil
 	}
 
 	if !strings.HasSuffix(path, goFileExt) || strings.HasSuffix(path, testFileExt) {
@@ -301,17 +309,22 @@ func (d *moduleDiscoverer) walk(path string, info os.FileInfo, err error) error 
 
 	module, nearMiss, err := d.analyzer.analyzeGoFile(path)
 	if err != nil {
-		// Log error but continue processing other files
+		// A file that cannot be parsed may declare modules/routes that will be
+		// missing from the spec — surface it so --strict can gate on the drop.
+		rel, relErr := filepath.Rel(d.analyzer.projectRoot, path)
+		if relErr != nil {
+			rel = path
+		}
+		d.analyzer.addWarningf("skipping %s: %v", rel, err)
 		return nil
 	}
 
 	dir := filepath.Dir(path)
 	if module != nil {
 		d.moduleDirs[dir] = true
-		key := module.Package
-		if !d.seen[key] {
+		if !d.seen[dir] {
 			d.modules = append(d.modules, *module)
-			d.seen[key] = true
+			d.seen[dir] = true
 		}
 		return nil
 	}
