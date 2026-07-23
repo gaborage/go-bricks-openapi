@@ -56,7 +56,8 @@ backward compatibility on the three surfaces above — not an automatic mileston
 
 ## 1. release-please keeps a standing Release PR
 
-On every push to `main`, `release-please` opens/updates a `chore(main): release vX.Y.Z` PR
+On every push to `main` (and on demand via *Actions → release-please → Run workflow*),
+`release-please` opens/updates a `chore(main): release vX.Y.Z` PR
 that computes the next version from Conventional-Commit PR titles and writes the
 `CHANGELOG.md` section + bumps `.release-please-manifest.json`. It does **not** tag or publish
 (`skip-github-release: true`).
