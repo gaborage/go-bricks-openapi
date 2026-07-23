@@ -2275,6 +2275,26 @@ func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile 
 		registered = a.registerQualifiedType(typeInfo.Package+"."+typeInfo.Name, astFile)
 	}
 	if registered == nil {
+		// Only an UNQUALIFIED (in-package) type can be a local non-struct
+		// declaration. A qualified type that failed both resolution attempts is
+		// stdlib/third-party — keep its existing silent fallback, and never let
+		// a coincidental same-named local type here discard a legitimately-
+		// qualified type.
+		//
+		// An own-package Ident reference's Package is NOT "" — handleIdentType
+		// stamps Package: packageName, which is always astFile.Name.Name (the
+		// declaring package), never empty. A genuinely cross-package reference
+		// (server.Result[q.Type]) instead carries Package = the import alias
+		// used at the call site, which differs from the current file's own
+		// package name. So "unqualified" is identified by Package being either
+		// empty (defensive) or equal to the current package, not by Package=="".
+		if typeInfo.Package == "" || typeInfo.Package == astFile.Name.Name {
+			if _, _, _, local := a.resolveLocalTypeSpec(astFile, filePath, typeInfo.Name); local {
+				a.addWarningf("request/response type %s is a named non-struct type — emitting an untyped schema (annotate or restructure it as a struct for a typed spec)", typeInfo.Name)
+				typeInfo.Name = ""
+				typeInfo.Fields = nil
+			}
+		}
 		return
 	}
 	// Mirror the registered fields onto the route's TypeInfo (request bodies and
@@ -2297,9 +2317,67 @@ func (a *ProjectAnalyzer) registerType(name, pkg string, astFile *ast.File, file
 	}
 	structType, err := a.findStructDefinition(astFile, filePath, name)
 	if err != nil {
-		return nil
+		return a.registerViaTypeSpec(name, pkg, astFile, filePath)
 	}
 	return a.registerStruct(name, pkg, structType, astFile, filePath)
+}
+
+// registerViaTypeSpec resolves a named non-struct declaration (alias `type X =
+// Y`, defined type `type X Y`, chained `type X = Y; type Y Z`, or a qualified
+// alias `type X = q.T`) to its underlying struct and registers that struct's
+// fields ONCE under the original name X — the component name routes/fields
+// reference. Returns nil for anything that does not bottom out at a struct
+// (named slices/maps, func types, unresolvable chains), leaving the caller's
+// fallback semantics intact.
+func (a *ProjectAnalyzer) registerViaTypeSpec(name, pkg string, astFile *ast.File, filePath string) *models.TypeInfo {
+	st, resolvedPkg, file, path, ok := a.resolveTypeSpecChain(astFile, filePath, name, 0)
+	if !ok {
+		return nil
+	}
+	// Key the component under the ORIGINAL name, but extract the struct's fields
+	// in the package/file where the struct is actually defined so nested field
+	// refs resolve in the right context.
+	if resolvedPkg == "" {
+		resolvedPkg = pkg
+	}
+	return a.registerStruct(name, resolvedPkg, st, file, path)
+}
+
+// resolveTypeSpecChain follows a chain of named types to the underlying struct,
+// returning the struct plus the package/file context it is defined in. Handles:
+// a local struct with this name (base case); `type X = Y`/`type X Y` where Y is
+// another local named type (recurse in the same package); and `type X = q.T`
+// (resolve the qualified struct in its own package). Returns ok=false when the
+// chain bottoms out at a non-struct (slice/map/interface/func) or cannot be
+// resolved. depth bounds pathological chains (same cap as namedScalarKind).
+func (a *ProjectAnalyzer) resolveTypeSpecChain(astFile *ast.File, filePath, name string, depth int) (st *ast.StructType, pkg string, file *ast.File, path string, ok bool) {
+	if depth > 8 {
+		return nil, "", nil, "", false
+	}
+	// Base case: a struct literally named `name` in this package.
+	if s, err := a.findStructDefinition(astFile, filePath, name); err == nil {
+		return s, astFile.Name.Name, astFile, filePath, true
+	}
+	ts, tsFile, tsPath, found := a.resolveLocalTypeSpec(astFile, filePath, name)
+	if !found {
+		return nil, "", nil, "", false // stdlib/third-party — caller's fallback applies
+	}
+	switch rhs := ts.Type.(type) {
+	case *ast.Ident:
+		// type X = Y / type X Y — follow Y in the same package (may itself be an
+		// alias, a defined type, or the terminal struct).
+		return a.resolveTypeSpecChain(tsFile, tsPath, rhs.Name, depth+1)
+	case *ast.SelectorExpr:
+		// type X = q.T — resolve the qualified struct in its own package.
+		if pkgIdent, ok := rhs.X.(*ast.Ident); ok {
+			if q, ok := a.resolveQualifiedStruct(pkgIdent.Name+"."+rhs.Sel.Name, tsFile); ok {
+				return q.st, q.pkg, q.file, q.filePath, true
+			}
+		}
+		return nil, "", nil, "", false
+	default:
+		return nil, "", nil, "", false // slice/map/interface/func — not a struct shape
+	}
 }
 
 // registerStruct registers a resolved struct under its collision-qualified schema
@@ -2794,6 +2872,39 @@ func (a *ProjectAnalyzer) findStructInFile(astFile *ast.File, typeName string) *
 		}
 	}
 
+	return nil
+}
+
+// resolveLocalTypeSpec finds the TypeSpec declaring typeName in the file's
+// package (current file first, then siblings), regardless of what its RHS is.
+// Returns the spec plus the file context it was found in, or ok=false.
+func (a *ProjectAnalyzer) resolveLocalTypeSpec(astFile *ast.File, filePath, typeName string) (spec *ast.TypeSpec, file *ast.File, path string, ok bool) {
+	if ts := typeSpecInFile(astFile, typeName); ts != nil {
+		return ts, astFile, filePath, true
+	}
+	files, err := a.parsePackage(filePath, astFile.Name.Name)
+	if err == nil {
+		for _, p := range slices.Sorted(maps.Keys(files)) {
+			if ts := typeSpecInFile(files[p], typeName); ts != nil {
+				return ts, files[p], p, true
+			}
+		}
+	}
+	return nil, nil, "", false
+}
+
+func typeSpecInFile(astFile *ast.File, typeName string) *ast.TypeSpec {
+	for _, decl := range astFile.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			if ts, ok := spec.(*ast.TypeSpec); ok && ts.Name.Name == typeName {
+				return ts
+			}
+		}
+	}
 	return nil
 }
 
