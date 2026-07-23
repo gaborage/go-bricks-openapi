@@ -1550,10 +1550,11 @@ func (a *ProjectAnalyzer) extractPathFromArg(arg ast.Expr) (string, bool) {
 //
 // Echo catch-all wildcards ("/files/*", "/assets/*filepath") are intentionally
 // left as literal segments. Templating them ("{path}") would require a matching
-// declared path parameter to satisfy OpenAPI, but the generator derives path
-// parameters from request-struct tags, which a catch-all does not carry —
-// emitting "{path}" without that parameter yields an invalid document.
-// Synthesising the parameter is deferred to the parameter-fidelity work.
+// declared path parameter to satisfy OpenAPI; the generator now synthesizes a
+// declared parameter for every {var} a path template contains (see
+// appendMissingPathParams in the generator package), but a bare "*" carries no
+// parameter name to synthesize from — "/assets/*filepath" would need a naming
+// convention of its own, which is still deferred.
 func normalizePath(path string) string {
 	if !strings.Contains(path, ":") {
 		return path

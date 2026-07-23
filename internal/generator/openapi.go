@@ -622,7 +622,7 @@ func (g *OpenAPIGenerator) buildOperation(route *models.Route, opIDs map[string]
 
 	// Parameters (path, query, header) plus the remaining body fields.
 	params, bodyFields := g.extractParameters(route)
-	op.Parameters = params
+	op.Parameters = appendMissingPathParams(params, route.Path)
 
 	// Emit a request body when there are body fields, OR when the route is
 	// JOSE-tagged (a JOSE request type may have only the sentinel field, with all
@@ -1715,6 +1715,46 @@ func (g *OpenAPIGenerator) extractParameters(route *models.Route) ([]Parameter, 
 	}
 
 	return params, bodyFields
+}
+
+// pathTemplateVars returns the {var} names of a path template, in order of
+// appearance. Literal segments (including Echo catch-all "*" remnants) are
+// ignored.
+func pathTemplateVars(path string) []string {
+	var vars []string
+	for _, seg := range strings.Split(path, "/") {
+		if len(seg) > 2 && strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}") {
+			vars = append(vars, seg[1:len(seg)-1])
+		}
+	}
+	return vars
+}
+
+// appendMissingPathParams appends a required string path parameter for every
+// template variable the declared parameters do not cover. OpenAPI 3.0 requires
+// each {var} to be declared; a handler that reads the variable via
+// ctx.Param(...) (no param-tagged struct field) would otherwise produce an
+// invalid document.
+func appendMissingPathParams(params []Parameter, path string) []Parameter {
+	declared := make(map[string]struct{}, len(params))
+	for i := range params {
+		if params[i].In == paramTypePath {
+			declared[params[i].Name] = struct{}{}
+		}
+	}
+	for _, v := range pathTemplateVars(path) {
+		if _, ok := declared[v]; ok {
+			continue
+		}
+		declared[v] = struct{}{} // a template var appearing twice is declared once
+		params = append(params, Parameter{
+			Name:     v,
+			In:       paramTypePath,
+			Required: true,
+			Schema:   &OpenAPIProperty{Type: typeString},
+		})
+	}
+	return params
 }
 
 // buildRequestBody builds the Request Body Object for a request type. When the
