@@ -182,14 +182,8 @@ require github.com/gaborage/go-bricks v0.12.0
 		},
 		{
 			name: "verbose mode with go-bricks",
-			goModContent: `module test-project
-
-go 1.21
-
-require (
-	github.com/gaborage/go-bricks v0.20.0
-)
-`,
+			goModContent: "module test-project\n\ngo 1.26.0\n\nrequire (\n\tgithub.com/gaborage/go-bricks " +
+				verifiedGoBricksVer + "\n)\n",
 			verbose:     true,
 			expectError: false,
 		},
@@ -745,7 +739,7 @@ func writeProject(t *testing.T, goMod, goSrc string) string {
 // not the unconditional green banner — yet does not fail the run (PR13 #2).
 func TestRunDoctorZeroModulesIsCaveat(t *testing.T) {
 	dir := writeProject(t,
-		"module test\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.37.0\n",
+		"module test\n\ngo 1.26.0\n\nrequire github.com/gaborage/go-bricks "+verifiedGoBricksVer+"\n",
 		packageMainContent) // package main, no go-bricks module
 
 	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion}
@@ -988,29 +982,29 @@ func TestCheckVersionCompatibility(t *testing.T) {
 		errorMsg    string
 	}{
 		{
-			name:        "at the floor (v0.13.0)",
-			version:     "v0.13.0",
+			name:        "at the floor",
+			version:     minGoBricksVer,
 			expectError: false,
 		},
 		{
-			name:        "above the floor",
-			version:     "v0.37.0",
+			name:        "verified version is above the floor",
+			version:     verifiedGoBricksVer,
 			expectError: false,
 		},
 		{
 			name:        "at the floor without v prefix",
-			version:     "0.13.0",
+			version:     strings.TrimPrefix(minGoBricksVer, "v"),
 			expectError: false,
 		},
 		{
-			name:        "just below the floor (v0.12.9)",
-			version:     "v0.12.9",
+			name:        "just below the floor (v0.44.9)",
+			version:     "v0.44.9",
 			expectError: true,
 			errorMsg:    msgBelowMinimum,
 		},
 		{
-			name:        "well below the floor",
-			version:     "v0.4.0",
+			name:        "old floor (v0.13.0) is now below",
+			version:     "v0.13.0",
 			expectError: true,
 			errorMsg:    msgBelowMinimum,
 		},

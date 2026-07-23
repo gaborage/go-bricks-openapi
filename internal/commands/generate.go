@@ -108,6 +108,13 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 	fmt.Printf("Generating OpenAPI spec for project: %s\n", opts.ProjectRoot)
 	fmt.Printf("Output file: %s\n", opts.OutputFile)
 
+	// Spec-fidelity check on the target's go-bricks version; strict-fatal via
+	// the warned flag below.
+	versionWarning := goBricksVersionWarning(opts.ProjectRoot)
+	if versionWarning != "" {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", versionWarning)
+	}
+
 	projectAnalyzer := analyzer.New(opts.ProjectRoot)
 	project, err := projectAnalyzer.AnalyzeProject()
 	if err != nil {
@@ -127,18 +134,19 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
 
+	// Strict gate: every diagnostic printed above and by emitContentWarnings
+	// feeds one flag, so a surfaced warning can never slip past --strict.
+	// Evaluated BEFORE the spec is rendered or persisted: a failed strict run
+	// does no wasted rendering, never prints a success line, and leaves no
+	// consumable artifact (see failStrict).
+	warned := emitContentWarnings(project) || len(analyzerWarnings) > 0 || versionWarning != ""
+	if shouldFailStrict(opts.Strict, warned) {
+		return failStrict(opts)
+	}
+
 	specContent, err := generateSpecContent(opts, project, format)
 	if err != nil {
 		return err
-	}
-
-	// Content warnings (empty/untyped) are printed here; analyzer warnings were
-	// printed above. With --strict, EITHER is fatal BEFORE we persist, so a
-	// failed strict run never prints a success line and leaves no consumable
-	// artifact (see failStrict).
-	contentWarned := emitContentWarnings(project)
-	if shouldFailStrict(opts.Strict, contentWarned, len(analyzerWarnings)) {
-		return failStrict(opts)
 	}
 
 	// Structural validation (OpenAPI 3.0) when --validate is set. Like --strict,
@@ -193,14 +201,14 @@ func validateGeneratedSpec(ctx context.Context, opts *GenerateOptions, specConte
 	return nil
 }
 
-// shouldFailStrict reports whether a --strict run must fail. It fails when
-// strict mode is on AND the run produced any diagnostic — either a content
-// warning (no modules/routes, untyped routes) or an analyzer diagnostic
-// (a dropped/unresolvable route, a near-miss module). Analyzer warnings signal
-// that operations were silently omitted from the spec, which is exactly what
-// --strict exists to catch.
-func shouldFailStrict(strict, contentWarned bool, analyzerWarningCount int) bool {
-	return strict && (contentWarned || analyzerWarningCount > 0)
+// shouldFailStrict reports whether a --strict run must fail: strict mode is
+// on AND the run surfaced any diagnostic — a content warning (no
+// modules/routes, untyped routes), an analyzer diagnostic (a dropped/
+// unresolvable route, a near-miss module), or a go-bricks version-floor
+// warning. Each signals the spec may not faithfully describe the service,
+// which is exactly what --strict exists to catch.
+func shouldFailStrict(strict, warned bool) bool {
+	return strict && warned
 }
 
 // failStrict removes any pre-existing output so a stale spec from an earlier run
@@ -400,6 +408,27 @@ func (m *orderedMap) MarshalJSON() ([]byte, error) {
 	}
 	buf.WriteByte('}')
 	return buf.Bytes(), nil
+}
+
+// goBricksVersionWarning maps the shared go-bricks verdict
+// (resolveGoBricksStatus, doctor.go) to generate's severity: a warning string
+// when the dependency is missing or below the floor, "" otherwise. Unlike
+// doctor it never fails the run by itself — the caller prints the warning,
+// fatal only under --strict. Verdicts that skip the floor (replace directive,
+// pseudo-version) and structural go.mod problems stay silent: the check only
+// speaks when it has a definitive version verdict, and module discovery
+// surfaces structural problems on its own.
+func goBricksVersionWarning(projectRoot string) string {
+	st := resolveGoBricksStatus(filepath.Join(projectRoot, goModFile))
+	switch st.verdict {
+	case verdictMissing:
+		return fmt.Sprintf("%v — the generated spec may not describe a %s service", st.err, goBricksDep)
+	case verdictBelowFloor:
+		return fmt.Sprintf("%v — OpenAPI generation targets %s %s+ (verified through %s), so the spec may not match your runtime",
+			st.err, goBricksDep, minGoBricksVer, verifiedGoBricksVer)
+	default:
+		return ""
+	}
 }
 
 // emitContentWarnings prints stderr warnings for a content-free or partially-typed

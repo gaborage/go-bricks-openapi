@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"go/build"
 	"go/version"
@@ -32,17 +33,19 @@ const (
 
 	// Version floors, single-sourced to match go.mod (go 1.25) and the README.
 	// minGoVersion is the toolchain floor in Go's own version format (compared
-	// at language/minor granularity so 1.25.x patches and 1.25 RCs all qualify);
-	// minGoBricksVer is the semver floor for the go-bricks features the generator
-	// relies on.
+	// at language/minor granularity so 1.25.x patches and 1.25 RCs all qualify).
+	// minGoBricksVer is the semver floor for the go-bricks API era the tool
+	// targets: v0.45.0 hid the echo dependency behind go-bricks boundary types
+	// (#627) — the surface every fixture, the demo acceptance project, and the
+	// generator's emitted runtime contract are written against.
 	minGoVersion   = "go1.25"
-	minGoBricksVer = "v0.13.0"
+	minGoBricksVer = "v0.45.0"
 
 	// verifiedGoBricksVer is the newest go-bricks release the analyzer's
 	// recognized patterns and the generator's emitted runtime contract have
 	// been verified against (fixtures + the demo-project acceptance run).
 	// Bump it as part of each framework-compatibility pass.
-	verifiedGoBricksVer = "v0.49.0"
+	verifiedGoBricksVer = "v0.53.0"
 
 	// File patterns
 	goFileExt   = ".go"
@@ -254,60 +257,97 @@ func checkProjectStructure(projectRoot string) error {
 	return nil
 }
 
-// checkGoBricksCompatibility reports go-bricks compatibility. It prints the
-// specific ❌ reason for each failure mode (so an I/O error never gets a
-// version-floor hint) and returns a non-nil error iff the run should fail.
-func checkGoBricksCompatibility(goModPath string, verbose bool) error {
+// goBricksVerdict classifies a target project's go-bricks dependency status.
+// resolveGoBricksStatus is the single decision core shared by doctor (which
+// maps verdicts to fatal ❌/ℹ️ output) and generate's goBricksVersionWarning
+// (which maps them to strict-fatal warnings), so the two commands cannot
+// drift on what "compatible" means.
+type goBricksVerdict int
+
+const (
+	verdictOK         goBricksVerdict = iota // tagged version at or above the floor
+	verdictReplace                           // replace directive: the local checkout governs
+	verdictPseudo                            // pseudo-version (untagged build): floor skipped
+	verdictMissing                           // go.mod has no go-bricks dependency
+	verdictBelowFloor                        // tagged version below minGoBricksVer, or invalid semver
+	verdictUnreadable                        // go.mod unresolvable, unreadable, or unparseable
+)
+
+// goBricksStatus carries a verdict with its rendering details: the version
+// (or replace target) when one was parsed, and the classification error for
+// the failure verdicts.
+type goBricksStatus struct {
+	verdict goBricksVerdict
+	version string
+	err     error
+}
+
+// resolveGoBricksStatus reads goModPath and classifies the project's go-bricks
+// dependency against the version floor. Pseudo-versions (e.g. from
+// `go get @main` / untagged or fork builds) sort below any tagged floor by
+// semver rules yet may track a commit ahead of it, so like replace directives
+// they skip the floor instead of failing with a misleading "below minimum".
+func resolveGoBricksStatus(goModPath string) goBricksStatus {
 	// Validate and resolve path securely to prevent path traversal
 	cleanPath, err := validateAndResolvePath(goModPath)
 	if err != nil {
-		fmt.Printf("❌ cannot resolve go.mod path: %v\n", err)
-		return err
+		return goBricksStatus{verdict: verdictUnreadable, err: fmt.Errorf("cannot resolve go.mod path: %w", err)}
 	}
 
 	content, err := readFileFn(cleanPath)
 	if err != nil {
-		fmt.Printf("❌ failed to read go.mod: %v\n", err)
-		return fmt.Errorf("failed to read go.mod: %w", err)
+		return goBricksStatus{verdict: verdictUnreadable, err: fmt.Errorf("failed to read go.mod: %w", err)}
 	}
 
-	// Parse go-bricks version from go.mod
 	gbVer, isReplace, err := parseGoBricksVersion(cleanPath, content)
-	if err != nil {
-		fmt.Printf("❌ %v\n", err) // dependency not found
-		return err
+	if errors.Is(err, errGoBricksMissing) {
+		return goBricksStatus{verdict: verdictMissing, err: err}
 	}
-
-	// Local development: dependency is present via a replace directive, so the
-	// local checkout governs behavior — skip the version floor (but still report
-	// the dependency unconditionally).
+	if err != nil {
+		return goBricksStatus{verdict: verdictUnreadable, err: err}
+	}
 	if isReplace {
-		fmt.Printf("ℹ️  %s: local replace directive detected (%s)\n", goBricksDep, gbVer)
+		return goBricksStatus{verdict: verdictReplace, version: gbVer}
+	}
+	if module.IsPseudoVersion(gbVer) {
+		return goBricksStatus{verdict: verdictPseudo, version: gbVer}
+	}
+	if err := checkVersionCompatibility(gbVer); err != nil {
+		return goBricksStatus{verdict: verdictBelowFloor, version: gbVer, err: err}
+	}
+	return goBricksStatus{verdict: verdictOK, version: gbVer}
+}
+
+// checkGoBricksCompatibility reports go-bricks compatibility. It prints the
+// specific ❌ reason for each failure mode (so an I/O error never gets a
+// version-floor hint) and returns a non-nil error iff the run should fail.
+func checkGoBricksCompatibility(goModPath string, verbose bool) error {
+	st := resolveGoBricksStatus(goModPath)
+	switch st.verdict {
+	case verdictUnreadable, verdictMissing:
+		fmt.Printf("❌ %v\n", st.err)
+		return st.err
+	case verdictReplace:
+		// Local development: the local checkout governs behavior — the floor is
+		// skipped, but the dependency is still reported unconditionally.
+		fmt.Printf("ℹ️  %s: local replace directive detected (%s)\n", goBricksDep, st.version)
 		if verbose {
 			fmt.Println("   → Skipping version compatibility check (using local development version)")
 		}
 		return nil
-	}
-
-	// Display version unconditionally so the dependency status is always visible.
-	fmt.Printf("📦 %s version: %s\n", goBricksDep, gbVer)
-
-	// Pseudo-versions (e.g. from `go get @main` / untagged or fork builds) sort
-	// below any tagged floor by semver rules yet may track a commit ahead of it —
-	// treat them like a replace directive and skip the floor rather than failing
-	// with a misleading "below minimum" message.
-	if module.IsPseudoVersion(gbVer) {
-		fmt.Printf("ℹ️  %s is a pseudo-version (untagged build) — skipping the version floor\n", gbVer)
+	case verdictPseudo:
+		fmt.Printf("📦 %s version: %s\n", goBricksDep, st.version)
+		fmt.Printf("ℹ️  %s is a pseudo-version (untagged build) — skipping the version floor\n", st.version)
+		return nil
+	case verdictBelowFloor:
+		fmt.Printf("📦 %s version: %s\n", goBricksDep, st.version)
+		fmt.Printf("❌ %v\n   → OpenAPI generation requires %s %s+\n", st.err, goBricksDep, minGoBricksVer)
+		return st.err
+	default:
+		fmt.Printf("📦 %s version: %s\n", goBricksDep, st.version)
+		fmt.Printf("✅ %s version compatible (floor %s, verified through %s)\n", goBricksDep, minGoBricksVer, verifiedGoBricksVer)
 		return nil
 	}
-
-	// A below-floor (or unparseable) version is fatal.
-	if err := checkVersionCompatibility(gbVer); err != nil {
-		fmt.Printf("❌ %v\n   → OpenAPI generation requires %s %s+\n", err, goBricksDep, minGoBricksVer)
-		return err
-	}
-	fmt.Printf("✅ %s version compatible (floor %s, verified through %s)\n", goBricksDep, minGoBricksVer, verifiedGoBricksVer)
-	return nil
 }
 
 // parseGoBricksVersion parses go.mod and returns the go-bricks version.
