@@ -280,7 +280,7 @@ type nearMissCandidate struct {
 type moduleDiscoverer struct {
 	analyzer   *ProjectAnalyzer
 	modules    []models.Module
-	seen       map[string]bool              // package names already added (dedup modules)
+	seen       map[string]bool              // module directories already added (dedup modules)
 	moduleDirs map[string]bool              // directories that produced a real module
 	nearMiss   map[string]nearMissCandidate // directory -> first near-miss struct
 }
@@ -291,8 +291,11 @@ func (d *moduleDiscoverer) walk(path string, info os.FileInfo, err error) error 
 		return nil // Skip errors to continue discovery
 	}
 
-	if info.IsDir() && shouldSkipDir(info.Name()) {
-		return filepath.SkipDir
+	if info.IsDir() {
+		if d.dirShouldSkip(path, info.Name()) {
+			return filepath.SkipDir
+		}
+		return nil
 	}
 
 	if !strings.HasSuffix(path, goFileExt) || strings.HasSuffix(path, testFileExt) {
@@ -301,37 +304,70 @@ func (d *moduleDiscoverer) walk(path string, info os.FileInfo, err error) error 
 
 	module, nearMiss, err := d.analyzer.analyzeGoFile(path)
 	if err != nil {
-		// Log error but continue processing other files
+		d.warnSkippedFile(path, err)
 		return nil
 	}
 
 	dir := filepath.Dir(path)
 	if module != nil {
 		d.moduleDirs[dir] = true
-		key := module.Package
-		if !d.seen[key] {
+		if !d.seen[dir] {
 			d.modules = append(d.modules, *module)
-			d.seen[key] = true
+			d.seen[dir] = true
 		}
 		return nil
 	}
 
 	if nearMiss != "" {
-		if _, ok := d.nearMiss[dir]; !ok {
-			rel, relErr := filepath.Rel(d.analyzer.projectRoot, path)
-			if relErr != nil {
-				rel = path
-			}
-			d.nearMiss[dir] = nearMissCandidate{structName: nearMiss, relFile: rel}
-		}
+		d.recordNearMiss(dir, path, nearMiss)
 	}
 
 	return nil
 }
 
+// warnSkippedFile records a warning that path could not be parsed and was
+// therefore skipped: it may have declared modules/routes that are now missing
+// from the spec, so this is surfaced so --strict can gate on the drop.
+func (d *moduleDiscoverer) warnSkippedFile(path string, err error) {
+	rel, relErr := filepath.Rel(d.analyzer.projectRoot, path)
+	if relErr != nil {
+		rel = path
+	}
+	d.analyzer.addWarningf("skipping %s: %v", rel, err)
+}
+
+// recordNearMiss records the first near-miss struct found in dir (a struct
+// that looks like a module but has an unrecognized RegisterRoutes signature),
+// so discoverModules can warn about it iff the package never produced a real
+// module.
+func (d *moduleDiscoverer) recordNearMiss(dir, path, nearMiss string) {
+	if _, ok := d.nearMiss[dir]; !ok {
+		rel, relErr := filepath.Rel(d.analyzer.projectRoot, path)
+		if relErr != nil {
+			rel = path
+		}
+		d.nearMiss[dir] = nearMissCandidate{structName: nearMiss, relFile: rel}
+	}
+}
+
 // shouldSkipDir checks if a directory should be skipped during discovery
 func shouldSkipDir(name string) bool {
 	return name == vendorDir || name == gitDir || strings.HasPrefix(name, ".") || name == nodeModulesDir
+}
+
+// dirShouldSkip reports whether the walk should skip a directory entirely: a
+// name-based skip (vendor/.git/dotdirs/node_modules) OR a non-root
+// subdirectory that is its own Go module (has a go.mod).
+func (d *moduleDiscoverer) dirShouldSkip(path, name string) bool {
+	if shouldSkipDir(name) {
+		return true
+	}
+	if filepath.Clean(path) != filepath.Clean(d.analyzer.projectRoot) {
+		if _, err := os.Stat(filepath.Join(path, goModFileName)); err == nil {
+			return true // nested Go module: not part of this service
+		}
+	}
+	return false
 }
 
 // indexPublicDirectives records, for every comment group containing an

@@ -1145,6 +1145,207 @@ func invalid syntax {`
 	if err != nil {
 		t.Errorf("discoverModules should handle parse errors gracefully: %v", err)
 	}
+
+	// The dropped file must not be silent: whatever module/routes it declared
+	// are now missing from the spec, so a warning naming it must be surfaced
+	// (so --strict can gate on the drop; PLAN009 defect 1).
+	warnings := tempAnalyzer.Warnings(t.Context())
+	if len(warnings) == 0 {
+		t.Fatal("expected a warning for the unparsable file, got none")
+	}
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "invalid.go") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a warning mentioning invalid.go, got: %v", warnings)
+	}
+}
+
+// TestDiscoverModulesUnparsableSiblingSurvives verifies that a syntactically
+// broken .go file next to a valid module does not drop the valid module or its
+// routes: only the broken file is skipped (with a warning); its siblings in the
+// same directory are still discovered (PLAN009 defect 1).
+func TestDiscoverModulesUnparsableSiblingSurvives(t *testing.T) {
+	tempDir := t.TempDir()
+
+	validContent := `package svc
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "svc" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/ping", m.ping)
+}
+
+func (m *Module) ping(ctx server.HandlerContext) error { return nil }
+`
+	if err := os.WriteFile(filepath.Join(tempDir, "module.go"), []byte(validContent), 0644); err != nil {
+		t.Fatalf("failed to write valid module: %v", err)
+	}
+
+	brokenContent := `package svc
+func broken syntax here {`
+	if err := os.WriteFile(filepath.Join(tempDir, "broken.go"), []byte(brokenContent), 0644); err != nil {
+		t.Fatalf("failed to write broken sibling: %v", err)
+	}
+
+	a := New(tempDir)
+	modules, err := a.discoverModules()
+	if err != nil {
+		t.Fatalf("discoverModules failed: %v", err)
+	}
+
+	if len(modules) != 1 {
+		t.Fatalf("expected the valid module to survive its broken sibling, got %d modules", len(modules))
+	}
+	if len(modules[0].Routes) != 1 {
+		t.Fatalf("expected the valid module's route to survive, got %d routes", len(modules[0].Routes))
+	}
+
+	warnings := a.Warnings(t.Context())
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "broken.go") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a warning mentioning broken.go, got: %v", warnings)
+	}
+}
+
+// TestDiscoverModulesKeepsSamePackageNameAcrossDirs verifies that two distinct
+// modules in different directories which happen to share a package name are
+// both discovered, rather than the second silently colliding with the first
+// under a package-name dedup key (PLAN009 defect 2).
+func TestDiscoverModulesKeepsSamePackageNameAcrossDirs(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	write("go.mod", "module example.com/app\n\ngo 1.25\n")
+
+	moduleSrc := func(routePath string) string {
+		return `package orders
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "orders" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "` + routePath + `", m.get)
+}
+
+func (m *Module) get(ctx server.HandlerContext) error { return nil }
+`
+	}
+
+	write("modules/orders/orders.go", moduleSrc("/orders"))
+	write("modules/legacy/orders/orders.go", moduleSrc("/legacy-orders"))
+
+	project, err := New(dir).AnalyzeProject()
+	require.NoError(t, err)
+	require.Len(t, project.Modules, 2, "modules in different directories sharing a package name must both survive")
+
+	var allRoutes []models.Route
+	for i := range project.Modules {
+		allRoutes = append(allRoutes, project.Modules[i].Routes...)
+	}
+	routeForPath(t, allRoutes, "GET /orders")
+	routeForPath(t, allRoutes, "GET /legacy-orders")
+}
+
+// TestDiscoverModulesSkipsNestedGoModule verifies that a subdirectory which is
+// its own Go module (has its own go.mod) is not walked into: its routes belong
+// to that module's own spec, not the target service's (PLAN009 defect 3).
+func TestDiscoverModulesSkipsNestedGoModule(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	write("go.mod", "module example.com/app\n\ngo 1.25\n")
+	write("module.go", `package svc
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "svc" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/root", m.get)
+}
+
+func (m *Module) get(ctx server.HandlerContext) error { return nil }
+`)
+
+	write("examples/demo/go.mod", "module example.com/demo\n\ngo 1.25\n")
+	write("examples/demo/module.go", `package demo
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "demo" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/demo", m.get)
+}
+
+func (m *Module) get(ctx server.HandlerContext) error { return nil }
+`)
+
+	project, err := New(dir).AnalyzeProject()
+	require.NoError(t, err)
+	require.Len(t, project.Modules, 1, "the nested go.mod's module must not be merged into the root spec")
+	require.Len(t, project.Modules[0].Routes, 1)
+	routeForPath(t, project.Modules[0].Routes, "GET /root")
 }
 
 // TestIsMethodOnStructMissingCase tests the missing case in isMethodOnStruct
