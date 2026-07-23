@@ -950,7 +950,14 @@ func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, prefixes map[string]s
 // non-registration methods so their internal server.* calls are not mistaken
 // for routes. The struct-qualified stack guards against infinite recursion.
 func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes map[string]string) {
-	if w.recvVar == "" || w.astFile == nil {
+	if w.astFile == nil {
+		return
+	}
+	if ident, ok := call.Fun.(*ast.Ident); ok {
+		w.recurseIntoPackageFunc(ident.Name, call, prefixes)
+		return
+	}
+	if w.recvVar == "" {
 		return
 	}
 	sel, ok := call.Fun.(*ast.SelectorExpr)
@@ -976,7 +983,7 @@ func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes map[string
 		fieldName := recv.Sel.Name
 		delegate, ok := w.delegateFor(fieldName)
 		if !ok {
-			w.warnIfRegistrarPassed(call, fieldName, sel.Sel.Name, prefixes)
+			w.warnIfRegistrarPassed(call, w.recvVar+"."+fieldName+"."+sel.Sel.Name, prefixes)
 			return
 		}
 		w.recurseInto(call, delegate, fieldName, sel.Sel.Name, prefixes)
@@ -1020,7 +1027,11 @@ func (w *routeWalker) recurseInto(call *ast.CallExpr, target delegateContext, fi
 	decl := w.a.findMethodDecl(target.astFile, target.filePath, target.structName, method)
 	idx, paramName := w.a.routeRegistrarParam(decl, target.serverAliases)
 	if idx < 0 {
-		w.warnIfRegistrarPassed(call, fieldName, method, prefixes)
+		callTarget := w.recvVar + "." + method
+		if fieldName != "" {
+			callTarget = w.recvVar + "." + fieldName + "." + method
+		}
+		w.warnIfRegistrarPassed(call, callTarget, prefixes)
 		return
 	}
 	seed := w.seedFromCall(call, idx, paramName, prefixes)
@@ -1038,6 +1049,49 @@ func (w *routeWalker) recurseInto(call *ast.CallExpr, target delegateContext, fi
 		moduleName:    w.moduleName,
 		serverAliases: target.serverAliases,
 		stack:         w.stack, // shared: cycles across delegation chains must terminate
+	}
+	w.stack[key] = true
+	dw.walkBody(decl.Body, seed)
+	delete(w.stack, key)
+	w.routes = append(w.routes, dw.routes...)
+}
+
+// recurseIntoPackageFunc walks a package-level helper called with a route
+// registrar (registerUserRoutes(hr, r)). Only functions declaring a
+// server.RouteRegistrar parameter are followed; a bare call that receives a
+// known registrar but cannot be followed is warned about (its registrations
+// are being dropped). Go builtins (len, append, panic) resolve to no
+// declaration and never receive a registrar, so they stay silent.
+func (w *routeWalker) recurseIntoPackageFunc(funcName string, call *ast.CallExpr, prefixes map[string]string) {
+	decl, declFile, declPath := w.a.findPackageFuncDecl(w.astFile, w.filePath, funcName)
+	if decl == nil {
+		w.warnIfRegistrarPassed(call, funcName, prefixes)
+		return
+	}
+	key := walkStackKey(declPath, "", funcName)
+	if w.stack[key] {
+		return
+	}
+	idx, paramName := w.a.routeRegistrarParam(decl, w.serverAliases)
+	if idx < 0 {
+		w.warnIfRegistrarPassed(call, funcName, prefixes)
+		return
+	}
+	seed := w.seedFromCall(call, idx, paramName, prefixes)
+	if _, ok := seed[paramName]; !ok && paramName != "" {
+		// The param is typed server.RouteRegistrar: it is a known registrar in
+		// the callee body even when the caller's argument carried no prefix.
+		seed[paramName] = ""
+	}
+	dw := &routeWalker{
+		a:             w.a,
+		astFile:       declFile,
+		filePath:      declPath,
+		structName:    "", // free function: no receiver context
+		recvVar:       "",
+		moduleName:    w.moduleName,
+		serverAliases: w.serverAliases, // same-package convention (see resolveDelegateContext)
+		stack:         w.stack,
 	}
 	w.stack[key] = true
 	dw.walkBody(decl.Body, seed)
@@ -1063,12 +1117,10 @@ func (w *routeWalker) seedFromCall(call *ast.CallExpr, idx int, paramName string
 // warnIfRegistrarPassed emits a diagnostic when an unresolvable call receives a
 // known registrar (presence in the prefix map covers the method's own registrar
 // param and every Group-derived one) — the strongest static signal that route
-// registrations are being dropped. Calls without a registrar stay silent.
-func (w *routeWalker) warnIfRegistrarPassed(call *ast.CallExpr, fieldName, method string, prefixes map[string]string) {
-	target := w.recvVar + "." + method
-	if fieldName != "" {
-		target = w.recvVar + "." + fieldName + "." + method
-	}
+// registrations are being dropped. target is the human-readable call
+// description, e.g. "m.handler.RegisterRoutes" or a bare "registerUserRoutes".
+// Calls without a registrar stay silent.
+func (w *routeWalker) warnIfRegistrarPassed(call *ast.CallExpr, target string, prefixes map[string]string) {
 	for _, arg := range call.Args {
 		ident, ok := arg.(*ast.Ident)
 		if !ok {
@@ -1224,6 +1276,37 @@ func (a *ProjectAnalyzer) findMethodInFile(astFile *ast.File, structName, method
 			continue
 		}
 		if a.isMethodOnStruct(fn.Recv, structName) {
+			return fn
+		}
+	}
+	return nil
+}
+
+// findPackageFuncDecl finds a package-level (receiver-less) function by name:
+// current file first, then the file's package directory. Mirrors findMethodDecl.
+func (a *ProjectAnalyzer) findPackageFuncDecl(astFile *ast.File, filePath, funcName string) (*ast.FuncDecl, *ast.File, string) {
+	if decl := findFuncInFile(astFile, funcName); decl != nil {
+		return decl, astFile, filePath
+	}
+	if filePath == "" {
+		return nil, nil, ""
+	}
+	files, err := a.parsePackageDir(filepath.Dir(filePath))
+	if err == nil {
+		for _, path := range slices.Sorted(maps.Keys(files)) {
+			if decl := findFuncInFile(files[path], funcName); decl != nil {
+				return decl, files[path], path
+			}
+		}
+	}
+	return nil, nil, ""
+}
+
+// findFuncInFile finds a package-level (receiver-less) function named name
+// within one file.
+func findFuncInFile(astFile *ast.File, name string) *ast.FuncDecl {
+	for _, d := range astFile.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == name && fn.Body != nil {
 			return fn
 		}
 	}

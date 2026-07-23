@@ -4198,6 +4198,217 @@ func (m *Module) h(ctx server.HandlerContext) (server.Result[int], server.IAPIEr
 	assert.False(t, got["GET /phantom"], "a server call inside a non-registration method must not become a route")
 }
 
+// TestPackageHelperRoutesDiscovered verifies a bare package-level function call
+// (registerUserRoutes(hr, r), not a method) is followed just like a
+// same-receiver helper, and that a fully-resolved chain emits no warnings.
+func TestPackageHelperRoutesDiscovered(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/ping", m.h)
+	registerUserRoutes(hr, r)
+}
+func registerUserRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.POST(hr, r, "/users", handleCreate)
+	server.GET(hr, r, "/users/:id", handleGet)
+}
+func (m *Module) h(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+func handleCreate(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+func handleGet(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	got := routePathSet(routes)
+	for _, want := range []string{"GET /ping", "POST /users", "GET /users/{id}"} {
+		assert.True(t, got[want], "expected route %q; got %v", want, got)
+	}
+	assert.Empty(t, a.Warnings(t.Context()), "a fully-resolved package-level helper must not warn")
+}
+
+// TestPackageHelperInSiblingFileDiscovered verifies findPackageFuncDecl's
+// package-wide fallback search: the helper function lives in a second file of
+// the same package, not the file containing RegisterRoutes.
+func TestPackageHelperInSiblingFileDiscovered(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/app\n\ngo 1.25\n"), 0600))
+	sub := filepath.Join(dir, "mod")
+	require.NoError(t, os.MkdirAll(sub, 0750))
+	moduleSrc := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/ping", m.h)
+	registerUserRoutes(hr, r)
+}
+func (m *Module) h(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	helperSrc := `package mod
+import "github.com/gaborage/go-bricks/server"
+func registerUserRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.POST(hr, r, "/users", handleCreate)
+	server.GET(hr, r, "/users/:id", handleGet)
+}
+func handleCreate(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+func handleGet(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "module.go"), []byte(moduleSrc), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "helper.go"), []byte(helperSrc), 0600))
+
+	a := New(dir)
+	project, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	var routes []models.Route
+	for i := range project.Modules {
+		routes = append(routes, project.Modules[i].Routes...)
+	}
+	got := routePathSet(routes)
+	for _, want := range []string{"GET /ping", "POST /users", "GET /users/{id}"} {
+		assert.True(t, got[want], "expected route %q; got %v", want, got)
+	}
+	assert.Empty(t, a.Warnings(t.Context()), "a fully-resolved sibling-file helper must not warn")
+}
+
+// TestPackageHelperWithGroupPrefix verifies seedFromCall threads the caller's
+// group prefix into the package-level helper's registrar parameter.
+func TestPackageHelperWithGroupPrefix(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	api := r.Group("/api")
+	registerUserRoutes(hr, api)
+}
+func registerUserRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/users", handleList)
+}
+func handleList(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	got := routePathSet(routes)
+	assert.True(t, got["GET /api/users"], "expected the /api group prefix threaded through the helper; got %v", got)
+	assert.Empty(t, a.Warnings(t.Context()))
+}
+
+// TestPackageHelperWithoutRegistrarNotWalked verifies the registrar-parameter
+// gate: a bare call to a function with no server.RouteRegistrar parameter must
+// not be walked, so a server.* call in its body is not harvested as a phantom
+// route, and — because the call itself passes no registrar argument — no
+// warning fires either.
+func TestPackageHelperWithoutRegistrarNotWalked(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/ping", m.h)
+	initMetrics()
+}
+func initMetrics() {
+	server.GET(nil, nil, "/metrics", handleMetrics)
+}
+func (m *Module) h(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+func handleMetrics(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	got := routePathSet(routes)
+	assert.True(t, got["GET /ping"])
+	assert.False(t, got["GET /metrics"], "initMetrics takes no registrar and must not be walked")
+	assert.Len(t, routes, 1, "only the direct route should be discovered")
+	assert.Empty(t, a.Warnings(t.Context()), "a bare call passing no registrar argument must not warn")
+}
+
+// TestUnresolvableBareCallWithRegistrarWarns verifies the fail-loud contract
+// for bare calls: a call passing the registrar to a target with no
+// package-level function declaration (here, a package-level closure variable,
+// not a func decl) warns by name, since its routes are silently being
+// dropped. The closure is declared at package scope (not inlined in
+// RegisterRoutes' body) so its own server.GET call is not swept up by the
+// AST walk over RegisterRoutes regardless of whether f(hr, r) is followed.
+func TestUnresolvableBareCallWithRegistrarWarns(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/ping", m.h)
+	f(hr, r)
+}
+var f = func(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/dropped", handleDropped)
+}
+func (m *Module) h(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+func handleDropped(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	got := routePathSet(routes)
+	assert.True(t, got["GET /ping"])
+	assert.False(t, got["GET /dropped"], "f is a package-level var, not a func decl, and must not be walked")
+	warnings := a.Warnings(t.Context())
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "f")
+}
+
+// TestPackageHelperCycleTerminates verifies the shared stack guard terminates
+// mutual recursion between two package-level helpers, walking each exactly once.
+func TestPackageHelperCycleTerminates(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	registerHelperA(hr, r)
+}
+func registerHelperA(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/a", handle)
+	registerHelperB(hr, r)
+}
+func registerHelperB(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/b", handle)
+	registerHelperA(hr, r)
+}
+func handle(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	got := routePathSet(routes)
+	assert.True(t, got["GET /a"])
+	assert.True(t, got["GET /b"])
+	assert.Len(t, routes, 2, "each helper walked exactly once despite the mutual-recursion cycle")
+	assert.Empty(t, a.Warnings(t.Context()))
+}
+
 func TestRegistrationWalkHandlesAliasedServerImport(t *testing.T) {
 	// The server package is imported under an alias; helper recursion must still
 	// recognize the aliased srv.RouteRegistrar parameter.
