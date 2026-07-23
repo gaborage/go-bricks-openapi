@@ -2981,3 +2981,88 @@ func TestJOSEErrorCatalog(t *testing.T) {
 	assert.Contains(t, spec, "JOSE_PLAINTEXT_REJECTED")
 	assert.Contains(t, spec, "application/jose", "post-trust errors are sealed")
 }
+
+func TestPathTemplateVars(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		expected []string
+	}{
+		{name: "no template vars", path: usersAPIPath, expected: nil},
+		{name: "single var", path: "/users/{id}", expected: []string{"id"}},
+		{name: "multiple vars", path: "/orgs/{orgID}/users/{id}", expected: []string{"orgID", "id"}},
+		{name: "catch-all wildcard stays literal", path: "/files/*", expected: nil},
+		{name: "bare braces are too short to be a var", path: "/{}", expected: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pathTemplateVars(tt.path)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestAppendMissingPathParams(t *testing.T) {
+	t.Run("var already declared as path param is left unchanged", func(t *testing.T) {
+		params := []Parameter{{Name: "id", In: "path", Required: true, Schema: &OpenAPIProperty{Type: "integer"}}}
+		got := appendMissingPathParams(params, "/users/{id}")
+		require.Len(t, got, 1)
+		assert.Equal(t, "integer", got[0].Schema.Type, "declared param's own schema must survive untouched")
+	})
+
+	t.Run("missing var is appended as required string path param", func(t *testing.T) {
+		got := appendMissingPathParams(nil, "/things/{id}")
+		require.Len(t, got, 1)
+		assert.Equal(t, "id", got[0].Name)
+		assert.Equal(t, "path", got[0].In)
+		assert.True(t, got[0].Required)
+		require.NotNil(t, got[0].Schema)
+		assert.Equal(t, typeString, got[0].Schema.Type)
+	})
+
+	t.Run("same-named query param does not count as covering the path var", func(t *testing.T) {
+		params := []Parameter{{Name: "id", In: "query", Required: false, Schema: &OpenAPIProperty{Type: typeString}}}
+		got := appendMissingPathParams(params, "/things/{id}")
+		require.Len(t, got, 2, "the query param must be kept AND a synthesized path param appended")
+		assert.Equal(t, "query", got[0].In, "original query param retains its position")
+		assert.Equal(t, "id", got[1].Name)
+		assert.Equal(t, "path", got[1].In)
+		assert.True(t, got[1].Required)
+	})
+
+	t.Run("duplicate template var is appended once", func(t *testing.T) {
+		got := appendMissingPathParams(nil, "/a/{id}/b/{id}")
+		require.Len(t, got, 1)
+		assert.Equal(t, "id", got[0].Name)
+	})
+
+	t.Run("case-sensitive match: differently-cased declared param does not cover the var", func(t *testing.T) {
+		params := []Parameter{{Name: "ID", In: "path", Required: true, Schema: &OpenAPIProperty{Type: typeString}}}
+		got := appendMissingPathParams(params, "/things/{id}")
+		require.Len(t, got, 2)
+		assert.Equal(t, "ID", got[0].Name)
+		assert.Equal(t, "id", got[1].Name)
+	})
+}
+
+// TestBuildOperationSynthesizesMissingPathParams pins the previously-dead
+// Request == nil path through buildOperation: a route with no request type at
+// all (so extractParameters returns zero parameters) must still end up with a
+// declared path parameter for every {var} in its path template.
+func TestBuildOperationSynthesizesMissingPathParams(t *testing.T) {
+	gen := New("", "", "")
+	route := &models.Route{
+		Method: "GET",
+		Path:   "/things/{id}",
+	}
+
+	op := gen.buildOperation(route, map[string]string{})
+
+	require.Len(t, op.Parameters, 1)
+	assert.Equal(t, "id", op.Parameters[0].Name)
+	assert.Equal(t, "path", op.Parameters[0].In)
+	assert.True(t, op.Parameters[0].Required)
+	require.NotNil(t, op.Parameters[0].Schema)
+	assert.Equal(t, typeString, op.Parameters[0].Schema.Type)
+}
