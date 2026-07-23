@@ -40,9 +40,9 @@ LOCAL_SHA="$(git rev-parse HEAD)"
 [ "$LOCAL_SHA" = "$(git rev-parse origin/main)" ] || die "local main not in sync with origin/main; git pull"
 
 # 5b. HEAD must BE the release commit (the release-please merge is the last commit
-# touching the manifest). If main has moved past it, tagging HEAD would ship commits
-# the CHANGELOG doesn't document — and hide them from the NEXT release's notes.
-# Recover per RELEASING.md 'Recovering a missed tag': sign the release commit itself.
+#     touching the manifest). If main has moved past it, tagging HEAD would ship commits
+#     the CHANGELOG doesn't document — and hide them from the NEXT release's notes.
+#     Recover per RELEASING.md 'Recovering a missed tag': sign the release commit itself.
 RELEASE_COMMIT="$(git log -1 --format=%H -- .release-please-manifest.json)"
 [ "$LOCAL_SHA" = "$RELEASE_COMMIT" ] \
   || die "HEAD is not the release commit: .release-please-manifest.json was last bumped in

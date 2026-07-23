@@ -33,11 +33,15 @@ jobs:
       # tagged-but-label-still-pending window (release.yml publishing right now, or
       # its label-clear step failed — that failure is red in release.yml's own run)
       # only warns, so this step never races the publish pipeline.
-      - name: Fail if a merged Release PR is untagged (release-please deadlock)
+      - name: Fail if a merged Release PR is untagged (release-please #1561)
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # Plain command substitution (NOT process substitution feeding the loop):
+          # a gh failure must abort the step under set -e, not hand the loop empty
+          # input and let the check pass vacuously.
+          pr_list="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --label 'autorelease: pending' --json number,title --jq '.[] | "\(.number)\t\(.title)"')"
           deadlocked=0
           while IFS=$'\t' read -r num title; do
             [ -n "$num" ] || continue
@@ -48,5 +52,5 @@ jobs:
               echo "::error::Release PR #$num ('$title') is merged but v${ver:-X.Y.Z} is not tagged — release-please is deadlocked and will not open new Release PRs until it is. Cut the release: make release VERSION=v${ver:-X.Y.Z} (see RELEASING.md, or its 'Recovering a missed tag' section if main has moved on)."
               deadlocked=1
             fi
-          done < <(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --label 'autorelease: pending' --json number,title --jq '.[] | "\(.number)\t\(.title)"')
+          done <<< "$pr_list"
           exit "$deadlocked"
