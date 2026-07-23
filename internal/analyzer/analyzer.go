@@ -2315,6 +2315,14 @@ func (a *ProjectAnalyzer) registerType(name, pkg string, astFile *ast.File, file
 	if strings.Contains(name, ".") {
 		return a.registerQualifiedType(name, astFile)
 	}
+	// A qualified reference (server.Result[q.Type]) arrives as name="Type",
+	// pkg="q" (the import alias), which differs from the handler's own package
+	// name. Resolve it cross-package FIRST so a same-named local type cannot
+	// shadow the imported one; only fall through to local resolution for
+	// genuinely in-package references (pkg empty or == the current package).
+	if pkg != "" && pkg != astFile.Name.Name {
+		return a.registerQualifiedType(pkg+"."+name, astFile)
+	}
 	structType, err := a.findStructDefinition(astFile, filePath, name)
 	if err != nil {
 		return a.registerViaTypeSpec(name, pkg, astFile, filePath)

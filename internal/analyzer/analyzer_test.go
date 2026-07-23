@@ -3766,6 +3766,82 @@ type Item struct {
 	assert.Empty(t, a.Warnings(t.Context()))
 }
 
+// TestQualifiedTypeNotShadowedByLocal verifies a qualified route response
+// (server.Result[types.Item]) resolves to the IMPORTED types.Item even when
+// the handler's OWN package coincidentally declares a local type of the same
+// bare name ("Item"). Before the registerType guard, an unqualified
+// findStructDefinition("Item") search over the handler's own package ran
+// FIRST (name carries no dot) and would find — and wrongly register — the
+// LOCAL Item, since the local search never consulted the import alias that
+// made the reference genuinely cross-package.
+func TestQualifiedTypeNotShadowedByLocal(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(dir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
+		require.NoError(t, os.WriteFile(full, []byte(src), 0o644))
+	}
+
+	write("go.mod", "module example.com/shadow\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.45.0\n")
+	write("module.go", `package mod
+
+import (
+	"example.com/shadow/types"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+// Item is a LOCAL type coincidentally sharing its bare name with the
+// cross-package types.Item referenced below — it must NOT shadow it.
+type Item struct {
+	LocalField string `+"`json:\"localField\"`"+`
+}
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/item", m.get)
+}
+
+func (m *Module) get(ctx server.HandlerContext) (server.Result[types.Item], server.IAPIError) {
+	return server.OK(types.Item{}), nil
+}
+`)
+	write("types/item.go", `package types
+
+// Item is the type actually referenced by the route (types.Item), distinct
+// from the handler package's own local Item.
+type Item struct {
+	ImportedField string `+"`json:\"importedField\"`"+`
+}
+`)
+
+	a := New(dir)
+	project, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	require.Len(t, project.Modules, 1)
+
+	route := routeForPath(t, project.Modules[0].Routes, "GET /item")
+	require.NotNil(t, route.Response)
+	assert.Equal(t, "Item", route.Response.Name, "qualified reference registers under its own bare name")
+
+	ti := project.Types["Item"]
+	require.NotNil(t, ti, "the qualified types.Item must be registered under the bare name Item")
+	fieldNames := map[string]bool{}
+	for _, f := range ti.Fields {
+		fieldNames[f.Name] = true
+	}
+	assert.True(t, fieldNames["ImportedField"], "the qualified types.Item's field must win")
+	assert.False(t, fieldNames["LocalField"], "the handler's own local Item must NOT shadow the qualified reference")
+	assert.Empty(t, a.Warnings(t.Context()), "a successfully-resolved qualified reference must not warn")
+}
+
 // TestNamedSliceWarnsAndClears verifies a named slice used as a route response
 // (`type UserList []User`) cannot resolve to a struct: the response's Name is
 // cleared to "" (so the generator's untyped-object fallback applies instead of
