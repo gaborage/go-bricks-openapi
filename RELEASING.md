@@ -89,6 +89,28 @@ pushes the tag. It does **not** edit `CHANGELOG.md` (release-please owns it).
 goreleaser release --snapshot --clean   # inspect artifacts locally; publishes nothing
 ```
 
+### Recovering a missed tag (the #1561 deadlock)
+
+If a Release PR was merged but `make release` never ran, every later `release-please`
+run fails red with "merged but not tagged" (and opens no new Release PR) until the
+missed version is tagged. `make release` refuses to help once `main` has moved past the
+release commit — tagging HEAD would ship undocumented commits — so sign the release
+commit itself:
+
+```bash
+git checkout main && git pull
+REL_COMMIT="$(git log -1 --format=%H -- .release-please-manifest.json)"   # the merged Release PR squash
+git log -1 --oneline "$REL_COMMIT"                                        # sanity: 'chore(main): release X.Y.Z'
+git tag -s vX.Y.Z -m "Release vX.Y.Z" "$REL_COMMIT"
+git -c gpg.ssh.allowedSignersFile=.github/allowed_signers tag -v vX.Y.Z
+git push origin vX.Y.Z
+```
+
+`release.yml` re-verifies the tagged commit, publishes, and clears the
+`autorelease: pending` label; the next push to `main` (or a manual
+`release-please` run via *Actions → release-please → Run workflow*) then opens the
+Release PR for everything merged since.
+
 ## 3. What `release.yml` does (on tag push)
 
 1. **Re-verifies the tagged commit** independently — `make validate-cli` + `make test` +
