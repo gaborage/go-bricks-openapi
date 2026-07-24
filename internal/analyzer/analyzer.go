@@ -1068,11 +1068,17 @@ func (w *routeWalker) recurseIntoPackageFunc(funcName string, call *ast.CallExpr
 		w.warnIfRegistrarPassed(call, funcName, prefixes)
 		return
 	}
+	// Import aliases are file-scoped: a bare-identifier helper is guaranteed
+	// same-package but NOT guaranteed same-file, so the callee's own file must
+	// be consulted rather than reusing the caller's aliases (mirrors the
+	// qualified branch of resolveDelegateContext, which does the same for a
+	// cross-package delegate's file).
+	calleeAliases := w.a.extractImportAliases(declFile, serverImportPath)
 	key := walkStackKey(declPath, "", funcName)
 	if w.stack[key] {
 		return
 	}
-	idx, paramName := w.a.routeRegistrarParam(decl, w.serverAliases)
+	idx, paramName := w.a.routeRegistrarParam(decl, calleeAliases)
 	if idx < 0 {
 		w.warnIfRegistrarPassed(call, funcName, prefixes)
 		return
@@ -1090,7 +1096,7 @@ func (w *routeWalker) recurseIntoPackageFunc(funcName string, call *ast.CallExpr
 		structName:    "", // free function: no receiver context
 		recvVar:       "",
 		moduleName:    w.moduleName,
-		serverAliases: w.serverAliases, // same-package convention (see resolveDelegateContext)
+		serverAliases: calleeAliases, // callee's own file aliases, not the caller's
 		stack:         w.stack,
 	}
 	w.stack[key] = true

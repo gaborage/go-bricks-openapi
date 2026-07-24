@@ -4280,6 +4280,53 @@ func handleGet(ctx server.HandlerContext) (server.Result[int], server.IAPIError)
 	assert.Empty(t, a.Warnings(t.Context()), "a fully-resolved sibling-file helper must not warn")
 }
 
+// TestPackageHelperSiblingFileDifferentAlias verifies registrar detection and
+// route discovery use the CALLEE file's own server import alias, not the
+// caller's: import aliases are file-scoped, so a bare-identifier helper
+// guaranteed same-package but not guaranteed same-file must have its
+// RouteRegistrar param and its server.GET/POST calls resolved against its own
+// file's imports. The sibling file here imports the server package under a
+// different alias (srv) than the caller's file (server).
+func TestPackageHelperSiblingFileDifferentAlias(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/app\n\ngo 1.25\n"), 0600))
+	sub := filepath.Join(dir, "mod")
+	require.NoError(t, os.MkdirAll(sub, 0750))
+	moduleSrc := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	registerUserRoutes(hr, r)
+}
+`
+	helperSrc := `package mod
+import srv "github.com/gaborage/go-bricks/server"
+func registerUserRoutes(hr *srv.HandlerRegistry, r srv.RouteRegistrar) {
+	srv.GET(hr, r, "/users", handleList)
+}
+func handleList(ctx srv.HandlerContext) (srv.Result[int], srv.IAPIError) { return srv.OK(0), nil }
+`
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "module.go"), []byte(moduleSrc), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "helper.go"), []byte(helperSrc), 0600))
+
+	a := New(dir)
+	project, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	var routes []models.Route
+	for i := range project.Modules {
+		routes = append(routes, project.Modules[i].Routes...)
+	}
+	got := routePathSet(routes)
+	assert.True(t, got["GET /users"], "expected /users discovered across a file-alias boundary; got %v", got)
+	assert.Empty(t, a.Warnings(t.Context()), "a fully-resolved helper must not warn even under a divergent sibling-file alias")
+}
+
 // TestPackageHelperWithGroupPrefix verifies seedFromCall threads the caller's
 // group prefix into the package-level helper's registrar parameter.
 func TestPackageHelperWithGroupPrefix(t *testing.T) {
