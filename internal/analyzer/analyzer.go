@@ -99,6 +99,15 @@ const (
 	constraintRequired = "required"
 )
 
+// maxTypeRegistrationDepth bounds struct-registration recursion so a crafted
+// deep chain of DISTINCT types (which the identity cycle guard cannot stop)
+// cannot exhaust the stack. Set far above any realistic schema nesting; a chain
+// deeper than this is treated as pathological input and truncated with a
+// warning. Mirrors the alias-chain cap pattern (namedScalarKind /
+// resolveTypeSpecChain), applied to both the field-ref and embedded-promotion
+// recursion cycles.
+const maxTypeRegistrationDepth = 1000
+
 // ProjectAnalyzer analyzes Go-Bricks projects to extract module and route information
 type ProjectAnalyzer struct {
 	projectRoot      string
@@ -111,6 +120,7 @@ type ProjectAnalyzer struct {
 	nameAssign       map[string]string               // "pkg\x00Type" -> final schema name (collision qualification)
 	usedNames        map[string]struct{}             // final schema names already taken
 	publicDirectives map[string]map[int]struct{}     // filename -> lines where a directive comment group ends
+	depthWarned      bool                            // once-latch: registration-depth cap already warned this run
 }
 
 // New creates a new project analyzer
@@ -145,6 +155,21 @@ func (a *ProjectAnalyzer) addWarningf(format string, args ...any) {
 // APIs; the returned slice is cloned so callers cannot mutate analyzer state.
 func (a *ProjectAnalyzer) Warnings(_ context.Context) []string {
 	return slices.Clone(a.warnings)
+}
+
+// warnDepthExceeded records ONE diagnostic the first time the registration depth
+// cap truncates a type chain (from EITHER recursion cycle — field-ref or
+// embedded promotion), so --strict surfaces the pathological input without
+// flooding. The latch is what makes "warn once" real: addWarningf just appends,
+// and this can fire many times on a branching over-depth input. It takes no type
+// name on purpose — extractStructFields (Cycle B) has no type name at its
+// truncation point, so a generic message lets BOTH cycles share one helper.
+func (a *ProjectAnalyzer) warnDepthExceeded() {
+	if a.depthWarned {
+		return
+	}
+	a.depthWarned = true
+	a.addWarningf("type nesting exceeded the registration depth limit (%d) — schema truncated; check for an unbounded or excessively deep type chain", maxTypeRegistrationDepth)
 }
 
 // isFrameworkType checks if a type should be filtered out as a framework type.
@@ -183,6 +208,7 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	a.publicDirectives = make(map[string]map[int]struct{})
 	a.nameAssign = make(map[string]string)
 	a.usedNames = make(map[string]struct{})
+	a.depthWarned = false
 
 	// Discover project metadata from go.mod
 	a.discoverProjectMetadata(project)
@@ -2493,8 +2519,24 @@ func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile 
 // third-party types return nil (left to the generator's well-known map / object
 // fallback). Returns nil when the name is not a resolvable struct.
 func (a *ProjectAnalyzer) registerType(name, pkg string, astFile *ast.File, filePath string) *models.TypeInfo {
+	return a.registerTypeAt(name, pkg, astFile, filePath, 0)
+}
+
+// registerTypeAt is registerType carrying an explicit recursion depth so a
+// crafted chain of DISTINCT types (which the identity cycle guard cannot stop)
+// cannot exhaust the stack. depth increments once per struct level (via
+// registerStructAt → registerFieldRefAt); past maxTypeRegistrationDepth the
+// chain is truncated and warned about once. It mirrors registerType's control
+// flow branch-for-branch — direct struct, qualified-first (dot or foreign pkg),
+// and the 011 alias fallback — so EVERY route into registerStructAt carries the
+// depth budget.
+func (a *ProjectAnalyzer) registerTypeAt(name, pkg string, astFile *ast.File, filePath string, depth int) *models.TypeInfo {
+	if depth > maxTypeRegistrationDepth {
+		a.warnDepthExceeded()
+		return nil
+	}
 	if strings.Contains(name, ".") {
-		return a.registerQualifiedType(name, astFile)
+		return a.registerQualifiedTypeAt(name, astFile, depth)
 	}
 	// A qualified reference (server.Result[q.Type]) arrives as name="Type",
 	// pkg="q" (the import alias), which differs from the handler's own package
@@ -2502,23 +2544,26 @@ func (a *ProjectAnalyzer) registerType(name, pkg string, astFile *ast.File, file
 	// shadow the imported one; only fall through to local resolution for
 	// genuinely in-package references (pkg empty or == the current package).
 	if pkg != "" && pkg != astFile.Name.Name {
-		return a.registerQualifiedType(pkg+"."+name, astFile)
+		return a.registerQualifiedTypeAt(pkg+"."+name, astFile, depth)
 	}
 	structType, err := a.findStructDefinition(astFile, filePath, name)
 	if err != nil {
-		return a.registerViaTypeSpec(name, pkg, astFile, filePath)
+		return a.registerViaTypeSpecAt(name, pkg, astFile, filePath, depth)
 	}
-	return a.registerStruct(name, pkg, structType, astFile, filePath)
+	return a.registerStructAt(name, pkg, structType, astFile, filePath, depth)
 }
 
-// registerViaTypeSpec resolves a named non-struct declaration (alias `type X =
+// registerViaTypeSpecAt resolves a named non-struct declaration (alias `type X =
 // Y`, defined type `type X Y`, chained `type X = Y; type Y Z`, or a qualified
 // alias `type X = q.T`) to its underlying struct and registers that struct's
 // fields ONCE under the original name X — the component name routes/fields
 // reference. Returns nil for anything that does not bottom out at a struct
 // (named slices/maps, func types, unresolvable chains), leaving the caller's
-// fallback semantics intact.
-func (a *ProjectAnalyzer) registerViaTypeSpec(name, pkg string, astFile *ast.File, filePath string) *models.TypeInfo {
+// fallback semantics intact. resolveTypeSpecChain's own depth arg (seeded at 0)
+// bounds the ALIAS chain only; the registration depth threads on into
+// registerStructAt to bound the struct-FIELD recursion that runs once the chain
+// bottoms out at a struct.
+func (a *ProjectAnalyzer) registerViaTypeSpecAt(name, pkg string, astFile *ast.File, filePath string, depth int) *models.TypeInfo {
 	st, resolvedPkg, file, path, ok := a.resolveTypeSpecChain(astFile, filePath, name, 0)
 	if !ok {
 		return nil
@@ -2529,7 +2574,7 @@ func (a *ProjectAnalyzer) registerViaTypeSpec(name, pkg string, astFile *ast.Fil
 	if resolvedPkg == "" {
 		resolvedPkg = pkg
 	}
-	return a.registerStruct(name, resolvedPkg, st, file, path)
+	return a.registerStructAt(name, resolvedPkg, st, file, path, depth)
 }
 
 // resolveTypeSpecChain follows a chain of named types to the underlying struct,
@@ -2569,10 +2614,15 @@ func (a *ProjectAnalyzer) resolveTypeSpecChain(astFile *ast.File, filePath, name
 	}
 }
 
-// registerStruct registers a resolved struct under its collision-qualified schema
-// name and recurses into its fields. It registers BEFORE recursing so self- or
-// mutually-referential types (e.g. Category{Parent *Category}) terminate.
-func (a *ProjectAnalyzer) registerStruct(typeName, pkg string, structType *ast.StructType, astFile *ast.File, filePath string) *models.TypeInfo {
+// registerStructAt registers a resolved struct under its collision-qualified
+// schema name and recurses into its fields. It registers BEFORE recursing so
+// self- or mutually-referential types (e.g. Category{Parent *Category})
+// terminate via the identity guard; depth is the additive absolute bound that
+// stops a chain of DISTINCT types the identity guard cannot catch. The same
+// depth seeds BOTH cycles: extractStructFields (embedded promotion, Cycle B) and
+// registerFieldRefAt (field-ref registration, Cycle A, incremented here), so
+// they share one budget.
+func (a *ProjectAnalyzer) registerStructAt(typeName, pkg string, structType *ast.StructType, astFile *ast.File, filePath string, depth int) *models.TypeInfo {
 	key := a.schemaKey(typeName, pkg)
 	if existing, ok := a.typeRegistry[key]; ok {
 		return existing
@@ -2582,11 +2632,11 @@ func (a *ProjectAnalyzer) registerStruct(typeName, pkg string, structType *ast.S
 	a.typeRegistry[key] = ti // register before recursing (cycle guard)
 	// Seed the embedded-promotion ancestor set with this type so a self-embed
 	// (e.g. type Node struct{ *Node }) is not promoted into itself.
-	ti.Fields = a.extractStructFields(structType, pkg, astFile, filePath, map[string]struct{}{typeName: {}})
+	ti.Fields = a.extractStructFields(structType, pkg, astFile, filePath, map[string]struct{}{typeName: {}}, depth)
 	ti.JOSE = hasJOSESentinelTag(structType)
 
 	for i := range ti.Fields {
-		a.registerFieldRef(&ti.Fields[i], pkg, astFile, filePath)
+		a.registerFieldRefAt(&ti.Fields[i], pkg, astFile, filePath, depth+1)
 	}
 	return ti
 }
@@ -2670,11 +2720,18 @@ func (a *ProjectAnalyzer) resolveQualifiedStruct(qualified string, astFile *ast.
 // registerQualifiedType resolves and registers a cross-package struct as a
 // component, returning nil when it cannot be resolved in-module.
 func (a *ProjectAnalyzer) registerQualifiedType(qualified string, astFile *ast.File) *models.TypeInfo {
+	return a.registerQualifiedTypeAt(qualified, astFile, 0)
+}
+
+// registerQualifiedTypeAt is registerQualifiedType carrying the registration
+// depth (route 2 into registerStructAt) so a distinct-type chain that re-enters
+// via a cross-package reference is depth-bounded like the direct route.
+func (a *ProjectAnalyzer) registerQualifiedTypeAt(qualified string, astFile *ast.File, depth int) *models.TypeInfo {
 	q, ok := a.resolveQualifiedStruct(qualified, astFile)
 	if !ok {
 		return nil
 	}
-	return a.registerStruct(q.typeName, q.pkg, q.st, q.file, q.filePath)
+	return a.registerStructAt(q.typeName, q.pkg, q.st, q.file, q.filePath, depth)
 }
 
 // withinProjectRoot reports whether dir is inside the project root after
@@ -2822,23 +2879,25 @@ func exportedPkgName(pkg string) string {
 	return strings.ToUpper(pkg[:1]) + pkg[1:]
 }
 
-// registerFieldRef registers the named struct type(s) a field references and
+// registerFieldRefAt registers the named struct type(s) a field references and
 // stamps the matching (final, collision-qualified) ref name onto the field. A map
 // field refs its value struct via MapValueRefName (a map is never itself a $ref);
 // any other field refs its underlying struct (after pointer/slice unwrap) via
 // RefName. Fields excluded from JSON (json:"-") are skipped so a type reachable
-// only through them is not registered as an orphan component.
-func (a *ProjectAnalyzer) registerFieldRef(f *models.FieldInfo, pkg string, astFile *ast.File, filePath string) {
+// only through them is not registered as an orphan component. depth is the
+// current registration depth, passed on to registerTypeAt so the field-ref cycle
+// (Cycle A) stays bounded.
+func (a *ProjectAnalyzer) registerFieldRefAt(f *models.FieldInfo, pkg string, astFile *ast.File, filePath string, depth int) {
 	if f.JSONName == jsonSkipValue && f.ParamType == "" {
 		return
 	}
 	if vName, isMap := mapValueStructName(f.Type); isMap {
-		if reg := a.registerType(vName, pkg, astFile, filePath); reg != nil {
+		if reg := a.registerTypeAt(vName, pkg, astFile, filePath, depth); reg != nil {
 			f.MapValueRefName = reg.Name
 		}
 		return
 	}
-	if reg := a.registerType(baseStructTypeName(f.Type), pkg, astFile, filePath); reg != nil {
+	if reg := a.registerTypeAt(baseStructTypeName(f.Type), pkg, astFile, filePath, depth); reg != nil {
 		f.RefName = reg.Name
 		return // a struct ref carries no scalar underlying kind
 	}
@@ -3147,7 +3206,15 @@ func typeSpecInFile(astFile *ast.File, typeName string) *ast.TypeSpec {
 // On a JSON-name collision the shallow field wins, mirroring encoding/json's
 // shallower-depth-wins rule (so a parent field is never silently overridden by a
 // promoted one, regardless of declaration order).
-func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, pkg string, astFile *ast.File, filePath string, visited map[string]struct{}) []models.FieldInfo {
+func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, pkg string, astFile *ast.File, filePath string, visited map[string]struct{}, depth int) []models.FieldInfo {
+	// Absolute depth bound for the embedded-promotion cycle (Cycle B). It shares
+	// the registration budget seeded by registerStructAt, so a pathological deep
+	// embed chain of DISTINCT types (which the visited guard cannot stop) is
+	// truncated. No type name is available here, so the name-less latch warns.
+	if depth > maxTypeRegistrationDepth {
+		a.warnDepthExceeded()
+		return nil
+	}
 	if structType.Fields == nil {
 		return nil
 	}
@@ -3155,7 +3222,7 @@ func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, pkg st
 	var shallow, promoted []models.FieldInfo
 	for _, field := range structType.Fields.List {
 		if len(field.Names) == 0 {
-			fields, isPromotion := a.embeddedFields(field, pkg, astFile, filePath, visited)
+			fields, isPromotion := a.embeddedFields(field, pkg, astFile, filePath, visited, depth)
 			if isPromotion {
 				promoted = append(promoted, fields...)
 			} else {
@@ -3221,7 +3288,7 @@ func mergeFieldsByPrecedence(shallow, promoted []models.FieldInfo) []models.Fiel
 // non-struct like `type Code string` — is skipped without crashing. The visited
 // ancestor set (add-before-recurse / delete-after backtracking) terminates self-
 // and mutually-embedded cycles.
-func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *ast.File, filePath string, visited map[string]struct{}) (fields []models.FieldInfo, promoted bool) {
+func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *ast.File, filePath string, visited map[string]struct{}, depth int) (fields []models.FieldInfo, promoted bool) {
 	typeName := baseStructTypeName(a.typeToString(field.Type))
 
 	// An explicit json name turns embedding into nesting (a parent-level field).
@@ -3240,10 +3307,11 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *
 	if _, seen := visited[typeName]; seen {
 		return nil, false // cycle / self-embed guard
 	}
-	// Local embed: promote the struct's fields from this package.
+	// Local embed: promote the struct's fields from this package. depth+1 is the
+	// increment edge for the embedded-promotion cycle (Cycle B).
 	if embedded, err := a.findStructDefinition(astFile, filePath, typeName); err == nil {
 		visited[typeName] = struct{}{}
-		fields = a.extractStructFields(embedded, pkg, astFile, filePath, visited)
+		fields = a.extractStructFields(embedded, pkg, astFile, filePath, visited, depth+1)
 		delete(visited, typeName) // backtrack: keep visited scoped to the current chain
 		return fields, true
 	}
@@ -3251,7 +3319,7 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *
 	// so its fields are extracted in their own package context.
 	if q, ok := a.resolveQualifiedStruct(typeName, astFile); ok {
 		visited[typeName] = struct{}{}
-		fields = a.extractStructFields(q.st, q.pkg, q.file, q.filePath, visited)
+		fields = a.extractStructFields(q.st, q.pkg, q.file, q.filePath, visited, depth+1)
 		delete(visited, typeName)
 		return fields, true
 	}

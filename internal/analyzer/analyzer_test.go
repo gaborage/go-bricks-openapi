@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -3924,6 +3925,136 @@ func (m *Module) get(ctx server.HandlerContext) (server.Result[T0], server.IAPIE
 
 	warnings := a.Warnings(t.Context())
 	require.NotEmpty(t, warnings, "the depth-capped chain must produce the Step 3 warning")
+}
+
+// deepChainModuleSrc builds a single-module source file whose route response is
+// T0, followed by a chain T0..Tn of n DISTINCT types generated from linkTemplate
+// (two %d verbs: the current and next index) plus an empty leaf Tn. Because every
+// type is distinct, the identity/visited cycle guards never trip — only the
+// absolute depth cap can stop the recursion. linkTemplate selects the cycle:
+// "type T%d struct { Next *T%d }" is a NAMED field (Cycle A); "type T%d struct
+// { T%d }" is an ANONYMOUS embed (Cycle B).
+func deepChainModuleSrc(linkTemplate string, n int) string {
+	var b strings.Builder
+	b.WriteString(`package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+`)
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, linkTemplate, i, i+1)
+	}
+	fmt.Fprintf(&b, "type T%d struct{}\n", n)
+	b.WriteString(`func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/t", m.get)
+}
+func (m *Module) get(ctx server.HandlerContext) (server.Result[T0], server.IAPIError) { return server.OK(T0{}), nil }
+`)
+	return b.String()
+}
+
+// hasDepthLimitWarning reports whether the registration-depth cap latched a
+// warning (matches warnDepthExceeded's message).
+func hasDepthLimitWarning(warnings []string) bool {
+	return slices.ContainsFunc(warnings, func(w string) bool {
+		return strings.Contains(w, "registration depth limit")
+	})
+}
+
+// TestDeepFieldRefChainIsBoundedAndWarns drives Cycle A (registerStruct →
+// registerFieldRef → registerType) with a NAMED-field chain of ~1100 distinct
+// types. The identity guard cannot stop it (every type is unique); the depth cap
+// must truncate the chain and latch one warning. A ~1100-link chain processes
+// fast even UNBOUNDED, so the bite under test is the WARNING, not a timeout.
+func TestDeepFieldRefChainIsBoundedAndWarns(t *testing.T) {
+	src := deepChainModuleSrc("type T%d struct { Next *T%d }\n", 1100)
+	a, _ := analyzeSingleModule(t, src)
+	warnings := a.Warnings(t.Context())
+	require.True(t, hasDepthLimitWarning(warnings),
+		"deep field-ref chain (Cycle A) must warn once; got %v", warnings)
+}
+
+// TestDeepEmbeddedChainIsBoundedAndWarns drives Cycle B (extractStructFields ↔
+// embeddedFields) with an ANONYMOUS-embed chain of ~1100 distinct types, which
+// defeats the visited ancestor guard (every type distinct). This is the test
+// that catches a fix threading ONLY Cycle A — the field-ref test above would
+// still pass in that broken state; this one would not.
+func TestDeepEmbeddedChainIsBoundedAndWarns(t *testing.T) {
+	src := deepChainModuleSrc("type T%d struct { T%d }\n", 1100)
+	a, _ := analyzeSingleModule(t, src)
+	warnings := a.Warnings(t.Context())
+	require.True(t, hasDepthLimitWarning(warnings),
+		"deep embedded-promotion chain (Cycle B) must warn once; got %v", warnings)
+}
+
+// TestDeepQualifiedChainIsBounded drives route 2 (registerType →
+// registerQualifiedType → registerStruct): the deep chain lives in an in-module
+// sub-package referenced as sub.T0, so registration enters cross-package before
+// recursing. The cap must bound this route too.
+func TestDeepQualifiedChainIsBounded(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/app\n\ngo 1.25\n"), 0600))
+
+	mod := filepath.Join(dir, "mod")
+	require.NoError(t, os.MkdirAll(mod, 0750))
+	modSrc := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+	"example.com/app/sub"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/t", m.get)
+}
+func (m *Module) get(ctx server.HandlerContext) (server.Result[sub.T0], server.IAPIError) { return server.OK(sub.T0{}), nil }
+`
+	require.NoError(t, os.WriteFile(filepath.Join(mod, "module.go"), []byte(modSrc), 0600))
+
+	subDir := filepath.Join(dir, "sub")
+	require.NoError(t, os.MkdirAll(subDir, 0750))
+	var b strings.Builder
+	b.WriteString("package sub\n\n")
+	const n = 1100
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, "type T%d struct { Next *T%d }\n", i, i+1)
+	}
+	fmt.Fprintf(&b, "type T%d struct{}\n", n)
+	require.NoError(t, os.WriteFile(filepath.Join(subDir, "types.go"), []byte(b.String()), 0600))
+
+	a := New(dir)
+	_, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	warnings := a.Warnings(t.Context())
+	require.True(t, hasDepthLimitWarning(warnings),
+		"deep cross-package chain (route 2) must warn once; got %v", warnings)
+}
+
+// TestModestDepthChainRegistersFully guards the lower bound: a legitimate
+// depth-20 named-field chain must register EVERY level and emit NO depth-limit
+// warning, so the cap can never clip real (deeply-but-finitely nested) schemas.
+func TestModestDepthChainRegistersFully(t *testing.T) {
+	const n = 20
+	src := deepChainModuleSrc("type T%d struct { Next *T%d }\n", n)
+	a, _ := analyzeSingleModule(t, src)
+
+	warnings := a.Warnings(t.Context())
+	require.False(t, hasDepthLimitWarning(warnings),
+		"a modest depth-%d chain must NOT trip the cap; got %v", n, warnings)
+
+	// Every level registered, including the deepest leaf Tn — no truncation.
+	for i := 0; i <= n; i++ {
+		_, ok := a.typeRegistry[fmt.Sprintf("T%d", i)]
+		require.Truef(t, ok, "T%d must be registered fully in a modest chain", i)
+	}
 }
 
 func TestAnalyzeProjectStampsModuleIdentity(t *testing.T) {
