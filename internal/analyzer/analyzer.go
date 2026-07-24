@@ -861,33 +861,45 @@ func collectLocalNames(body *ast.BlockStmt) map[string]bool {
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch stmt := n.(type) {
 		case *ast.AssignStmt:
-			if stmt.Tok != token.DEFINE {
-				return true
-			}
-			for _, lhs := range stmt.Lhs {
-				if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
-					names[id.Name] = true
-				}
-			}
+			addDefinedNames(names, stmt)
 		case *ast.GenDecl:
-			if stmt.Tok != token.VAR {
-				return true
-			}
-			for _, spec := range stmt.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-				for _, id := range vs.Names {
-					if id.Name != "_" {
-						names[id.Name] = true
-					}
-				}
-			}
+			addVarNames(names, stmt)
 		}
 		return true
 	})
 	return names
+}
+
+// addDefinedNames records into names the identifiers bound by a short
+// variable declaration (x := ...), skipping the blank identifier.
+func addDefinedNames(names map[string]bool, stmt *ast.AssignStmt) {
+	if stmt.Tok != token.DEFINE {
+		return
+	}
+	for _, lhs := range stmt.Lhs {
+		if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+			names[id.Name] = true
+		}
+	}
+}
+
+// addVarNames records into names the identifiers bound by a var
+// declaration, skipping the blank identifier.
+func addVarNames(names map[string]bool, stmt *ast.GenDecl) {
+	if stmt.Tok != token.VAR {
+		return
+	}
+	for _, spec := range stmt.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+		for _, id := range vs.Names {
+			if id.Name != "_" {
+				names[id.Name] = true
+			}
+		}
+	}
 }
 
 // routeFromCall builds a route from a server.METHOD(...) call, or nil if the call
