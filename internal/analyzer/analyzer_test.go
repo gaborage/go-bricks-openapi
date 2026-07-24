@@ -5769,3 +5769,247 @@ func (m *Module) list(ctx server.HandlerContext) (server.Result[Product], server
 		})
 	}
 }
+
+// TestCrossPackageImportCannotEscapeProjectRoot verifies that a traversing
+// import path (lexical "..") whose remainder points outside the module root is
+// not resolved: inModuleDir's containment guard rejects it so the out-of-tree
+// type never enters project.Types. (Copied from plan 006, which this plan
+// subsumes.)
+func TestCrossPackageImportCannotEscapeProjectRoot(t *testing.T) {
+	base := t.TempDir()
+	projectDir := filepath.Join(base, "project")
+	outsideDir := filepath.Join(base, "outside")
+	require.NoError(t, os.MkdirAll(projectDir, 0o750))
+	require.NoError(t, os.MkdirAll(outsideDir, 0o750))
+
+	write := func(path, src string) {
+		t.Helper()
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+		require.NoError(t, os.WriteFile(path, []byte(src), 0o600))
+	}
+
+	// go.mod declares module "example.com/app"; the module root is projectDir.
+	write(filepath.Join(projectDir, "go.mod"),
+		"module example.com/app\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.45.0\n")
+
+	// The in-project module imports a TRAVERSING path: "example.com/app/../outside/secret"
+	// resolves, via inModuleDir, to base/outside/secret — OUTSIDE projectDir.
+	write(filepath.Join(projectDir, "api.go"), `package app
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+
+	secret "example.com/app/../outside/secret"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "app" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.POST(hr, r, "/x", m.create, server.WithTags("app"))
+}
+
+func (m *Module) create(req secret.ExfiltratedSecretConfig, ctx server.HandlerContext) (server.Result[secret.ExfiltratedSecretConfig], server.IAPIError) {
+	return server.NewResult(200, secret.ExfiltratedSecretConfig{}), nil
+}
+`)
+
+	// The out-of-tree package the traversing import points at.
+	write(filepath.Join(outsideDir, "secret", "leak.go"), `package secret
+
+type ExfiltratedSecretConfig struct {
+	RootPasswordHash string `+"`json:\"root_password_hash\"`"+`
+	PrivateAPIKey    string `+"`json:\"private_api_key\"`"+`
+}
+`)
+
+	project, err := New(projectDir).AnalyzeProject()
+	require.NoError(t, err)
+
+	_, leaked := project.Types["ExfiltratedSecretConfig"]
+	assert.False(t, leaked, "a traversing import must NOT pull an out-of-tree type into the spec")
+}
+
+// TestSymlinkedGoFileOutsideTreeNotRead verifies the WALK path: an in-tree
+// symlink whose name is a normal .go file but whose target escapes the project
+// tree must not be read. The out-of-tree struct is DEFINED ONLY outside and is
+// REFERENCED by the root module's handler (so it would register if read); the
+// containment check (symlink resolution in validateGoFilePath, applied by
+// parsePackageDir per entry) keeps it out. A legitimate in-tree response type
+// proves the guard is not over-broad.
+func TestSymlinkedGoFileOutsideTreeNotRead(t *testing.T) {
+	outside := t.TempDir() // a SIBLING dir, not under the project
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret.go"),
+		[]byte("package app\n\ntype ExfiltratedSecretConfig struct {\n\tOutsideOnlyToken string\n}\n"), 0o600))
+
+	projectDir := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(projectDir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o750))
+		require.NoError(t, os.WriteFile(full, []byte(src), 0o600))
+	}
+	write("go.mod", "module example.com/app\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.45.0\n")
+	// The root module's handler references ExfiltratedSecretConfig (defined ONLY
+	// out-of-tree, reachable solely via the planted symlink) as its request, plus
+	// a legitimate in-tree PublicResponse as its response.
+	write("app.go", `package app
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "app" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+type PublicResponse struct {
+	OK bool `+"`json:\"ok\"`"+`
+}
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.POST(hr, r, "/x", m.create, server.WithTags("app"))
+}
+
+func (m *Module) create(req ExfiltratedSecretConfig, ctx server.HandlerContext) (server.Result[PublicResponse], server.IAPIError) {
+	return server.NewResult(200, PublicResponse{}), nil
+}
+`)
+
+	// Plant an in-tree symlink whose name is a normal .go file but whose target
+	// escapes the project tree; os.ReadFile / parsePackageDir would follow it.
+	if err := os.Symlink(filepath.Join(outside, "secret.go"), filepath.Join(projectDir, "leak.go")); err != nil {
+		t.Skip("symlinks unavailable on this platform")
+	}
+
+	project, err := New(projectDir).AnalyzeProject()
+	require.NoError(t, err)
+
+	_, leaked := project.Types["ExfiltratedSecretConfig"]
+	assert.False(t, leaked, "a symlinked out-of-tree .go file must NOT be read into the spec")
+	_, ok := project.Types["PublicResponse"]
+	assert.True(t, ok, "a legitimate in-tree type must still resolve")
+}
+
+// TestSymlinkedPackageDirEntryNotRead verifies the CROSS-PACKAGE dir path: an
+// in-tree package dir holds a real file plus a symlink entry whose target
+// escapes the tree. A root handler references both the real type (triggering
+// parsePackageDir on the subpackage) and the out-of-tree type (reachable only
+// through the symlink); the per-entry containment check keeps the escaping
+// entry out while the real type still resolves.
+func TestSymlinkedPackageDirEntryNotRead(t *testing.T) {
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret.go"),
+		[]byte("package sub\n\ntype ExfiltratedSecretConfig struct {\n\tOutsideOnlyToken string\n}\n"), 0o600))
+
+	projectDir := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(projectDir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o750))
+		require.NoError(t, os.WriteFile(full, []byte(src), 0o600))
+	}
+	write("go.mod", "module example.com/app\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.45.0\n")
+	// Legitimate in-tree subpackage with a real exported type.
+	write("sub/sub.go", `package sub
+
+type RealType struct {
+	ID int64 `+"`json:\"id\"`"+`
+}
+`)
+	// Root module handler references sub.RealType (triggers parsePackageDir(sub))
+	// AND sub.ExfiltratedSecretConfig (defined ONLY out-of-tree, reachable solely
+	// through the planted symlink sub/leak.go).
+	write("app.go", `package app
+
+import (
+	"example.com/app/sub"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "app" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.POST(hr, r, "/x", m.leak, server.WithTags("app"))
+}
+
+func (m *Module) leak(req sub.ExfiltratedSecretConfig, ctx server.HandlerContext) (server.Result[sub.RealType], server.IAPIError) {
+	return server.NewResult(200, sub.RealType{}), nil
+}
+`)
+
+	if err := os.Symlink(filepath.Join(outside, "secret.go"), filepath.Join(projectDir, "sub", "leak.go")); err != nil {
+		t.Skip("symlinks unavailable on this platform")
+	}
+
+	project, err := New(projectDir).AnalyzeProject()
+	require.NoError(t, err)
+
+	_, leaked := project.Types["ExfiltratedSecretConfig"]
+	assert.False(t, leaked, "a symlinked out-of-tree entry inside an in-tree package dir must NOT be read")
+	_, ok := project.Types["RealType"]
+	assert.True(t, ok, "the legitimate in-tree subpackage type must still resolve")
+}
+
+// TestLegitimateInModuleResolutionStillWorks guards against over-tightening: a
+// normal in-module subpackage import must still resolve its struct into
+// project.Types with no error. On macOS this is the guard that withinProjectRoot
+// resolves symlinks on BOTH the root and the candidate (t.TempDir's /var ->
+// /private/var), so a legitimate in-tree file is not spuriously rejected.
+func TestLegitimateInModuleResolutionStillWorks(t *testing.T) {
+	projectDir := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(projectDir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o750))
+		require.NoError(t, os.WriteFile(full, []byte(src), 0o600))
+	}
+	write("go.mod", "module example.com/app\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.45.0\n")
+	write("widgets/widget.go", `package widgets
+
+type Widget struct {
+	SKU string `+"`json:\"sku\"`"+`
+}
+`)
+	write("app.go", `package app
+
+import (
+	"example.com/app/widgets"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "app" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/widget", m.get)
+}
+
+func (m *Module) get(ctx server.HandlerContext) (server.Result[widgets.Widget], server.IAPIError) {
+	return server.NewResult(200, widgets.Widget{}), nil
+}
+`)
+
+	project, err := New(projectDir).AnalyzeProject()
+	require.NoError(t, err)
+	_, ok := project.Types["Widget"]
+	assert.True(t, ok, "a normal in-module subpackage type must resolve into the registry")
+}
