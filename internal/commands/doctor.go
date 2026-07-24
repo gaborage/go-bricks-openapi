@@ -388,10 +388,18 @@ func parseGoBricksVersion(goModPath string, content []byte) (gbVer string, isRep
 // applies only when it would affect module resolution: an unversioned
 // `replace old => new` only when old is actually required (per the Go Modules
 // Reference, a replace whose left side is not required has no effect); a
-// versioned `replace old vX => new` only when vX matches the selected version
-// (for a single go.mod, the require line's version). Inert replaces are
-// skipped so they cannot disable the version floor; ok is false when none
-// applies.
+// versioned `replace old vX => new` only when vX matches the version the
+// module graph selects. Inert replaces are skipped so they cannot disable the
+// version floor; ok is false when none applies.
+//
+// Limitation: this is a static, single-go.mod check, so the direct require
+// line (required) is used as the selected-version proxy. That is exact for a
+// tidy single-module go.mod, where the require line already reflects the
+// MVS-selected version. It does not resolve the transitive module graph, so an
+// untidy project whose direct require lags a version a dependency raises could
+// have a version-scoped replace keyed to the stale direct version treated as
+// active. Full build-list resolution (go list -m all) is out of scope for this
+// lightweight pre-flight; `go mod tidy` restores an accurate direct require.
 func applicableReplaceTarget(replaces []*modfile.Replace, required string) (string, bool) {
 	for _, r := range replaces {
 		if r.Old.Path != goBricksModulePath {
