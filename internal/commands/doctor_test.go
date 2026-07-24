@@ -1061,6 +1061,30 @@ replace github.com/gaborage/go-bricks v0.10.0 => ../local-go-bricks
 	}
 }
 
+// TestParseGoBricksVersionUnversionedReplaceNoRequireIsMissing is a CodeRabbit
+// PR #36 follow-up to PLAN013 defect 2: per the Go Modules Reference, a
+// replace whose left-side module is not required by the main module or any
+// dependency has NO effect — it does not add the module to the build. So an
+// unversioned `replace go-bricks => ...` with no matching `require go-bricks`
+// does not actually depend on go-bricks at all; the correct verdict is
+// errGoBricksMissing (isReplace=false), not "replace wins / skip the floor".
+func TestParseGoBricksVersionUnversionedReplaceNoRequireIsMissing(t *testing.T) {
+	goModContent := `module test
+replace github.com/gaborage/go-bricks => ../local-go-bricks
+`
+	version, isReplace, err := parseGoBricksVersion("go.mod", []byte(goModContent))
+
+	if !errors.Is(err, errGoBricksMissing) {
+		t.Fatalf("expected errGoBricksMissing for an inert unversioned replace with no require, got %v", err)
+	}
+	if isReplace {
+		t.Error("expected isReplace=false for an inert (non-required) unversioned replace, got true")
+	}
+	if version != "" {
+		t.Errorf("expected empty version, got %q", version)
+	}
+}
+
 // TestResolveGoBricksStatusInertReplaceIsBelowFloor is the security-of-the-gate
 // assertion for PLAN013 defect 2: a version-scoped replace that does not match
 // the require line (so Go itself would never apply it) must NOT bypass the

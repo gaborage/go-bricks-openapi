@@ -372,16 +372,21 @@ func parseGoBricksVersion(goModPath string, content []byte) (gbVer string, isRep
 	}
 
 	// A replace wins (local/fork development) only when it APPLIES: an
-	// unversioned `replace old => new` always does; a versioned
-	// `replace old vX => new` applies only when vX is the version the module
-	// graph selects — for a single go.mod, the require line's version. An
-	// inert replace must not disable the version floor.
+	// unversioned `replace old => new` applies only when old is actually
+	// required (per the Go Modules Reference, a replace whose left side is
+	// not required by the main module or a dependency has no effect); a
+	// versioned `replace old vX => new` applies only when vX is the version
+	// the module graph selects — for a single go.mod, the require line's
+	// version. An inert replace must not disable the version floor.
 	for _, r := range mf.Replace {
 		if r.Old.Path != goBricksModulePath {
 			continue
 		}
 		if r.Old.Version != "" && r.Old.Version != required {
 			continue // version-scoped to a version not in use: inert
+		}
+		if r.Old.Version == "" && required == "" {
+			continue // unversioned replace of a non-required module: no effect per Go modules
 		}
 		target := r.New.Path
 		if r.New.Version != "" {

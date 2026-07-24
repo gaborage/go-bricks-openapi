@@ -1149,6 +1149,9 @@ func TestRunGenerateStrictFailsOnNoRoutes(t *testing.T) {
 	err := runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out, Strict: true})
 	require.Error(t, err, "modules discovered but no routes must fail --strict")
 	assert.Contains(t, err.Error(), "--strict")
+
+	_, statErr := os.Stat(out)
+	assert.True(t, os.IsNotExist(statErr), "strict failure must not leave an artifact")
 }
 
 // TestRunGenerateStrictFailsOnUnparsableFile proves --strict fails end-to-end
