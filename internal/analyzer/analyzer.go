@@ -457,7 +457,8 @@ func (a *ProjectAnalyzer) analyzeGoFile(filePath string) (module *models.Module,
 		return nil, "", fmt.Errorf("invalid file path %s: %w", filePath, err)
 	}
 
-	// #nosec G304 - filePath is validated to be a .go file within project root
+	// #nosec G304 - filePath validated within project root (incl. symlink
+	// resolution) by validateGoFilePath before this read.
 	src, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to read file %s: %w", filePath, err)
@@ -2111,6 +2112,14 @@ func (a *ProjectAnalyzer) validateGoFilePath(filePath string) error {
 		return errors.New("not a Go file")
 	}
 
+	// A target repo may plant an in-tree symlink pointing outside the project;
+	// os.ReadFile would follow it. Resolve links and re-check containment
+	// (mirrors doctor.go's go.mod handling). A not-exist path keeps the lexical
+	// result above.
+	if !a.withinProjectRoot(cleanPath) {
+		return errors.New("path resolves outside project root")
+	}
+
 	return nil
 }
 
@@ -2725,6 +2734,40 @@ func (a *ProjectAnalyzer) registerQualifiedTypeAt(qualified string, astFile *ast
 	return a.registerStructAt(q.typeName, q.pkg, q.st, q.file, q.filePath, depth)
 }
 
+// withinProjectRoot reports whether dir is inside the project root after
+// resolving to absolute, cleaned, symlink-resolved paths. Cross-package
+// resolution and file reads use it to avoid reading source outside the
+// --project tree (a target controls its own import strings and may plant
+// in-tree symlinks). A not-exist path is evaluated lexically (EvalSymlinks
+// fails on it), which is fine: a nonexistent dir resolves nothing.
+func (a *ProjectAnalyzer) withinProjectRoot(dir string) bool {
+	absRoot, err := filepath.Abs(a.projectRoot)
+	if err != nil {
+		return false
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(absDir); err == nil {
+		absDir = resolved
+		// Normalize the root the SAME way, but ONLY when the candidate resolved,
+		// so both sides match (macOS /var -> /private/var). A nonexistent
+		// candidate (EvalSymlinks IsNotExist) leaves BOTH lexical — a legit
+		// not-yet-created in-tree path must not be rejected, and it can't be read.
+		if resolvedRoot, rerr := filepath.EvalSymlinks(absRoot); rerr == nil {
+			absRoot = resolvedRoot
+		}
+	} else if !os.IsNotExist(err) {
+		return false // a real resolution error (e.g. symlink loop) is not containable
+	}
+	rel, err := filepath.Rel(filepath.Clean(absRoot), filepath.Clean(absDir))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
 // inModuleDir translates an import path to a filesystem dir under projectRoot when
 // it is within this module, else reports false.
 func (a *ProjectAnalyzer) inModuleDir(importPath string) (string, bool) {
@@ -2739,7 +2782,11 @@ func (a *ProjectAnalyzer) inModuleDir(importPath string) (string, bool) {
 		return "", false
 	}
 	rel := strings.TrimPrefix(importPath, prefix)
-	return filepath.Join(a.projectRoot, filepath.FromSlash(rel)), true
+	dir := filepath.Join(a.projectRoot, filepath.FromSlash(rel))
+	if !a.withinProjectRoot(dir) {
+		return "", false // traversing import escapes the project tree
+	}
+	return dir, true
 }
 
 // fileImports maps each import's local alias to its import path. An explicit alias
@@ -2810,6 +2857,9 @@ func (a *ProjectAnalyzer) parsePackageDir(dir string) (map[string]*ast.File, err
 			continue
 		}
 		full := filepath.Join(dir, name)
+		if err := a.validateGoFilePath(full); err != nil {
+			continue // skip entries that escape containment (e.g. symlinks out of tree)
+		}
 		f, perr := a.parseGoFile(full, nil)
 		if perr != nil {
 			continue
