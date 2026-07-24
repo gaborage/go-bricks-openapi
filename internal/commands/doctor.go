@@ -371,14 +371,29 @@ func parseGoBricksVersion(goModPath string, content []byte) (gbVer string, isRep
 		}
 	}
 
-	// A replace wins (local/fork development) only when it APPLIES: an
-	// unversioned `replace old => new` applies only when old is actually
-	// required (per the Go Modules Reference, a replace whose left side is
-	// not required by the main module or a dependency has no effect); a
-	// versioned `replace old vX => new` applies only when vX is the version
-	// the module graph selects — for a single go.mod, the require line's
-	// version. An inert replace must not disable the version floor.
-	for _, r := range mf.Replace {
+	// A replace wins (local/fork development) only when it APPLIES; an inert
+	// replace must not disable the version floor. See applicableReplaceTarget.
+	if target, ok := applicableReplaceTarget(mf.Replace, required); ok {
+		return target, true, nil
+	}
+
+	if required != "" {
+		return required, false, nil
+	}
+	return "", false, errGoBricksMissing
+}
+
+// applicableReplaceTarget returns the target of the first replace directive
+// that actually applies to the go-bricks module, and ok=true. A replace
+// applies only when it would affect module resolution: an unversioned
+// `replace old => new` only when old is actually required (per the Go Modules
+// Reference, a replace whose left side is not required has no effect); a
+// versioned `replace old vX => new` only when vX matches the selected version
+// (for a single go.mod, the require line's version). Inert replaces are
+// skipped so they cannot disable the version floor; ok is false when none
+// applies.
+func applicableReplaceTarget(replaces []*modfile.Replace, required string) (string, bool) {
+	for _, r := range replaces {
 		if r.Old.Path != goBricksModulePath {
 			continue
 		}
@@ -392,13 +407,9 @@ func parseGoBricksVersion(goModPath string, content []byte) (gbVer string, isRep
 		if r.New.Version != "" {
 			target += "@" + r.New.Version
 		}
-		return target, true, nil
+		return target, true
 	}
-
-	if required != "" {
-		return required, false, nil
-	}
-	return "", false, errGoBricksMissing
+	return "", false
 }
 
 // checkVersionCompatibility validates go-bricks version meets minimum requirements
