@@ -757,7 +757,12 @@ type routeWalker struct {
 	// struct/package/alias lookup would otherwise rerun on every matching
 	// call node (nil entry = resolution failed).
 	delegates map[string]*delegateContext
-	routes    []models.Route
+	// localNames is the set of names locally declared (:= or var) anywhere in
+	// the walked body — a body-wide, not block-scoped, approximation (see
+	// collectLocalNames). A bare call to one of these names binds to the
+	// local, never a same-named package-level function.
+	localNames map[string]bool
+	routes     []models.Route
 }
 
 // walkBody collects server.METHOD route registrations from a body (with
@@ -773,6 +778,12 @@ func (w *routeWalker) walkBody(body *ast.BlockStmt, seed map[string]string) {
 		if _, ok := prefixes[reg]; !ok {
 			prefixes[reg] = prefix
 		}
+	}
+	if w.localNames == nil {
+		w.localNames = map[string]bool{}
+	}
+	for name := range collectLocalNames(body) {
+		w.localNames[name] = true
 	}
 	ast.Inspect(body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -831,6 +842,64 @@ func (w *routeWalker) collectGroupPrefixes(body *ast.BlockStmt) map[string]strin
 		return true
 	})
 	return prefixes
+}
+
+// collectLocalNames returns the set of names locally declared anywhere in
+// body via a short variable declaration (x := ...) or a var statement. It is
+// a body-wide, not block-scoped, approximation — the same tradeoff
+// collectGroupPrefixes makes — so maybeRecurseHelper can tell a bare call to
+// one of these names apart from a call to a same-named package-level
+// function: Go binds the call to the local (almost always a closure
+// shadowing a helper of the same name), never the package declaration.
+//
+// Over-skipping is possible only when a package helper's name collides with
+// an unrelated func-typed local declared in a different block of the same
+// body; that is a rare theoretical false-negative, accepted as out of
+// proportion to fix with full block-scope tracking.
+func collectLocalNames(body *ast.BlockStmt) map[string]bool {
+	names := map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch stmt := n.(type) {
+		case *ast.AssignStmt:
+			addDefinedNames(names, stmt)
+		case *ast.GenDecl:
+			addVarNames(names, stmt)
+		}
+		return true
+	})
+	return names
+}
+
+// addDefinedNames records into names the identifiers bound by a short
+// variable declaration (x := ...), skipping the blank identifier.
+func addDefinedNames(names map[string]bool, stmt *ast.AssignStmt) {
+	if stmt.Tok != token.DEFINE {
+		return
+	}
+	for _, lhs := range stmt.Lhs {
+		if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+			names[id.Name] = true
+		}
+	}
+}
+
+// addVarNames records into names the identifiers bound by a var
+// declaration, skipping the blank identifier.
+func addVarNames(names map[string]bool, stmt *ast.GenDecl) {
+	if stmt.Tok != token.VAR {
+		return
+	}
+	for _, spec := range stmt.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+		for _, id := range vs.Names {
+			if id.Name != "_" {
+				names[id.Name] = true
+			}
+		}
+	}
 }
 
 // routeFromCall builds a route from a server.METHOD(...) call, or nil if the call
@@ -950,7 +1019,27 @@ func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, prefixes map[string]s
 // non-registration methods so their internal server.* calls are not mistaken
 // for routes. The struct-qualified stack guards against infinite recursion.
 func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes map[string]string) {
-	if w.recvVar == "" || w.astFile == nil {
+	if w.astFile == nil {
+		return
+	}
+	if ident, ok := call.Fun.(*ast.Ident); ok {
+		if w.localNames[ident.Name] {
+			// The identifier is a local binding (almost always a closure) that
+			// shadows any package-level function of the same name; a bare call
+			// to it binds to the local, not the package helper. A closure's
+			// routes are already discovered by the inline ast.Inspect walk over
+			// its body, so skipping here drops nothing for that (overwhelmingly
+			// common) case. A non-closure local delegate (helper := getHelper())
+			// stays an unfollowed local-variable delegate — a pre-existing,
+			// deliberately deferred limitation, not a regression introduced by
+			// this guard. Deliberately silent: warning here would false-positive
+			// on the common closure-shadow case, whose spec is already complete.
+			return
+		}
+		w.recurseIntoPackageFunc(ident.Name, call, prefixes)
+		return
+	}
+	if w.recvVar == "" {
 		return
 	}
 	sel, ok := call.Fun.(*ast.SelectorExpr)
@@ -976,7 +1065,7 @@ func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes map[string
 		fieldName := recv.Sel.Name
 		delegate, ok := w.delegateFor(fieldName)
 		if !ok {
-			w.warnIfRegistrarPassed(call, fieldName, sel.Sel.Name, prefixes)
+			w.warnIfRegistrarPassed(call, w.recvVar+"."+fieldName+"."+sel.Sel.Name, prefixes)
 			return
 		}
 		w.recurseInto(call, delegate, fieldName, sel.Sel.Name, prefixes)
@@ -1020,7 +1109,11 @@ func (w *routeWalker) recurseInto(call *ast.CallExpr, target delegateContext, fi
 	decl := w.a.findMethodDecl(target.astFile, target.filePath, target.structName, method)
 	idx, paramName := w.a.routeRegistrarParam(decl, target.serverAliases)
 	if idx < 0 {
-		w.warnIfRegistrarPassed(call, fieldName, method, prefixes)
+		callTarget := w.recvVar + "." + method
+		if fieldName != "" {
+			callTarget = w.recvVar + "." + fieldName + "." + method
+		}
+		w.warnIfRegistrarPassed(call, callTarget, prefixes)
 		return
 	}
 	seed := w.seedFromCall(call, idx, paramName, prefixes)
@@ -1038,6 +1131,55 @@ func (w *routeWalker) recurseInto(call *ast.CallExpr, target delegateContext, fi
 		moduleName:    w.moduleName,
 		serverAliases: target.serverAliases,
 		stack:         w.stack, // shared: cycles across delegation chains must terminate
+	}
+	w.stack[key] = true
+	dw.walkBody(decl.Body, seed)
+	delete(w.stack, key)
+	w.routes = append(w.routes, dw.routes...)
+}
+
+// recurseIntoPackageFunc walks a package-level helper called with a route
+// registrar (registerUserRoutes(hr, r)). Only functions declaring a
+// server.RouteRegistrar parameter are followed; a bare call that receives a
+// known registrar but cannot be followed is warned about (its registrations
+// are being dropped). Go builtins (len, append, panic) resolve to no
+// declaration and never receive a registrar, so they stay silent.
+func (w *routeWalker) recurseIntoPackageFunc(funcName string, call *ast.CallExpr, prefixes map[string]string) {
+	decl, declFile, declPath := w.a.findPackageFuncDecl(w.astFile, w.filePath, funcName)
+	if decl == nil {
+		w.warnIfRegistrarPassed(call, funcName, prefixes)
+		return
+	}
+	// Import aliases are file-scoped: a bare-identifier helper is guaranteed
+	// same-package but NOT guaranteed same-file, so the callee's own file must
+	// be consulted rather than reusing the caller's aliases (mirrors the
+	// qualified branch of resolveDelegateContext, which does the same for a
+	// cross-package delegate's file).
+	calleeAliases := w.a.extractImportAliases(declFile, serverImportPath)
+	key := walkStackKey(declPath, "", funcName)
+	if w.stack[key] {
+		return
+	}
+	idx, paramName := w.a.routeRegistrarParam(decl, calleeAliases)
+	if idx < 0 {
+		w.warnIfRegistrarPassed(call, funcName, prefixes)
+		return
+	}
+	seed := w.seedFromCall(call, idx, paramName, prefixes)
+	if _, ok := seed[paramName]; !ok && paramName != "" {
+		// The param is typed server.RouteRegistrar: it is a known registrar in
+		// the callee body even when the caller's argument carried no prefix.
+		seed[paramName] = ""
+	}
+	dw := &routeWalker{
+		a:             w.a,
+		astFile:       declFile,
+		filePath:      declPath,
+		structName:    "", // free function: no receiver context
+		recvVar:       "",
+		moduleName:    w.moduleName,
+		serverAliases: calleeAliases, // callee's own file aliases, not the caller's
+		stack:         w.stack,
 	}
 	w.stack[key] = true
 	dw.walkBody(decl.Body, seed)
@@ -1063,12 +1205,10 @@ func (w *routeWalker) seedFromCall(call *ast.CallExpr, idx int, paramName string
 // warnIfRegistrarPassed emits a diagnostic when an unresolvable call receives a
 // known registrar (presence in the prefix map covers the method's own registrar
 // param and every Group-derived one) — the strongest static signal that route
-// registrations are being dropped. Calls without a registrar stay silent.
-func (w *routeWalker) warnIfRegistrarPassed(call *ast.CallExpr, fieldName, method string, prefixes map[string]string) {
-	target := w.recvVar + "." + method
-	if fieldName != "" {
-		target = w.recvVar + "." + fieldName + "." + method
-	}
+// registrations are being dropped. target is the human-readable call
+// description, e.g. "m.handler.RegisterRoutes" or a bare "registerUserRoutes".
+// Calls without a registrar stay silent.
+func (w *routeWalker) warnIfRegistrarPassed(call *ast.CallExpr, target string, prefixes map[string]string) {
 	for _, arg := range call.Args {
 		ident, ok := arg.(*ast.Ident)
 		if !ok {
@@ -1224,6 +1364,37 @@ func (a *ProjectAnalyzer) findMethodInFile(astFile *ast.File, structName, method
 			continue
 		}
 		if a.isMethodOnStruct(fn.Recv, structName) {
+			return fn
+		}
+	}
+	return nil
+}
+
+// findPackageFuncDecl finds a package-level (receiver-less) function by name:
+// current file first, then the file's package directory. Mirrors findMethodDecl.
+func (a *ProjectAnalyzer) findPackageFuncDecl(astFile *ast.File, filePath, funcName string) (*ast.FuncDecl, *ast.File, string) {
+	if decl := findFuncInFile(astFile, funcName); decl != nil {
+		return decl, astFile, filePath
+	}
+	if filePath == "" {
+		return nil, nil, ""
+	}
+	files, err := a.parsePackageDir(filepath.Dir(filePath))
+	if err == nil {
+		for _, path := range slices.Sorted(maps.Keys(files)) {
+			if decl := findFuncInFile(files[path], funcName); decl != nil {
+				return decl, files[path], path
+			}
+		}
+	}
+	return nil, nil, ""
+}
+
+// findFuncInFile finds a package-level (receiver-less) function named name
+// within one file.
+func findFuncInFile(astFile *ast.File, name string) *ast.FuncDecl {
+	for _, d := range astFile.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == name && fn.Body != nil {
 			return fn
 		}
 	}
