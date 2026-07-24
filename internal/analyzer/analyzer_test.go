@@ -4456,6 +4456,42 @@ func handle(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { 
 	assert.Empty(t, a.Warnings(t.Context()))
 }
 
+// TestPackageHelperShadowedByLocalNotWalked verifies a bare call to a locally
+// declared name (here, a closure) binds to the LOCAL, not a same-named
+// package-level function: recursing into the package function in this case
+// would inject a phantom route that was never actually registered by the
+// code that runs. The local closure's own route must still be discovered —
+// via the ordinary inline ast.Inspect walk over its body, not via recursion —
+// and no warning should fire, since the spec is already complete.
+func TestPackageHelperShadowedByLocalNotWalked(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	helper := func(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+		server.GET(hr, r, "/from-local", ping)
+	}
+	helper(hr, r) // calls the LOCAL closure; the package-level helper below is never invoked
+}
+func helper(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/from-package", ping)
+}
+func ping(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	got := routePathSet(routes)
+	assert.True(t, got["GET /from-local"], "the local closure's own route must be discovered")
+	assert.False(t, got["GET /from-package"], "a local shadow must not resolve to the package-level function of the same name")
+	assert.Len(t, routes, 1, "only the local closure's route, not the shadowed package function's")
+	assert.Empty(t, a.Warnings(t.Context()), "the shadowed case must not warn: the spec is already complete via the inline closure walk")
+}
+
 func TestRegistrationWalkHandlesAliasedServerImport(t *testing.T) {
 	// The server package is imported under an alias; helper recursion must still
 	// recognize the aliased srv.RouteRegistrar parameter.

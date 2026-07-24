@@ -757,7 +757,12 @@ type routeWalker struct {
 	// struct/package/alias lookup would otherwise rerun on every matching
 	// call node (nil entry = resolution failed).
 	delegates map[string]*delegateContext
-	routes    []models.Route
+	// localNames is the set of names locally declared (:= or var) anywhere in
+	// the walked body — a body-wide, not block-scoped, approximation (see
+	// collectLocalNames). A bare call to one of these names binds to the
+	// local, never a same-named package-level function.
+	localNames map[string]bool
+	routes     []models.Route
 }
 
 // walkBody collects server.METHOD route registrations from a body (with
@@ -773,6 +778,12 @@ func (w *routeWalker) walkBody(body *ast.BlockStmt, seed map[string]string) {
 		if _, ok := prefixes[reg]; !ok {
 			prefixes[reg] = prefix
 		}
+	}
+	if w.localNames == nil {
+		w.localNames = map[string]bool{}
+	}
+	for name := range collectLocalNames(body) {
+		w.localNames[name] = true
 	}
 	ast.Inspect(body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -831,6 +842,52 @@ func (w *routeWalker) collectGroupPrefixes(body *ast.BlockStmt) map[string]strin
 		return true
 	})
 	return prefixes
+}
+
+// collectLocalNames returns the set of names locally declared anywhere in
+// body via a short variable declaration (x := ...) or a var statement. It is
+// a body-wide, not block-scoped, approximation — the same tradeoff
+// collectGroupPrefixes makes — so maybeRecurseHelper can tell a bare call to
+// one of these names apart from a call to a same-named package-level
+// function: Go binds the call to the local (almost always a closure
+// shadowing a helper of the same name), never the package declaration.
+//
+// Over-skipping is possible only when a package helper's name collides with
+// an unrelated func-typed local declared in a different block of the same
+// body; that is a rare theoretical false-negative, accepted as out of
+// proportion to fix with full block-scope tracking.
+func collectLocalNames(body *ast.BlockStmt) map[string]bool {
+	names := map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch stmt := n.(type) {
+		case *ast.AssignStmt:
+			if stmt.Tok != token.DEFINE {
+				return true
+			}
+			for _, lhs := range stmt.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+					names[id.Name] = true
+				}
+			}
+		case *ast.GenDecl:
+			if stmt.Tok != token.VAR {
+				return true
+			}
+			for _, spec := range stmt.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for _, id := range vs.Names {
+					if id.Name != "_" {
+						names[id.Name] = true
+					}
+				}
+			}
+		}
+		return true
+	})
+	return names
 }
 
 // routeFromCall builds a route from a server.METHOD(...) call, or nil if the call
@@ -954,6 +1011,19 @@ func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes map[string
 		return
 	}
 	if ident, ok := call.Fun.(*ast.Ident); ok {
+		if w.localNames[ident.Name] {
+			// The identifier is a local binding (almost always a closure) that
+			// shadows any package-level function of the same name; a bare call
+			// to it binds to the local, not the package helper. A closure's
+			// routes are already discovered by the inline ast.Inspect walk over
+			// its body, so skipping here drops nothing for that (overwhelmingly
+			// common) case. A non-closure local delegate (helper := getHelper())
+			// stays an unfollowed local-variable delegate — a pre-existing,
+			// deliberately deferred limitation, not a regression introduced by
+			// this guard. Deliberately silent: warning here would false-positive
+			// on the common closure-shadow case, whose spec is already complete.
+			return
+		}
 		w.recurseIntoPackageFunc(ident.Name, call, prefixes)
 		return
 	}
