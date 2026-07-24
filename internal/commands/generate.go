@@ -431,17 +431,28 @@ func goBricksVersionWarning(projectRoot string) string {
 	}
 }
 
+// contentWarnings returns the canonical spec-content diagnostics for a
+// project: no modules, or modules without routes. One source of truth for
+// doctor (pre-flight verdict) and generate (--strict gate) — the two MUST
+// agree on what makes a spec content-poor. Untyped-route rendering stays
+// per-command (doctor prints it inside the stats block).
+func contentWarnings(stats ProjectStats) []string {
+	switch {
+	case stats.ModuleCount == 0:
+		return []string{"no go-bricks modules discovered — the spec has no operations"}
+	case stats.RouteCount == 0:
+		return []string{"modules discovered but no routes — the spec has no operations"}
+	}
+	return nil
+}
+
 // emitContentWarnings prints stderr warnings for a content-free or partially-typed
 // spec and reports whether any were emitted (so --strict can fail the run).
 func emitContentWarnings(project *models.Project) bool {
 	stats := calculateProjectStats(project)
 	warned := false
-	switch {
-	case stats.ModuleCount == 0:
-		fmt.Fprintln(os.Stderr, "warning: no go-bricks modules discovered — the spec has no operations")
-		warned = true
-	case stats.RouteCount == 0:
-		fmt.Fprintln(os.Stderr, "warning: modules discovered but no routes — the spec has no operations")
+	for _, w := range contentWarnings(stats) {
+		fmt.Fprintln(os.Stderr, "warning: "+w)
 		warned = true
 	}
 	if n := len(stats.UntypedRoutes); n > 0 {

@@ -750,7 +750,7 @@ func TestRunDoctorZeroModulesIsCaveat(t *testing.T) {
 	if runErr != nil {
 		t.Errorf("zero modules should be a caveat, not a hard error: %v", runErr)
 	}
-	if !strings.Contains(out, "No go-bricks modules discovered") {
+	if !strings.Contains(out, "no go-bricks modules discovered") {
 		t.Errorf("expected a zero-modules warning, got:\n%s", out)
 	}
 	if !strings.Contains(out, "Ready with caveats") {
@@ -758,6 +758,56 @@ func TestRunDoctorZeroModulesIsCaveat(t *testing.T) {
 	}
 	if strings.Contains(out, "All checks passed") {
 		t.Errorf("unconditional green banner must not appear for a zero-module project:\n%s", out)
+	}
+}
+
+// stubModuleSrc is a full go-bricks module (Name/Init/Shutdown/RegisterRoutes,
+// importing github.com/gaborage/go-bricks/server) whose RegisterRoutes body is
+// empty. The analyzer discovers ModuleCount=1, RouteCount=0 — unlike a bare
+// struct with only an empty RegisterRoutes, which the analyzer does not count
+// as a module at all (ModuleCount=0), silently exercising the no-modules path
+// instead of the modules-but-no-routes path this stub is meant to cover.
+const stubModuleSrc = `package svc
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "svc" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+}
+`
+
+// TestRunDoctorModulesButNoRoutesIsCaveat verifies that a project with a
+// discovered module whose RegisterRoutes registers no routes emits the
+// modules-but-no-routes caveat and the caveat banner — not the unconditional
+// green banner (PLAN013 defect 1: doctor was missing this case entirely).
+func TestRunDoctorModulesButNoRoutesIsCaveat(t *testing.T) {
+	dir := writeProject(t,
+		"module test\n\ngo 1.26.0\n\nrequire github.com/gaborage/go-bricks "+verifiedGoBricksVer+"\n",
+		stubModuleSrc)
+	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion}
+
+	var runErr error
+	out := testutil.CaptureStdout(t, func() { runErr = runDoctor(t.Context(), opts) })
+
+	if runErr != nil {
+		t.Errorf("modules-but-no-routes should be a caveat, not a hard error: %v", runErr)
+	}
+	if !strings.Contains(out, "modules discovered but no routes") {
+		t.Errorf("expected a modules-but-no-routes warning, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Ready with caveats") {
+		t.Errorf("expected the caveat banner, got:\n%s", out)
+	}
+	if strings.Contains(out, "All checks passed") {
+		t.Errorf("unconditional green banner must not appear for a modules-but-no-routes project:\n%s", out)
 	}
 }
 
@@ -950,6 +1000,43 @@ replace (
 			expectedReplace: true,
 			expectError:     false,
 		},
+		{
+			// A versioned replace whose Old.Version matches the require line
+			// DOES apply (MVS would select exactly that version) — replace wins.
+			name: "versioned replace matching the required version applies",
+			goModContent: `module test
+require github.com/gaborage/go-bricks v0.50.0
+replace github.com/gaborage/go-bricks v0.50.0 => ../local-go-bricks
+`,
+			expectedVersion: "../local-go-bricks",
+			expectedReplace: true,
+			expectError:     false,
+		},
+		{
+			// A versioned replace whose Old.Version does NOT match the require
+			// line is inert (Go would never select v0.10.0 when v0.50.0 is
+			// required), so it must not win: the require version is reported
+			// verbatim and the floor is NOT skipped.
+			name: "versioned replace not matching the required version is inert",
+			goModContent: `module test
+require github.com/gaborage/go-bricks v0.50.0
+replace github.com/gaborage/go-bricks v0.10.0 => ../local-go-bricks
+`,
+			expectedVersion: "v0.50.0",
+			expectedReplace: false,
+			expectError:     false,
+		},
+		{
+			// A versioned replace with no matching require at all: the replace
+			// is inert (nothing to apply to) and go-bricks is effectively absent.
+			name: "versioned replace with no require falls through to missing",
+			goModContent: `module test
+replace github.com/gaborage/go-bricks v0.10.0 => ../local-go-bricks
+`,
+			expectedVersion: "",
+			expectedReplace: false,
+			expectError:     true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -971,6 +1058,61 @@ replace (
 				t.Errorf("Expected isReplace %v, got %v", tt.expectedReplace, isReplace)
 			}
 		})
+	}
+}
+
+// TestParseGoBricksVersionUnversionedReplaceNoRequireIsMissing is a CodeRabbit
+// PR #36 follow-up to PLAN013 defect 2: per the Go Modules Reference, a
+// replace whose left-side module is not required by the main module or any
+// dependency has NO effect — it does not add the module to the build. So an
+// unversioned `replace go-bricks => ...` with no matching `require go-bricks`
+// does not actually depend on go-bricks at all; the correct verdict is
+// errGoBricksMissing (isReplace=false), not "replace wins / skip the floor".
+func TestParseGoBricksVersionUnversionedReplaceNoRequireIsMissing(t *testing.T) {
+	goModContent := `module test
+replace github.com/gaborage/go-bricks => ../local-go-bricks
+`
+	version, isReplace, err := parseGoBricksVersion("go.mod", []byte(goModContent))
+
+	if !errors.Is(err, errGoBricksMissing) {
+		t.Fatalf("expected errGoBricksMissing for an inert unversioned replace with no require, got %v", err)
+	}
+	if isReplace {
+		t.Error("expected isReplace=false for an inert (non-required) unversioned replace, got true")
+	}
+	if version != "" {
+		t.Errorf("expected empty version, got %q", version)
+	}
+}
+
+// TestResolveGoBricksStatusInertReplaceIsBelowFloor is the security-of-the-gate
+// assertion for PLAN013 defect 2: a version-scoped replace that does not match
+// the require line (so Go itself would never apply it) must NOT bypass the
+// version floor. Before the fix, ANY replace of go-bricks reported
+// verdictReplace regardless of Old.Version, so this below-floor require would
+// have wrongly skipped the floor; after the fix it must resolve to
+// verdictBelowFloor.
+func TestResolveGoBricksStatusInertReplaceIsBelowFloor(t *testing.T) {
+	tempDir := t.TempDir()
+	goModPath := filepath.Join(tempDir, goModFile)
+	goModContent := `module test
+
+go 1.25
+
+require github.com/gaborage/go-bricks v0.30.0
+replace github.com/gaborage/go-bricks v0.10.0 => ../local-go-bricks
+`
+	if err := os.WriteFile(goModPath, []byte(goModContent), 0644); err != nil {
+		t.Fatalf(msgFailedToCreate, err)
+	}
+
+	st := resolveGoBricksStatus(goModPath)
+	if st.verdict != verdictBelowFloor {
+		t.Fatalf("expected verdictBelowFloor for an inert version-scoped replace with a below-floor require, got verdict=%v version=%q err=%v",
+			st.verdict, st.version, st.err)
+	}
+	if st.version != "v0.30.0" {
+		t.Errorf("expected the require version %q to be reported (replace is inert), got %q", "v0.30.0", st.version)
 	}
 }
 

@@ -1136,6 +1136,24 @@ func (m *Module) ping(ctx server.HandlerContext) (server.Result[Ping], server.IA
 	})
 }
 
+// TestRunGenerateStrictFailsOnNoRoutes locks the doctor/generate content-verdict
+// parity (PLAN013): generate was never the buggy side here (it already had the
+// RouteCount==0 case), so this passes both before and after the fix. It exists
+// to guard against future drift now that both commands share contentWarnings —
+// see the doctor-side regression test, TestRunDoctorModulesButNoRoutesIsCaveat
+// (doctor_test.go), which covers the case doctor was missing.
+func TestRunGenerateStrictFailsOnNoRoutes(t *testing.T) {
+	goMod := "module github.com/example/svc\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks " + minGoBricksVer + "\n"
+	dir := writeProject(t, goMod, stubModuleSrc)
+	out := filepath.Join(t.TempDir(), "openapi.yaml")
+	err := runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out, Strict: true})
+	require.Error(t, err, "modules discovered but no routes must fail --strict")
+	assert.Contains(t, err.Error(), "--strict")
+
+	_, statErr := os.Stat(out)
+	assert.True(t, os.IsNotExist(statErr), "strict failure must not leave an artifact")
+}
+
 // TestRunGenerateStrictFailsOnUnparsableFile proves --strict fails end-to-end
 // when a sibling .go file cannot be parsed: the analyzer warns about the drop
 // (PLAN009 defect 1) rather than silently discarding whatever module/routes

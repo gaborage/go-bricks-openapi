@@ -354,32 +354,70 @@ func checkGoBricksCompatibility(goModPath string, verbose bool) error {
 // It matches the exact module path (so lookalikes like
 // github.com/x/not-go-bricks-wrapper are ignored) and uses the structured
 // modfile parser (so block `require (...)` / `replace (...)` forms are handled).
-// A replace directive (single or block) reports isReplace=true with the target,
-// so the caller skips the version floor for local/fork development.
+// A replace directive (single or block) that actually applies reports
+// isReplace=true with the target, so the caller skips the version floor for
+// local/fork development.
 func parseGoBricksVersion(goModPath string, content []byte) (gbVer string, isReplace bool, err error) {
 	mf, err := modfile.Parse(goModPath, content, nil)
 	if err != nil {
 		return "", false, fmt.Errorf("parse go.mod: %w", err)
 	}
 
-	// Replace wins (local/fork development).
-	for _, r := range mf.Replace {
-		if r.Old.Path == goBricksModulePath {
-			target := r.New.Path
-			if r.New.Version != "" {
-				target += "@" + r.New.Version
-			}
-			return target, true, nil
-		}
-	}
-
+	required := ""
 	for _, req := range mf.Require {
 		if req.Mod.Path == goBricksModulePath {
-			return req.Mod.Version, false, nil
+			required = req.Mod.Version
+			break
 		}
 	}
 
+	// A replace wins (local/fork development) only when it APPLIES; an inert
+	// replace must not disable the version floor. See applicableReplaceTarget.
+	if target, ok := applicableReplaceTarget(mf.Replace, required); ok {
+		return target, true, nil
+	}
+
+	if required != "" {
+		return required, false, nil
+	}
 	return "", false, errGoBricksMissing
+}
+
+// applicableReplaceTarget returns the target of the first replace directive
+// that actually applies to the go-bricks module, and ok=true. A replace
+// applies only when it would affect module resolution: an unversioned
+// `replace old => new` only when old is actually required (per the Go Modules
+// Reference, a replace whose left side is not required has no effect); a
+// versioned `replace old vX => new` only when vX matches the version the
+// module graph selects. Inert replaces are skipped so they cannot disable the
+// version floor; ok is false when none applies.
+//
+// Limitation: this is a static, single-go.mod check, so the direct require
+// line (required) is used as the selected-version proxy. That is exact for a
+// tidy single-module go.mod, where the require line already reflects the
+// MVS-selected version. It does not resolve the transitive module graph, so an
+// untidy project whose direct require lags a version a dependency raises could
+// have a version-scoped replace keyed to the stale direct version treated as
+// active. Full build-list resolution (go list -m all) is out of scope for this
+// lightweight pre-flight; `go mod tidy` restores an accurate direct require.
+func applicableReplaceTarget(replaces []*modfile.Replace, required string) (string, bool) {
+	for _, r := range replaces {
+		if r.Old.Path != goBricksModulePath {
+			continue
+		}
+		if r.Old.Version != "" && r.Old.Version != required {
+			continue // version-scoped to a version not in use: inert
+		}
+		if r.Old.Version == "" && required == "" {
+			continue // unversioned replace of a non-required module: no effect per Go modules
+		}
+		target := r.New.Path
+		if r.New.Version != "" {
+			target += "@" + r.New.Version
+		}
+		return target, true
+	}
+	return "", false
 }
 
 // checkVersionCompatibility validates go-bricks version meets minimum requirements
@@ -419,8 +457,8 @@ func runModuleDiagnostics(ctx context.Context, projectRoot string, verbose bool)
 	displayProjectStats(stats, verbose)
 
 	warned := false
-	if stats.ModuleCount == 0 {
-		fmt.Println("⚠️  No go-bricks modules discovered — the generated spec would have no operations")
+	for _, w := range contentWarnings(stats) {
+		fmt.Printf("⚠️  %s\n", w)
 		warned = true
 	}
 	// displayProjectStats already printed a ⚠️ for untyped routes; fold it into the
