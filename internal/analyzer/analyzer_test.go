@@ -3177,6 +3177,39 @@ func TestHasJOSETag(t *testing.T) {
 	})
 }
 
+func TestUnquoteLiteral(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		// --- branch A: strconv.Unquote succeeds (the normal case) ---
+		{name: "raw_tag", in: "`json:\"pan\"`", want: `json:"pan"`},
+		{name: "interpreted_tag", in: `"json:\"pan\""`, want: `json:"pan"`},
+		{name: "interpreted_path", in: `"/v1/users"`, want: "/v1/users"},
+		{name: "raw_path", in: "`/v1/users`", want: "/v1/users"},
+		// A real escape sequence: today's Trim leaves it undecoded as `\x2fabc`.
+		{name: "escaped_path", in: `"\x2fabc"`, want: "/abc"},
+		{name: "empty_literal", in: `""`, want: ""},
+
+		// --- branch B: unterminated RAW literal -> Unquote fails, Trim "`" fallback ---
+		// in is ONE opening backtick then json:"pan" with NO closing backtick.
+		{name: "unterminated_raw", in: "`json:\"pan\"", want: `json:"pan"`},
+
+		// --- branch C: unterminated INTERPRETED literal -> Trim `"` fallback ---
+		// in is ONE opening double-quote then the word, with NO closing quote.
+		{name: "unterminated_interp", in: `"unterminated`, want: "unterminated"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := unquoteLiteral(tt.in)
+			if got != tt.want {
+				t.Errorf("unquoteLiteral(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNormalizePath(t *testing.T) {
 	tests := []struct {
 		name string
