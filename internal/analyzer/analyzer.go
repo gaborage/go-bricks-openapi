@@ -1667,7 +1667,7 @@ func (a *ProjectAnalyzer) extractRouteMetadata(arg ast.Expr, route *models.Route
 func (a *ProjectAnalyzer) extractStringFromFirstArg(callExpr *ast.CallExpr) string {
 	if len(callExpr.Args) > 0 {
 		if lit, ok := callExpr.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-			return strings.Trim(lit.Value, `"`)
+			return unquoteLiteral(lit.Value)
 		}
 	}
 	return ""
@@ -1678,7 +1678,7 @@ func (a *ProjectAnalyzer) extractStringLiterals(args []ast.Expr) []string {
 	var results []string
 	for _, arg := range args {
 		if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-			results = append(results, strings.Trim(lit.Value, `"`))
+			results = append(results, unquoteLiteral(lit.Value))
 		}
 	}
 	return results
@@ -1714,7 +1714,7 @@ func (a *ProjectAnalyzer) extractPathFromArg(arg ast.Expr) (string, bool) {
 	case *ast.BasicLit:
 		// Direct string literal.
 		if expr.Kind == token.STRING {
-			return strings.Trim(expr.Value, `"`), true
+			return unquoteLiteral(expr.Value), true
 		}
 	case *ast.Ident:
 		// Same-package string constant.
@@ -1802,7 +1802,7 @@ func (a *ProjectAnalyzer) processConstSpec(spec ast.Spec) {
 // extractStringFromExpr extracts string value from an expression
 func (a *ProjectAnalyzer) extractStringFromExpr(expr ast.Expr) string {
 	if lit, ok := expr.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-		return strings.Trim(lit.Value, `"`)
+		return unquoteLiteral(lit.Value)
 	}
 	return ""
 }
@@ -1863,7 +1863,7 @@ func (a *ProjectAnalyzer) extractImportAliases(astFile *ast.File, importPath str
 	aliases := make(map[string]struct{})
 	found := false
 	for _, imp := range astFile.Imports {
-		path := strings.Trim(imp.Path.Value, `"`)
+		path := unquoteLiteral(imp.Path.Value)
 		if path != importPath {
 			continue
 		}
@@ -2800,7 +2800,7 @@ func (a *ProjectAnalyzer) inModuleDir(importPath string) (string, bool) {
 func (a *ProjectAnalyzer) fileImports(astFile *ast.File) map[string]string {
 	out := make(map[string]string, len(astFile.Imports))
 	for _, imp := range astFile.Imports {
-		path := strings.Trim(imp.Path.Value, `"`)
+		path := unquoteLiteral(imp.Path.Value)
 		if imp.Name != nil {
 			if imp.Name.Name == "_" || imp.Name.Name == "." {
 				continue
@@ -3080,6 +3080,28 @@ func mapValueStructName(t string) (string, bool) {
 	return baseStructTypeName(v), true
 }
 
+// unquoteLiteral decodes a Go string literal's source text into its value.
+// go/parser hands back the literal verbatim — delimiters and escapes included —
+// so trimming a delimiter character is only correct for one of the two legal
+// forms and mangles escapes in the other. strconv.Unquote handles raw
+// (backtick) and interpreted (double-quoted) literals identically, which is
+// what the Go runtime sees via reflect.
+//
+// The fallback preserves the previous trim behavior for input strconv rejects
+// (e.g. an unterminated literal, which go/parser would already have refused).
+// It strips only the delimiter actually present: a single cutset of both
+// delimiters would eat a raw struct tag's own closing quote, turning
+// `json:"pan"` into json:"pan.
+func unquoteLiteral(v string) string {
+	if s, err := strconv.Unquote(v); err == nil {
+		return s
+	}
+	if strings.HasPrefix(v, "`") {
+		return strings.Trim(v, "`")
+	}
+	return strings.Trim(v, `"`)
+}
+
 // hasJOSETag reports whether the struct carries a `jose:"..."` struct tag on
 // ANY field. This mirrors the framework's runtime detector jose.ScanType, which
 // matches a jose tag on any field regardless of name — the blank `_` sentinel is
@@ -3099,7 +3121,7 @@ func hasJOSETag(s *ast.StructType) bool {
 		if field.Tag == nil {
 			continue
 		}
-		raw := strings.Trim(field.Tag.Value, "`")
+		raw := unquoteLiteral(field.Tag.Value)
 		if _, ok := reflect.StructTag(raw).Lookup("jose"); ok {
 			return true
 		}
@@ -3288,7 +3310,7 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *
 
 	// An explicit json name turns embedding into nesting (a parent-level field).
 	if field.Tag != nil {
-		jsonName := a.parseStructTags(strings.Trim(field.Tag.Value, "`")).jsonName
+		jsonName := a.parseStructTags(unquoteLiteral(field.Tag.Value)).jsonName
 		switch jsonName {
 		case jsonSkipValue:
 			return nil, false // json:"-" — excluded
@@ -3339,7 +3361,7 @@ func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field) models.F
 
 // parseFieldTags parses struct tags and populates the FieldInfo
 func (a *ProjectAnalyzer) parseFieldTags(fieldInfo *models.FieldInfo, tag *ast.BasicLit) {
-	tagValue := strings.Trim(tag.Value, "`")
+	tagValue := unquoteLiteral(tag.Value)
 	tags := a.parseStructTags(tagValue)
 
 	fieldInfo.JSONName = tags.jsonName
