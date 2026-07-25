@@ -17,6 +17,12 @@ REDOCLY_VERSION := 2.31.5
 SPEC_FIXTURE := internal/spectest/testdata/nested_schema
 SPEC_TMP := $(CURDIR)/.openapi-fixture-spec.yaml
 
+# Test package set — mirror CI (.github/workflows/ci.yml): every package except
+# internal/models, which is struct-only (no tests) and would drag coverage down.
+# Deriving this from `go list` keeps the local gate and CI on the same set and
+# picks up new packages automatically.
+TEST_PACKAGES := $(shell go list ./... | grep -vE '/models$$')
+
 # Default target
 help: ## Show this help message
 	@echo "go-bricks-openapi tool commands:"
@@ -26,10 +32,10 @@ build: ## Build the CLI tool
 	go build -ldflags "-X main.version=$(VERSION)" -o $(BINARY_NAME) ./cmd/go-bricks-openapi
 
 test: ## Run all tests
-	go test -race ./cmd/... ./internal/commands/... ./internal/generator/... ./internal/analyzer/... ./internal/spectest/...
+	go test -race $(TEST_PACKAGES)
 
 test-coverage: ## Run tests with coverage
-	go test -race -coverprofile=coverage.out ./cmd/... ./internal/commands/... ./internal/generator/... ./internal/analyzer/... ./internal/spectest/...
+	go test -race -coverprofile=coverage.out $(TEST_PACKAGES)
 	go tool cover -html=coverage.out -o coverage.html
 
 lint: ## Run golangci-lint
