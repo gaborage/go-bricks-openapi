@@ -118,7 +118,6 @@ tool's own annotation — it has no runtime effect.
 - Embedded-module method promotion is not resolved.
 - Response trace headers (`traceparent`, `X-Request-ID`) are not modeled in
   the generated spec.
-- JOSE `jose:` tags are recognized only on the `_` sentinel field.
 - `server.WithMiddleware(...)` is intentionally ignored — middleware names
   carry no spec semantics.
 - Tenant enforcement is not derived from runtime config; the security scheme

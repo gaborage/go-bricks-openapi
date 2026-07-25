@@ -2633,7 +2633,7 @@ func (a *ProjectAnalyzer) registerStructAt(typeName, pkg string, structType *ast
 	// Seed the embedded-promotion ancestor set with this type so a self-embed
 	// (e.g. type Node struct{ *Node }) is not promoted into itself.
 	ti.Fields = a.extractStructFields(structType, pkg, astFile, filePath, map[string]struct{}{typeName: {}}, depth)
-	ti.JOSE = hasJOSESentinelTag(structType)
+	ti.JOSE = hasJOSETag(structType)
 
 	for i := range ti.Fields {
 		a.registerFieldRefAt(&ti.Fields[i], pkg, astFile, filePath, depth+1)
@@ -3080,28 +3080,23 @@ func mapValueStructName(t string) (string, bool) {
 	return baseStructTypeName(v), true
 }
 
-// hasJOSESentinelTag reports whether the struct uses the JOSE sentinel-field
-// convention — a blank-identifier field (`_`) carrying a `jose:"..."` struct tag.
-// Restricting to the sentinel pattern matches the documented convention and avoids
-// false-positives where a regular field happens to use the same tag namespace for
-// something else (the runtime jose.ScanType *would* try to parse such a tag and fail,
-// so the OpenAPI spec for that struct should not pre-emptively claim JOSE wrapping).
+// hasJOSETag reports whether the struct carries a `jose:"..."` struct tag on
+// ANY field. This mirrors the framework's runtime detector jose.ScanType, which
+// matches a jose tag on any field regardless of name — the blank `_` sentinel is
+// only a recommended convention (see jose.SentinelFieldName's doc), not a
+// requirement. A route whose type has a jose tag is JOSE-protected on the wire
+// (or a runtime error), never plain application/json, so the spec must reflect
+// application/jose.
 //
-// reflect.StructTag.Lookup is used rather than a substring match on Tag.Value because
-// substring matching false-positives on tag values that contain the literal `jose:"`
-// (e.g., a description tag escaping a quoted reference). Importing the runtime jose
-// package is not an option because the openapi tool is in its own go.mod.
-func hasJOSESentinelTag(s *ast.StructType) bool {
+// reflect.StructTag.Lookup is used rather than a substring match on Tag.Value
+// so a value that merely contains the literal `jose:"` (e.g. a doc tag quoting
+// a reference) does not false-positive.
+func hasJOSETag(s *ast.StructType) bool {
 	if s == nil || s.Fields == nil {
 		return false
 	}
 	for _, field := range s.Fields.List {
 		if field.Tag == nil {
-			continue
-		}
-		// Sentinel field: exactly one blank-identifier name. Embedded fields have
-		// len(Names) == 0 — those don't match the convention.
-		if len(field.Names) != 1 || field.Names[0].Name != "_" {
 			continue
 		}
 		raw := strings.Trim(field.Tag.Value, "`")
