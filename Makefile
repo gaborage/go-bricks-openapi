@@ -8,6 +8,11 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 GOVULNCHECK_VERSION := v1.1.4
 GOSEC_VERSION := v2.26.1
 
+# Pinned golangci-lint version — must stay in lockstep with ci.yml's
+# golangci-lint-action `version:` (.github/workflows/ci.yml:219). Bumping one
+# without the other lets the local and CI lint gates silently diverge.
+GOLANGCI_VERSION := v2.12.2
+
 # Pinned redocly CLI version for the structural-validation gate. Pinned (not
 # @latest) so an upstream release cannot silently change the gate or break CI.
 REDOCLY_VERSION := 2.31.5
@@ -16,6 +21,12 @@ REDOCLY_VERSION := 2.31.5
 # so redocly validates the hardest case the generator produces.
 SPEC_FIXTURE := internal/spectest/testdata/nested_schema
 SPEC_TMP := $(CURDIR)/.openapi-fixture-spec.yaml
+
+# Test package set — mirror CI (.github/workflows/ci.yml): every package except
+# internal/models, which is struct-only (no tests) and would drag coverage down.
+# Deriving this from `go list` keeps the local gate and CI on the same set and
+# picks up new packages automatically.
+TEST_PACKAGES := $(shell go list ./... | grep -vE '/models$$')
 
 # Default target
 help: ## Show this help message
@@ -26,10 +37,10 @@ build: ## Build the CLI tool
 	go build -ldflags "-X main.version=$(VERSION)" -o $(BINARY_NAME) ./cmd/go-bricks-openapi
 
 test: ## Run all tests
-	go test -race ./cmd/... ./internal/commands/... ./internal/generator/... ./internal/analyzer/... ./internal/spectest/...
+	go test -race $(TEST_PACKAGES)
 
 test-coverage: ## Run tests with coverage
-	go test -race -coverprofile=coverage.out ./cmd/... ./internal/commands/... ./internal/generator/... ./internal/analyzer/... ./internal/spectest/...
+	go test -race -coverprofile=coverage.out $(TEST_PACKAGES)
 	go tool cover -html=coverage.out -o coverage.html
 
 lint: ## Run golangci-lint
@@ -88,7 +99,7 @@ sec: ## Run gosec security scanner (excludes testdata fixture modules, like CI)
 
 # Development helpers
 dev-deps: ## Install development dependencies
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 # Release helpers
 release: ## Cut a signed release tag (usage: make release VERSION=v0.2.0). Run AFTER merging the release-please PR.
