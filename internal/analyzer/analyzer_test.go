@@ -3085,7 +3085,7 @@ func TestParseParameterTags(t *testing.T) {
 	}
 }
 
-func TestHasJOSESentinelTag(t *testing.T) {
+func TestHasJOSETag(t *testing.T) {
 	// parse uses ast.Inspect to find the first struct type literal in src — a single
 	// callback collapses what would otherwise be a nested decl→spec→type-assertion
 	// loop, keeping cognitive complexity well below the project's 15-statement cap.
@@ -3128,11 +3128,11 @@ func TestHasJOSESentinelTag(t *testing.T) {
 			want:   false,
 		},
 		{
-			// Per the documented convention, only the sentinel `_ struct{}` field
-			// counts. A non-sentinel field with a jose tag must NOT opt the struct in.
-			name:   "jose_tag_on_named_field_must_not_match",
+			// Mirrors jose.ScanType, which checks no field name — any jose-tagged
+			// field opts the struct in. The `_` sentinel is convention, not a rule.
+			name:   "jose_tag_on_named_field_matches",
 			source: "type R struct { Inner string `jose:\"sign=k\"` }",
-			want:   false,
+			want:   true,
 		},
 		{
 			name:   "blank_field_without_jose_tag",
@@ -3149,12 +3149,19 @@ func TestHasJOSESentinelTag(t *testing.T) {
 			source: "type R struct { Field string `description:\"prejose:\\\"x\\\"\"` }",
 			want:   false,
 		},
+		{
+			// Embedded field carrying a jose tag: len(Names) == 0, excluded by the
+			// old sentinel-only guard. ScanType matches it, so we must too.
+			name:   "jose_tag_on_embedded_field_matches",
+			source: "type R struct { E `jose:\"sign=k\"`; PAN string }",
+			want:   true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := hasJOSESentinelTag(parse(t, tt.source))
+			got := hasJOSETag(parse(t, tt.source))
 			if got != tt.want {
-				t.Errorf("hasJOSESentinelTag = %v, want %v", got, tt.want)
+				t.Errorf("hasJOSETag = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -3163,10 +3170,10 @@ func TestHasJOSESentinelTag(t *testing.T) {
 	// these inputs (defense-in-depth in the analyzer pipeline), so without explicit
 	// tests a future refactor could silently regress the guards.
 	t.Run("nil_struct", func(t *testing.T) {
-		assert.False(t, hasJOSESentinelTag(nil), "hasJOSESentinelTag(nil)")
+		assert.False(t, hasJOSETag(nil), "hasJOSETag(nil)")
 	})
 	t.Run("nil_fields", func(t *testing.T) {
-		assert.False(t, hasJOSESentinelTag(&ast.StructType{}), "hasJOSESentinelTag(empty struct)")
+		assert.False(t, hasJOSETag(&ast.StructType{}), "hasJOSETag(empty struct)")
 	})
 }
 
