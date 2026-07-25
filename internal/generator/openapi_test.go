@@ -2882,6 +2882,13 @@ func TestFieldInfoToPropertyNullable(t *testing.T) {
 		assert.True(t, p.Nullable)
 	})
 
+	t.Run("pointer uuid is nullable, format preserved", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "*uuid.UUID", JSONName: "id"})
+		assert.Equal(t, typeString, p.Type)
+		assert.Equal(t, formatUUID, p.Format)
+		assert.True(t, p.Nullable)
+	})
+
 	t.Run("pointer to struct wraps the $ref in allOf with nullable", func(t *testing.T) {
 		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "*User", RefName: "User", JSONName: "manager"})
 		assert.Empty(t, p.Ref, "a pointer-to-struct must not emit a bare top-level $ref")
