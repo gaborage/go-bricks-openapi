@@ -10,7 +10,7 @@ import (
 
 	"github.com/gaborage/go-bricks-openapi/internal/analyzer"
 	"github.com/gaborage/go-bricks-openapi/internal/models"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // OpenAPI type constants
