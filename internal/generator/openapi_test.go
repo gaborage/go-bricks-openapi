@@ -2861,6 +2861,76 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 	})
 }
 
+// TestFieldInfoToPropertyNullable covers plan 018: a Go pointer field
+// serializes JSON null, which OpenAPI 3.0 only permits when the schema
+// carries `nullable: true`. Parameters are excluded (RULING 1): a path/query/
+// header parameter carries URL or header text, never a JSON null.
+func TestFieldInfoToPropertyNullable(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	t.Run("pointer scalar is nullable, format preserved", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "*int64", JSONName: "balance"})
+		assert.Equal(t, typeInteger, p.Type)
+		assert.Equal(t, formatInt64, p.Format)
+		assert.True(t, p.Nullable)
+	})
+
+	t.Run("pointer well-known type is nullable, format preserved", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "*time.Time", JSONName: "deletedAt"})
+		assert.Equal(t, typeString, p.Type)
+		assert.Equal(t, formatDateTime, p.Format)
+		assert.True(t, p.Nullable)
+	})
+
+	t.Run("pointer to struct wraps the $ref in allOf with nullable", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "*User", RefName: "User", JSONName: "manager"})
+		assert.Empty(t, p.Ref, "a pointer-to-struct must not emit a bare top-level $ref")
+		assert.Equal(t, typeObject, p.Type)
+		require.Len(t, p.AllOf, 1)
+		assert.Equal(t, refPath("User"), p.AllOf[0].Ref)
+		assert.True(t, p.Nullable)
+	})
+
+	t.Run("value struct (non-pointer) keeps a bare ref, not nullable", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "User", RefName: "User", JSONName: "profile"})
+		assert.Equal(t, refPath("User"), p.Ref)
+		assert.Nil(t, p.AllOf)
+		assert.False(t, p.Nullable)
+	})
+
+	t.Run("slices and pointer-to-collection are never nullable", func(t *testing.T) {
+		cases := []*models.FieldInfo{
+			{Type: "[]int64", JSONName: "a"},
+			{Type: "[]*int64", JSONName: "b"},
+			{Type: "*[]int64", JSONName: "c"},
+			{Type: "*map[string]int", JSONName: "d"},
+		}
+		for _, f := range cases {
+			p := gen.fieldInfoToProperty(f)
+			assert.False(t, p.Nullable, "field %q (%s) must not be nullable", f.JSONName, f.Type)
+		}
+	})
+
+	t.Run("non-pointer scalar is not nullable and omits the yaml key", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "int64", JSONName: "id"})
+		assert.False(t, p.Nullable)
+		out := mustMarshalYAML(t, p)
+		assert.NotContains(t, out, "nullable", "non-pointer field must omit the nullable key entirely")
+	})
+
+	t.Run("pointer query parameter is not nullable (RULING 1)", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "*string", ParamType: "query", ParamName: "cursor"})
+		assert.False(t, p.Nullable)
+	})
+
+	t.Run("pointer-to-struct parameter keeps a bare ref, no allOf, no nullable (RULING 1)", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "*User", RefName: "User", ParamType: "query", ParamName: "filter"})
+		assert.Equal(t, refPath("User"), p.Ref)
+		assert.Nil(t, p.AllOf)
+		assert.False(t, p.Nullable)
+	})
+}
+
 // TestNewWithConfig covers the CLI-driven document metadata: custom servers,
 // license, and the tenant-security opt-out.
 func TestNewWithConfig(t *testing.T) {

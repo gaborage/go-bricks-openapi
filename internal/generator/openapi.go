@@ -162,7 +162,11 @@ type OpenAPISchema struct {
 
 // OpenAPIProperty represents a schema property
 type OpenAPIProperty struct {
-	Type                 string                      `yaml:"type,omitempty"`
+	Type string `yaml:"type,omitempty"`
+	// AllOf wraps a $ref that must also carry sibling keywords (e.g. nullable):
+	// in OpenAPI 3.0 a $ref ignores its siblings, so `allOf: [{$ref}]` plus the
+	// sibling keyword is the encoding that actually applies.
+	AllOf                []*OpenAPIProperty          `yaml:"allOf,omitempty"`
 	Properties           map[string]*OpenAPIProperty `yaml:"properties,omitempty"`           // For inline objects (e.g. the data/meta envelope)
 	AdditionalProperties *OpenAPIProperty            `yaml:"additionalProperties,omitempty"` // For maps (the value schema)
 	Format               string                      `yaml:"format,omitempty"`
@@ -182,6 +186,7 @@ type OpenAPIProperty struct {
 	ExclusiveMaximum     *bool                       `yaml:"exclusiveMaximum,omitempty"`
 	Pattern              string                      `yaml:"pattern,omitempty"`
 	Enum                 []any                       `yaml:"enum,omitempty"`
+	Nullable             bool                        `yaml:"nullable,omitempty"`
 }
 
 // The types below model the paths/operations half of an OpenAPI document as a
@@ -1324,19 +1329,7 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 	// of $ref). A $ref must stand alone — it carries no sibling type/format or
 	// constraint keywords — so return early.
 	if field.RefName != "" {
-		ref := &OpenAPIProperty{Ref: refPath(field.RefName)}
-		if isSliceType(field.Type) {
-			// The inner $ref must stand alone, but the array wrapper carries the
-			// field's documentation and cardinality (minItems/maxItems). Element-scope
-			// (dive) rules have nowhere valid to go on a $ref element, so they drop.
-			arr := &OpenAPIProperty{Type: typeArray, Items: ref, Description: field.Description}
-			if field.Example != "" {
-				arr.Example = field.Example
-			}
-			g.applyConstraints(arr, field)
-			return arr
-		}
-		return ref
+		return g.refProperty(field)
 	}
 
 	prop := &OpenAPIProperty{
@@ -1377,8 +1370,12 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 			g.applyElementConstraints(prop, field) // dive rules on items
 			return prop
 		}
+		// Path 5 — named scalar (Cents). isSliceType is false here, and
+		// prop.Type is set from UnderlyingKind just above, so a `nullable`
+		// emitted here always has a declared type to extend.
 		prop.Type = field.UnderlyingKind
 		g.applyConstraints(prop, field)
+		prop.Nullable = isPointerField(field)
 		return prop
 	}
 
@@ -1390,7 +1387,48 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 	g.applyConstraints(prop, field)
 	g.applyElementConstraints(prop, field)
 
+	// Pointer to a scalar / well-known type only. NOT pointer-to-slice
+	// (*[]string) or pointer-to-map (*map[string]int) — out of scope. Test the
+	// raw field.Type, before isSliceType/mapValueType strip the `*`. The
+	// prop.Type != "" term keeps `nullable` off a typeless schema (plan 017
+	// made any/interface{} emit no type), where it would have nothing to extend.
+	if _, isMap := mapValueType(field.Type); isPointerField(field) &&
+		!isSliceType(field.Type) && !isMap && prop.Type != "" {
+		prop.Nullable = true
+	}
+
 	return prop
+}
+
+// refProperty builds the property for a field whose underlying type is a
+// registered struct: a bare $ref, or an array whose items are that $ref.
+// A $ref must stand alone — it carries no sibling type/format or constraint
+// keywords — which is why this is a distinct path.
+func (g *OpenAPIGenerator) refProperty(field *models.FieldInfo) *OpenAPIProperty {
+	ref := &OpenAPIProperty{Ref: refPath(field.RefName)}
+	if isSliceType(field.Type) {
+		// The inner $ref must stand alone, but the array wrapper carries the
+		// field's documentation and cardinality (minItems/maxItems). Element-scope
+		// (dive) rules have nowhere valid to go on a $ref element, so they drop.
+		arr := &OpenAPIProperty{Type: typeArray, Items: ref, Description: field.Description}
+		if field.Example != "" {
+			arr.Example = field.Example
+		}
+		g.applyConstraints(arr, field)
+		return arr
+	}
+	if isPointerField(field) {
+		// *Struct: `nullable` beside a bare $ref is ignored in OpenAPI 3.0, so
+		// wrap the $ref in allOf. `type: object` is required for `nullable` to
+		// have a declared type to extend — do not omit it.
+		return &OpenAPIProperty{
+			Type:        typeObject,
+			AllOf:       []*OpenAPIProperty{ref},
+			Nullable:    true,
+			Description: field.Description,
+		}
+	}
+	return ref
 }
 
 // applyElementConstraints maps a slice field's element-scope (post-`dive`) rules
@@ -1420,6 +1458,19 @@ func sliceElementType(goType string) string {
 // optional leading pointer), e.g. "[]Address" or "*[]Address".
 func isSliceType(goType string) bool {
 	return strings.HasPrefix(strings.TrimPrefix(goType, "*"), "[]")
+}
+
+// isPointerField reports whether a field serializes JSON null (a Go pointer),
+// which OpenAPI 3.0 models with `nullable: true`.
+//
+// Parameters are excluded deliberately: extractParameters (openapi.go:1719)
+// builds Parameter.Schema through fieldInfoToProperty too, and a path/query/
+// header parameter carries URL or header text — never a JSON null. The two
+// callers partition exactly on ParamType (typeInfoToSchema skips every field
+// with ParamType != ""), so this guard suppresses the parameter caller and
+// nothing else.
+func isPointerField(field *models.FieldInfo) bool {
+	return field.ParamType == "" && strings.HasPrefix(field.Type, "*")
 }
 
 // wellKnownType holds the OpenAPI type/format for a recognized stdlib/library type.
