@@ -8,6 +8,11 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 GOVULNCHECK_VERSION := v1.1.4
 GOSEC_VERSION := v2.26.1
 
+# Pinned golangci-lint version — must stay in lockstep with ci.yml's
+# golangci-lint-action `version:` (.github/workflows/ci.yml:219). Bumping one
+# without the other lets the local and CI lint gates silently diverge.
+GOLANGCI_VERSION := v2.12.2
+
 # Pinned redocly CLI version for the structural-validation gate. Pinned (not
 # @latest) so an upstream release cannot silently change the gate or break CI.
 REDOCLY_VERSION := 2.31.5
@@ -94,7 +99,7 @@ sec: ## Run gosec security scanner (excludes testdata fixture modules, like CI)
 
 # Development helpers
 dev-deps: ## Install development dependencies
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 # Release helpers
 release: ## Cut a signed release tag (usage: make release VERSION=v0.2.0). Run AFTER merging the release-please PR.

@@ -126,6 +126,9 @@ tool's own annotation — it has no runtime effect.
 
 ## Development
 
+Run `make dev-deps` once to install the pinned `golangci-lint`; `make check`
+needs it, and `make validate-spec` additionally needs `npx`.
+
 ```bash
 make check          # fmt + lint + test (race) + validate-cli — the pre-commit gate
 make test           # unit tests with race detection
