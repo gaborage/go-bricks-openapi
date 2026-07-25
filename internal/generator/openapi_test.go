@@ -1117,6 +1117,23 @@ func TestTypeInfoToSchema(t *testing.T) {
 			expectedProps: 2,
 			expectedReq:   []string{"email", "name"}, // Sorted; no param fields
 		},
+		{
+			// A field with neither a JSON name nor a Go name has no representable
+			// property key. Before the fix this panicked at field.Name[:1] on an
+			// empty string; now it must be skipped entirely — including from
+			// `required`, since "" cannot appear there either. See plan 017.
+			name: "nameless field is skipped, not emitted as \"\"",
+			typeInfo: &models.TypeInfo{
+				Name: "Weird",
+				Fields: []models.FieldInfo{
+					{Name: "", JSONName: "", Required: true},
+				},
+			},
+			expectNil:     false,
+			expectedType:  typeObject,
+			expectedProps: 0,
+			expectedReq:   []string{},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1156,6 +1173,26 @@ func assertSchemaShape(t *testing.T, expectedType string, expectedProps int, exp
 			t.Errorf("Expected required[%d] = %q, got %q", i, req, schema.Required[i])
 		}
 	}
+}
+
+// TestTypeInfoToSchemaNamelessFieldSkipIsNarrow proves the nameless-field skip
+// added for plan 017 only fires when BOTH JSONName and Name are empty: a field
+// that merely lacks a JSON tag must still fall back to lowerFirst(Name) and be
+// emitted normally. Without this check, an over-broad skip condition could pass
+// the "nameless field is skipped" row above while silently dropping every field
+// that relies on the name-fallback path.
+func TestTypeInfoToSchemaNamelessFieldSkipIsNarrow(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	schema := gen.typeInfoToSchema(&models.TypeInfo{
+		Name: "Report",
+		Fields: []models.FieldInfo{
+			{Name: "Total", Type: "int", JSONName: ""},
+		},
+	})
+	require.NotNil(t, schema)
+	_, ok := schema.Properties["total"]
+	assert.True(t, ok, `expected fallback-named property "total" to be present, got %v`, schema.Properties)
 }
 
 func TestFieldInfoToPropertyRef(t *testing.T) {
@@ -1343,6 +1380,11 @@ func TestSetTypeAndFormat(t *testing.T) {
 		{name: "array of int", goType: "[]int", expectedType: "array", hasItems: true, itemType: "integer"},
 		{name: "map", goType: "map[string]any", expectedType: typeObject},
 		{name: "custom struct", goType: "CustomType", expectedType: typeObject},
+		// "any"/interface{} are "any JSON value" — an empty schema (no type), NOT
+		// type:object, since type:object would wrongly forbid scalars/arrays/null.
+		{name: "any", goType: "any", expectedType: ""},
+		{name: "interface{}", goType: "interface{}", expectedType: ""},
+		{name: "array of interface{}", goType: "[]interface{}", expectedType: "array", hasItems: true, itemType: ""},
 	}
 
 	for _, tt := range tests {
@@ -1433,6 +1475,25 @@ func TestSetTypeAndFormatMaps(t *testing.T) {
 		require.NotNil(t, prop.AdditionalProperties)
 		assert.Equal(t, typeInteger, prop.AdditionalProperties.Type)
 		assert.Equal(t, formatInt64, prop.AdditionalProperties.Format)
+	})
+
+	t.Run("interface{} value is an empty (unconstrained) schema", func(t *testing.T) {
+		prop := &OpenAPIProperty{}
+		gen.setTypeAndFormat(prop, "map[string]interface{}")
+		assert.Equal(t, typeObject, prop.Type)
+		require.NotNil(t, prop.AdditionalProperties)
+		assert.Empty(t, prop.AdditionalProperties.Type)
+	})
+
+	// Tightens the "map" row in TestSetTypeAndFormat (goType: "map[string]any"):
+	// the outer map is still type:object, but its additionalProperties must no
+	// longer carry type:object for an "any" value.
+	t.Run("any value is an empty (unconstrained) schema", func(t *testing.T) {
+		prop := &OpenAPIProperty{}
+		gen.setTypeAndFormat(prop, "map[string]any")
+		assert.Equal(t, typeObject, prop.Type)
+		require.NotNil(t, prop.AdditionalProperties)
+		assert.Empty(t, prop.AdditionalProperties.Type)
 	})
 }
 
