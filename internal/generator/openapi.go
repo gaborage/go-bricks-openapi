@@ -65,12 +65,14 @@ const (
 // Go primitive type names matched against Go type identifiers when mapping to
 // OpenAPI types/formats.
 const (
-	goTypeString  = "string"
-	goTypeFloat32 = "float32"
-	goTypeFloat64 = "float64"
-	goTypeBool    = "bool"
-	goTypeUint    = "uint"
-	goTypeUint64  = "uint64"
+	goTypeString    = "string"
+	goTypeFloat32   = "float32"
+	goTypeFloat64   = "float64"
+	goTypeBool      = "bool"
+	goTypeUint      = "uint"
+	goTypeUint64    = "uint64"
+	goTypeAny       = "any"
+	goTypeInterface = "interface{}"
 
 	// Qualified/composite Go types with a well-known OpenAPI representation.
 	goTypeTimeTime     = "time.Time"
@@ -1287,10 +1289,18 @@ func (g *OpenAPIGenerator) typeInfoToSchema(typeInfo *models.TypeInfo) *OpenAPIS
 			continue
 		}
 
+		// A field with neither a JSON name nor a Go name cannot be addressed by
+		// any JSON document, so it has no representable property key. Skip it
+		// rather than emitting one under "" (which would also put "" in
+		// `required`). Also guards field.Name[:1] against an empty string.
+		if field.JSONName == "" && field.Name == "" {
+			continue
+		}
+
 		// Use JSONName if set, otherwise use field name as fallback
 		propName := field.JSONName
 		if propName == "" {
-			propName = strings.ToLower(field.Name[:1]) + field.Name[1:]
+			propName = lowerFirst(field.Name)
 		}
 
 		prop := g.fieldInfoToProperty(field)
@@ -1520,6 +1530,10 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, goType string
 		prop.Format = formatDouble
 	case goTypeBool:
 		prop.Type = typeBoolean
+	case goTypeAny, goTypeInterface:
+		// "any JSON value" — an empty schema permits scalars, arrays, objects,
+		// and null, which `type: object` wrongly forbids. Leave prop untyped.
+		return
 	default:
 		// Complex types (structs, maps, etc.) - use object or reference
 		// Both maps and structs are represented as "object" in OpenAPI
