@@ -1,3 +1,12 @@
+> **SUPERSEDED (2026-07-26).** This is a point-in-time design record; several
+> decisions shipped differently. Authoritative sources: the version constants
+> in `internal/commands/doctor.go` (floor `v0.45.0`, verified through
+> `v0.53.0`) and the actual fixtures under `internal/spectest/testdata/`. In
+> particular: raw `r.Add`/`RegisterReadyHandler` routes ARE discovered (fixtures
+> `raw_add`/`raw_response`); the fixtures named
+> `register_handler`/`with_module`/`public_directive` were not created under
+> those names.
+
 # Design: go-bricks v0.45.0 compatibility
 
 **Date:** 2026-07-01
