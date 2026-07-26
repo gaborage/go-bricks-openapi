@@ -50,6 +50,9 @@ go-bricks-openapi generate --project . --output docs/openapi.yaml
 # Check environment & project compatibility before generating
 go-bricks-openapi doctor --project .
 
+# Validate an existing OpenAPI 3.0 document (YAML or JSON), no network needed
+go-bricks-openapi validate docs/openapi.yaml
+
 # Print version / build info
 go-bricks-openapi version
 ```
@@ -59,6 +62,7 @@ go-bricks-openapi version
 | Command    | Purpose                                                        |
 |------------|----------------------------------------------------------------|
 | `generate` | Generate an OpenAPI 3.0.1 specification from a GoBricks service |
+| `validate` | Validate that an OpenAPI 3.0 document is structurally valid     |
 | `doctor`   | Check Go/GoBricks compatibility and project structure          |
 | `version`  | Show tool, Go, and OpenAPI spec versions                       |
 
@@ -78,6 +82,7 @@ go-bricks-openapi version
 | `--no-tenant-security`  | Omit the `X-Tenant-ID` security scheme                   |
 | `--tenant-header`       | Header name for the tenant security scheme (default `X-Tenant-ID`) |
 | `--strict`              | Treat analyzer warnings as failures                      |
+| `--validate`            | Validate the generated spec (OpenAPI 3.0) before writing; fails if invalid |
 | `--verbose, -v`         | Verbose output                                           |
 
 ### Marking a route as public
