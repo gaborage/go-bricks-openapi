@@ -55,11 +55,11 @@ jobs:
     name: Publish release
     needs: [verify]
     runs-on: ubuntu-latest
-    # TRUST MODEL: GitHub runs this workflow from the *pushed tag's* tree, so the
-    # in-job annotated/ancestor/signature checks below are defense-in-depth, not the
-    # sole control — a tag could ship a modified release.yml. The enforcing control is
-    # the REQUIRED `v*` tag-protection ruleset restricting tag creation to the
-    # maintainer (RELEASING.md §0); the signed-tag gate then backs it up. Both matter.
+    # TRUST MODEL: GitHub runs this workflow from the *pushed tag's* tree, so a
+    # malicious tag could ship a modified release.yml — that threat is real. Today,
+    # the in-job annotated/ancestor/signature checks below are the *only* control on
+    # this publish path: no `v*` tag-protection ruleset exists. Such a ruleset is
+    # recommended but not currently configured (RELEASING.md §0).
     permissions:
       contents: write        # GoReleaser creates the GitHub Release and uploads assets
       pull-requests: write   # the autorelease:pending label step edits the merged Release PR
