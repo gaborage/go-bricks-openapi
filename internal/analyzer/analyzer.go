@@ -3446,19 +3446,19 @@ func (a *ProjectAnalyzer) parseJSONTagName(jsonTag string) string {
 // Returns paramType ("path", "query", "header") and paramName
 func (a *ProjectAnalyzer) parseParameterTags(tag string) (paramType, paramName string) {
 	// Check param tag: `param:"id"`
-	if paramTag := a.extractTag(tag, tagParam); paramTag != "" {
+	if paramTag := lookupStructTag(tag, tagParam); paramTag != "" {
 		paramType = paramTypePath
 		paramName = paramTag
 	}
 
 	// Check query tag: `query:"page"` (overrides param)
-	if queryTag := a.extractTag(tag, tagQuery); queryTag != "" {
+	if queryTag := lookupStructTag(tag, tagQuery); queryTag != "" {
 		paramType = paramTypeQuery
 		paramName = queryTag
 	}
 
 	// Check header tag: `header:"Authorization"` (overrides query and param)
-	if headerTag := a.extractTag(tag, tagHeader); headerTag != "" {
+	if headerTag := lookupStructTag(tag, tagHeader); headerTag != "" {
 		paramType = paramTypeHeader
 		paramName = headerTag
 	}
@@ -3476,7 +3476,7 @@ func (a *ProjectAnalyzer) parseStructTags(tag string) parsedTags {
 	var result parsedTags
 
 	// Parse json tag: `json:"fieldName,omitempty"`
-	if jsonTag := a.extractTag(tag, tagJSON); jsonTag != "" {
+	if jsonTag := lookupStructTag(tag, tagJSON); jsonTag != "" {
 		result.jsonName = a.parseJSONTagName(jsonTag)
 	}
 
@@ -3484,42 +3484,31 @@ func (a *ProjectAnalyzer) parseStructTags(tag string) parsedTags {
 	result.paramType, result.paramName = a.parseParameterTags(tag)
 
 	// Parse doc tag: `doc:"User email address"`
-	result.description = a.extractTag(tag, tagDoc)
+	result.description = lookupStructTag(tag, tagDoc)
 
 	// Parse example tag: `example:"user@example.com"`
-	result.example = a.extractTag(tag, tagExample)
+	result.example = lookupStructTag(tag, tagExample)
 
 	// Parse validate tag: `validate:"required,email,min=5"`
-	result.rawValidation = a.extractTag(tag, tagValidate)
+	result.rawValidation = lookupStructTag(tag, tagValidate)
 
 	return result
 }
 
-// extractTag extracts a specific tag value from a struct tag string
-// Handles both quoted and unquoted tag values
-func (a *ProjectAnalyzer) extractTag(tagStr, tagName string) string {
-	// Look for tagName:"value" or tagName:`value`
-	prefix := tagName + `:"`
-	startIdx := strings.Index(tagStr, prefix)
-	if startIdx == -1 {
-		// Try backtick version
-		prefix = tagName + ":`"
-		startIdx = strings.Index(tagStr, prefix)
-		if startIdx == -1 {
-			return ""
-		}
-	}
-
-	startIdx += len(prefix)
-	endIdx := strings.IndexByte(tagStr[startIdx:], '"')
-	if endIdx == -1 {
-		endIdx = strings.IndexByte(tagStr[startIdx:], '`')
-		if endIdx == -1 {
-			return ""
-		}
-	}
-
-	return tagStr[startIdx : startIdx+endIdx]
+// lookupStructTag returns the value of tagName in a struct tag using the
+// spec-conformant parser the Go runtime itself uses via reflect. It replaces a
+// hand-rolled substring scanner whose key search matched any tag key ENDING IN
+// the target name (so `queryparam:"x"` hijacked `param:`) and whose value ended
+// at the first quote byte (so an escaped quote truncated the value). `go vet`
+// defines tag correctness as exactly reflect.StructTag compatibility.
+//
+// The presence bit is deliberately discarded: callers gate on a non-empty
+// value, and `json:""` / `param:""` must keep meaning "no explicit value"
+// rather than "present but empty" — `json:""` in particular is the sentinel
+// that keeps an embedded struct promoted rather than nested.
+func lookupStructTag(tagStr, tagName string) string {
+	value, _ := reflect.StructTag(tagStr).Lookup(tagName)
+	return value
 }
 
 // parseValidationTag parses a validation tag string into a constraints map

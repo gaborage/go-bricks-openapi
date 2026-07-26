@@ -2945,6 +2945,84 @@ func TestParseStructTagsComprehensive(t *testing.T) {
 			expectedExample:   testUserEmail,
 			expectedValidate:  "required,email,min=5,max=100",
 		},
+		{
+			// `myjson:` ends in `json`; the old substring scanner matched it first.
+			name:             "suffix_decoy_does_not_hijack_json",
+			tag:              `myjson:"decoyName" json:"real"`,
+			expectedJSONName: "real",
+		},
+		{
+			// Same hijack, but the decoy's value is empty -> the field silently lost
+			// its json name entirely.
+			name:             "empty_suffix_decoy_does_not_blank_json",
+			tag:              `myjson:"" json:"real"`,
+			expectedJSONName: "real",
+		},
+		{
+			// `queryparam:` ends in `param`; this turned a path param into the wrong name.
+			name:              "suffix_decoy_does_not_hijack_param",
+			tag:               `queryparam:"decoy" param:"id"`,
+			expectedParamType: "path",
+			expectedParamName: "id",
+		},
+		{
+			// `xheader:` ends in `header` -> the spec named the wrong header.
+			name:              "suffix_decoy_does_not_hijack_header",
+			tag:               `xheader:"X-Decoy" header:"X-Trace-Id"`,
+			expectedParamType: "header",
+			expectedParamName: "X-Trace-Id",
+		},
+		{
+			// The old scanner ended the value at the first quote byte.
+			name:             "escaped_quote_in_doc_is_not_truncated",
+			tag:              `json:"note" doc:"say \"hi\" now"`,
+			expectedJSONName: "note",
+			expectedDesc:     `say "hi" now`,
+		},
+		{
+			// The target key's text appearing inside ANOTHER key's value.
+			name:             "key_text_inside_another_value",
+			tag:              `doc:"see validate:" validate:"required"`,
+			expectedDesc:     "see validate:",
+			expectedValidate: "required",
+		},
+		{
+			// SENTINEL: json:"" must stay "no explicit name" (Lookup reports ok=true
+			// with an empty value; the != "" gate is what preserves this). If this row
+			// fails, the presence bit was not discarded — see hazard 2.
+			name:             "empty_json_value_is_not_an_explicit_name",
+			tag:              `json:"" doc:"d"`,
+			expectedJSONName: "",
+			expectedDesc:     "d",
+		},
+		{
+			// An empty-valued param tag must NOT classify the field as a path parameter.
+			// reflect's Lookup returns ("", true) here, so this row is what fails if a
+			// future refactor adopts the `if v, ok := Lookup(...); ok` form and drops
+			// the `!= ""` gate.
+			name:             "empty_param_value_is_not_a_path_param",
+			tag:              `param:"" json:"x"`,
+			expectedJSONName: "x",
+		},
+		{
+			// Same guard for the header site (query and header share this shape).
+			name:             "empty_header_value_is_not_a_header_param",
+			tag:              `header:"" json:"y"`,
+			expectedJSONName: "y",
+		},
+		{
+			// `notquery:` ends in `query`.
+			name:              "suffix_decoy_does_not_hijack_query",
+			tag:               `notquery:"decoy" query:"page"`,
+			expectedParamType: "query",
+			expectedParamName: "page",
+		},
+		{
+			// `myexample:` ends in `example`.
+			name:            "suffix_decoy_does_not_hijack_example",
+			tag:             `myexample:"decoy" example:"real"`,
+			expectedExample: "real",
+		},
 	}
 
 	for _, tt := range tests {
