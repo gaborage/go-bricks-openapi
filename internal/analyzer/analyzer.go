@@ -121,6 +121,7 @@ type ProjectAnalyzer struct {
 	usedNames        map[string]struct{}             // final schema names already taken
 	publicDirectives map[string]map[int]struct{}     // filename -> lines where a directive comment group ends
 	depthWarned      bool                            // once-latch: registration-depth cap already warned this run
+	tagWarned        map[string]struct{}             // dedupes malformed-struct-tag warnings by "file:line:col"
 }
 
 // New creates a new project analyzer
@@ -209,6 +210,7 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	a.nameAssign = make(map[string]string)
 	a.usedNames = make(map[string]struct{})
 	a.depthWarned = false
+	a.tagWarned = nil
 
 	// Discover project metadata from go.mod
 	a.discoverProjectMetadata(project)
@@ -3310,7 +3312,9 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *
 
 	// An explicit json name turns embedding into nesting (a parent-level field).
 	if field.Tag != nil {
-		jsonName := a.parseStructTags(unquoteLiteral(field.Tag.Value)).jsonName
+		tagText := unquoteLiteral(field.Tag.Value)
+		a.warnUnreadableTagKeys(field.Tag, typeName, tagText)
+		jsonName := a.parseStructTags(tagText).jsonName
 		switch jsonName {
 		case jsonSkipValue:
 			return nil, false // json:"-" — excluded
@@ -3362,6 +3366,7 @@ func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field) models.F
 // parseFieldTags parses struct tags and populates the FieldInfo
 func (a *ProjectAnalyzer) parseFieldTags(fieldInfo *models.FieldInfo, tag *ast.BasicLit) {
 	tagValue := unquoteLiteral(tag.Value)
+	a.warnUnreadableTagKeys(tag, fieldInfo.Name, tagValue)
 	tags := a.parseStructTags(tagValue)
 
 	fieldInfo.JSONName = tags.jsonName

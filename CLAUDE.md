@@ -82,6 +82,9 @@ Repo-specific gates and settled invariants for `go-bricks-openapi`. This is a st
 - Refactoring to `if v, ok := Lookup(...); ok` is a behavior change, not a cleanup.
 - `unquoteLiteral` (same file) is the only sanctioned way to turn a `go/parser` string literal's source text into its value.
 - Its fallback strips only the delimiter actually present — a combined cutset would eat a raw struct tag's own closing quote, turning `json:"pan"` into `json:"pan`.
+- `hiddenTagKeys` (`internal/analyzer/tagcheck.go`) warns when a struct tag is malformed enough that `reflect.StructTag`'s own scan stops early, hiding one of the seven keys `lookupStructTag` reads.
+- Because analyzer warnings feed `--strict`, a project with such a tag newly fails `generate --strict` with no artifact — a behavior change, not a bug.
+- The detector reports only when reflect's scan stops early; a mangled key that reflect still parses as a (wrong) key name — e.g. `json:"b";validate:"c"` reads a key literally named `;validate` — is not reported, and no tool in this repo's toolchain catches every such shape.
 - In `internal/generator/openapi.go`, `referencedSchemaNames` deliberately does not scan non-JOSE request types.
 - Adding them orphans a component for every params-only request type and trips redocly's `no-unused-components`.
 - Don't "optimize" the `schema == nil` check in `generateSchemasFromTypes` into a zero-properties check — it would drop the component and dangle a `requestBody` `$ref`.
