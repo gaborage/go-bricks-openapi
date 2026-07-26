@@ -38,18 +38,47 @@ backward compatibility on the three surfaces above — not an automatic mileston
   repo secret. release-please uses it so its Release PR triggers CI and its label edits are
   reliable — the default `GITHUB_TOKEN` does neither. Create it once:
   `gh secret set RELEASE_PLEASE_TOKEN --repo gaborage/go-bricks-openapi`.
-- **Squash setting** — Settings → General → Pull Requests → **"Default to PR title for squash
-  merge commits"** must be ON (release-please parses the PR title as the commit subject). This
-  repo is already squash-only.
-- **Tag protection (REQUIRED)** — add a **tag-protection ruleset on `v*`** restricting tag
-  creation to the maintainer. This is the *enforcing* control, not optional: GitHub runs
-  `release.yml` from the **pushed tag's own tree**, so a tag that ships a modified `release.yml`
-  could strip the in-job signature/ancestry checks and reach the privileged publish token.
-  Restricting who can create `v*` tags is what actually closes that gap.
-- **Signature trust root** — `.github/allowed_signers` backs up tag protection. `release.yml`
-  verifies a tag's signature against the copy of `allowed_signers` **on `main`** (ruleset-guarded)
-  and requires the tagged commit to be an ancestor of `main`, so the in-job gate is exactly as
-  trustworthy as `main` — defense-in-depth behind the `v*` tag-protection ruleset above.
+- **Squash setting** — live value is `squash_merge_commit_title: COMMIT_OR_PR_TITLE` (verified:
+  `gh api repos/gaborage/go-bricks-openapi --jq .squash_merge_commit_title`), not `PR_TITLE`.
+  Under `COMMIT_OR_PR_TITLE`, a **one-commit PR uses that commit's own subject** as the squash
+  message, and only a **multi-commit PR** falls back to the PR title. Consequence: on a
+  single-commit PR — the common case here — the **commit** subject, not the PR title, is what
+  release-please parses, so that subject must be Conventional Commit form. This repo is already
+  squash-only.
+- **Tag protection (recommended — not currently configured)** — GitHub runs `release.yml` from
+  the **pushed tag's own tree**, so the in-job checks live inside a file the tag author controls;
+  that threat is real. Today, those in-job checks — annotated-tag, ancestor-of-`main`, and
+  SSH-signature verification against `main`'s `allowed_signers` — are the **only** control on the
+  publish path; no `v*` tag-protection ruleset exists (verified: `gh api
+  'repos/gaborage/go-bricks-openapi/rulesets?includes_parents=true'` returns one ruleset, target
+  `branch`, not `tag`). A `v*` tag-protection ruleset restricting tag creation is **recommended
+  but not currently configured**. It would **not** stop the maintainer or a credential acting as
+  them — GitHub exposes no separate tag-push permission, so anyone with repo write access can
+  already create `v*` tags. It **would** stop a non-human `contents: write` principal — e.g. a
+  subverted third-party action inside `release-please.yml`, which runs on every push to `main` —
+  from creating one directly. Independent of all of the above: a `v*` tag alone, with no workflow
+  run at all, already publishes runnable source to `proxy.golang.org` and every `go
+  install`/`go get` consumer, immutably. This repo already demonstrated the mechanism: `v0.1.0` —
+  an annotated but **unsigned** tag — published six assets, because `release.yml` in that tag's
+  own tree (48 lines, a single job, workflow-level `contents`/`id-token`/`attestations: write`)
+  carried no annotated/ancestor/signature check at all (`git tag -v v0.1.0` →
+  `error: no signature found`).
+- **Signature trust root** — `release.yml` verifies a tag's signature against the copy of
+  `.github/allowed_signers` **on `main`** and requires the tagged commit to be an ancestor of
+  `main`. These in-job annotated/ancestor/signature checks bind a **cooperative** tagger — they
+  catch maintainer error (a lightweight tag, an unsigned tag, a tag pointing off `main`) but not a
+  malicious tag pusher, because they live in the file the tag author controls. `allowed_signers`
+  on `main` is not independently locked down: the repo's one ruleset has a `RepositoryRole` bypass
+  actor at `bypass_mode: "always"`, there is **no CODEOWNERS** file, and PR #20 merged with zero
+  reviews against a rule that otherwise requires one approval. Whoever holds admin can edit
+  `allowed_signers` on `main` without review.
+- **Residual risk even with all of the above** — tag-controlled **code**, not just tag-controlled
+  workflow YAML, still executes inside the privileged `publish` job: `.goreleaser.yaml` runs
+  `before: hooks: [go mod tidy]` and builds `./cmd/go-bricks-openapi` from the tag's own source,
+  inside the job holding `contents`/`pull-requests`/`id-token`/`attestations: write`. No GitHub
+  Environment gates those secrets (`gh api repos/gaborage/go-bricks-openapi/environments` →
+  `total_count: 0`). A `v*` ruleset and a pinned workflow file close the "modified `release.yml`"
+  door; they do not close this one.
 - **Local SSH signing** — `make release` signs the tag (`git tag -s`). Configure
   `git config gpg.format ssh` + `user.signingkey` with the key listed in
   `.github/allowed_signers` (1Password or `ssh-agent`).
@@ -57,10 +86,11 @@ backward compatibility on the three surfaces above — not an automatic mileston
 ## 1. release-please keeps a standing Release PR
 
 On every push to `main` (and on demand via *Actions → release-please → Run workflow*),
-`release-please` opens/updates a `chore(main): release vX.Y.Z` PR
-that computes the next version from Conventional-Commit PR titles and writes the
-`CHANGELOG.md` section + bumps `.release-please-manifest.json`. It does **not** tag or publish
-(`skip-github-release: true`).
+`release-please` opens/updates a `chore(main): release X.Y.Z` PR **as a draft**
+(`draft-pull-request: true` in `release-please-config.json`) that computes the next version from
+the Conventional-Commit **subjects of the squash commits landed on `main`** — not PR titles — and
+writes the `CHANGELOG.md` section + bumps `.release-please-manifest.json`. It does **not** tag or
+publish (`skip-github-release: true`).
 
 Release notes are generated from commit subjects, so they must follow
 [Conventional Commits](https://www.conventionalcommits.org/). `docs:` / `chore:` / `ci:` /
@@ -69,16 +99,21 @@ Release notes are generated from commit subjects, so they must follow
 ## 2. Cut the release (local)
 
 ```bash
-# 1. Merge the standing "chore(main): release vX.Y.Z" PR. This lands CHANGELOG + manifest on main.
+# 1. Mark the standing "chore(main): release X.Y.Z" PR ready for review (it opens as a
+#    draft) and merge it. This lands CHANGELOG + manifest on main.
 git checkout main && git pull
 # 2. Immediately cut the signed tag (read the version from the merged PR / manifest):
 make release VERSION=v0.2.0
 ```
 
-`make release` is **read-and-verify-only**: it asserts `VERSION == .release-please-manifest.json
-== CHANGELOG top section`, runs the full gate (`make check` + `make vuln` + `make sec`), probes
-signing, creates a **signed annotated** tag (`git tag -s`), verifies the signature locally, and
-pushes the tag. It does **not** edit `CHANGELOG.md` (release-please owns it).
+`make release` is **not** read-only: its gate (`make check`) runs `fmt` (`go fmt ./...`) first,
+which rewrites tracked `.go` files if any weren't already formatted. It asserts `VERSION ==
+.release-please-manifest.json == CHANGELOG top section`, runs the full gate (`make check` +
+`make vuln` + `make sec`), probes signing, creates a **signed annotated** tag (`git tag -s`),
+verifies the signature locally, and pushes the tag. It does **not** edit `CHANGELOG.md`
+(release-please owns it) — but if `fmt` rewrites anything else, the gate tripwires on it:
+`scripts/release.sh` aborts with "the release gate (make check → fmt) modified tracked files"
+rather than silently tagging an unformatted tree.
 
 > **Rule (release-please #1561):** never merge a Release PR you are not ready to `make release`
 > immediately. A merged-but-untagged Release PR keeps its `autorelease: pending` label and
