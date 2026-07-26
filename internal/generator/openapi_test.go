@@ -1224,7 +1224,7 @@ func TestFieldInfoToPropertyRef(t *testing.T) {
 		})
 		assert.Equal(t, typeArray, prop.Type)
 		assert.Equal(t, "the user's addresses", prop.Description, "array wrapper keeps the field description")
-		assert.Equal(t, "n/a", prop.Example)
+		assert.Nil(t, prop.Example, "a scalar tag value is not a valid array example")
 		require.NotNil(t, prop.Items)
 		assert.Equal(t, refPath("Address"), prop.Items.Ref)
 		assert.Empty(t, prop.Items.Description, "the inner $ref must stand alone")
@@ -3203,4 +3203,61 @@ func TestBuildOperationSynthesizesMissingPathParams(t *testing.T) {
 	assert.True(t, op.Parameters[0].Required)
 	require.NotNil(t, op.Parameters[0].Schema)
 	assert.Equal(t, typeString, op.Parameters[0].Schema.Type)
+}
+
+// TestCoerceExample pins the coercion (and drop-on-failure) rules for every
+// schema type an `example:` tag can land on. "want == nil" means the value is
+// DROPPED — no example key is emitted at all.
+func TestCoerceExample(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		prop *OpenAPIProperty
+		want any
+	}{
+		{name: "integer int32 in range", raw: "3", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt32}, want: int64(3)},
+		{name: "integer no format", raw: "3", prop: &OpenAPIProperty{Type: typeInteger}, want: int64(3)},
+		{name: "integer rejects decimal text", raw: "3.0", prop: &OpenAPIProperty{Type: typeInteger}, want: nil},
+		{name: "integer rejects non-numeric", raw: "abc", prop: &OpenAPIProperty{Type: typeInteger}, want: nil},
+		{name: "integer int32 out of range", raw: "3000000000", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt32}, want: nil},
+		{name: "integer int64 in range", raw: "3000000000", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64}, want: int64(3000000000)},
+		{name: "integer overflows int64", raw: "9223372036854775808", prop: &OpenAPIProperty{Type: typeInteger}, want: nil},
+		{name: "number basic float", raw: "2.5", prop: &OpenAPIProperty{Type: typeNumber}, want: float64(2.5)},
+		{name: "number rejects NaN", raw: "NaN", prop: &OpenAPIProperty{Type: typeNumber}, want: nil},
+		{name: "number rejects Inf", raw: "Inf", prop: &OpenAPIProperty{Type: typeNumber}, want: nil},
+		{name: "number below minimum", raw: "5", prop: &OpenAPIProperty{Type: typeNumber, Minimum: float64Ptr(10)}, want: nil},
+		{name: "number at exclusive minimum", raw: "10", prop: &OpenAPIProperty{Type: typeNumber, Minimum: float64Ptr(10), ExclusiveMinimum: boolPtr(true)}, want: nil},
+		{name: "number above exclusive minimum", raw: "11", prop: &OpenAPIProperty{Type: typeNumber, Minimum: float64Ptr(10), ExclusiveMinimum: boolPtr(true)}, want: float64(11)},
+		{name: "number at exclusive maximum", raw: "20", prop: &OpenAPIProperty{Type: typeNumber, Maximum: float64Ptr(20), ExclusiveMaximum: boolPtr(true)}, want: nil},
+		{name: "number at inclusive minimum is kept", raw: "10", prop: &OpenAPIProperty{Type: typeNumber, Minimum: float64Ptr(10)}, want: float64(10)},
+		{name: "boolean true", raw: "true", prop: &OpenAPIProperty{Type: typeBoolean}, want: true},
+		{name: "boolean rejects yes", raw: "yes", prop: &OpenAPIProperty{Type: typeBoolean}, want: nil},
+		{name: "string passthrough", raw: "12345", prop: &OpenAPIProperty{Type: typeString}, want: "12345"},
+		{name: "untyped schema passthrough", raw: "7", prop: &OpenAPIProperty{Type: ""}, want: "7"},
+		{name: "array cannot take a scalar", raw: "x", prop: &OpenAPIProperty{Type: typeArray}, want: nil},
+		{name: "object cannot take a scalar", raw: "x", prop: &OpenAPIProperty{Type: typeObject}, want: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := coerceExample(tt.raw, tt.prop)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestApplyExample covers the two cases coerceExample's table doesn't reach:
+// a $ref sibling and an empty raw tag, both of which must be no-ops.
+func TestApplyExample(t *testing.T) {
+	t.Run("ref sibling is left untouched", func(t *testing.T) {
+		prop := &OpenAPIProperty{Ref: "#/components/schemas/X"}
+		applyExample(prop, "anything")
+		assert.Nil(t, prop.Example, "example must never sit beside $ref")
+	})
+
+	t.Run("empty raw is a no-op", func(t *testing.T) {
+		prop := &OpenAPIProperty{Type: typeString}
+		applyExample(prop, "")
+		assert.Nil(t, prop.Example)
+	})
 }
