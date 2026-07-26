@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"maps"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -1323,8 +1324,19 @@ func (g *OpenAPIGenerator) typeInfoToSchema(typeInfo *models.TypeInfo) *OpenAPIS
 	return schema
 }
 
-// fieldInfoToProperty converts a FieldInfo to an OpenAPI property.
+// fieldInfoToProperty builds a field's schema and then applies its example.
+// The example is applied here, after the property is fully built, because
+// coercion needs the RESOLVED type — several paths inside buildFieldProperty
+// return early without ever reaching setTypeAndFormat.
 func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPIProperty {
+	prop := g.buildFieldProperty(field)
+	applyExample(prop, field.Example)
+	return prop
+}
+
+// buildFieldProperty converts a FieldInfo to an OpenAPI property, without
+// applying its example — see fieldInfoToProperty, the wrapper that does.
+func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIProperty {
 	// A field whose underlying type is a registered struct is a $ref (or an array
 	// of $ref). A $ref must stand alone — it carries no sibling type/format or
 	// constraint keywords — so return early.
@@ -1334,11 +1346,6 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 
 	prop := &OpenAPIProperty{
 		Description: field.Description,
-	}
-
-	// Set example if present
-	if field.Example != "" {
-		prop.Example = field.Example
 	}
 
 	// A struct-valued map (map[string]Address) is an object whose
@@ -1411,9 +1418,7 @@ func (g *OpenAPIGenerator) refProperty(field *models.FieldInfo) *OpenAPIProperty
 		// field's documentation and cardinality (minItems/maxItems). Element-scope
 		// (dive) rules have nowhere valid to go on a $ref element, so they drop.
 		arr := &OpenAPIProperty{Type: typeArray, Items: ref, Description: field.Description}
-		if field.Example != "" {
-			arr.Example = field.Example
-		}
+		applyExample(arr, field.Example)
 		g.applyConstraints(arr, field)
 		return arr
 	}
@@ -1748,6 +1753,110 @@ func toFloat64Ptr(value any) *float64 {
 	return nil
 }
 
+// applyExample stamps a coerced `example` onto prop, or omits it entirely.
+//
+// OpenAPI 3.0 requires the example to match the schema's declared type, but the
+// analyzer can only hand us the tag's raw string. Coercion therefore has to run
+// AFTER the property's type is resolved — which is why this is called from the
+// fieldInfoToProperty wrapper rather than inline, where prop.Type is still empty.
+//
+// A value that cannot be represented in the declared type is DROPPED rather than
+// emitted: a missing example costs the reader one hint, an ill-typed one makes
+// the whole document invalid.
+func applyExample(prop *OpenAPIProperty, raw string) {
+	if prop == nil || raw == "" {
+		return
+	}
+	// A sibling of $ref is invalid OpenAPI ("extra sibling fields: [example]").
+	if prop.Ref != "" {
+		return
+	}
+	if v := coerceExample(raw, prop); v != nil {
+		prop.Example = v
+	}
+}
+
+// coerceExample converts the raw tag text to a value valid for prop's type, or
+// returns nil when no valid representation exists.
+func coerceExample(raw string, prop *OpenAPIProperty) any {
+	switch prop.Type {
+	case typeString, "":
+		// "" is the untyped schema emitted for any/interface{} — a string is
+		// valid there because there is no type to violate.
+		return raw
+	case typeInteger:
+		return coerceIntegerExample(raw, prop)
+	case typeNumber:
+		return coerceNumberExample(raw, prop)
+	case typeBoolean:
+		if b, err := strconv.ParseBool(raw); err == nil {
+			return b
+		}
+		return nil
+	default:
+		// array and object cannot be expressed by a scalar tag value.
+		return nil
+	}
+}
+
+// coerceIntegerExample parses raw as an integer and rejects it unless it also
+// fits the declared format and any minimum/maximum already applied.
+func coerceIntegerExample(raw string, prop *OpenAPIProperty) any {
+	i, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return nil
+	}
+	if !intFitsFormat(i, prop.Format) {
+		return nil
+	}
+	if !exampleInBounds(float64(i), prop) {
+		return nil
+	}
+	return i
+}
+
+// coerceNumberExample parses raw as a float, rejecting the non-finite values
+// strconv accepts — yaml would write .nan/.inf, which fails at the PARSE stage.
+func coerceNumberExample(raw string, prop *OpenAPIProperty) any {
+	f, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+		return nil
+	}
+	if !exampleInBounds(f, prop) {
+		return nil
+	}
+	return f
+}
+
+// intFitsFormat enforces the int32 range kin-openapi checks. format int64 and an
+// absent format are unchecked by the validator, so they pass through.
+func intFitsFormat(i int64, format string) bool {
+	if format == formatInt32 {
+		return i >= math.MinInt32 && i <= math.MaxInt32
+	}
+	return true
+}
+
+// exampleInBounds honours minimum/maximum, which the validator applies to the
+// example as well as to request values. The exclusive flags matter: `validate:"gt=10"`
+// emits minimum: 10 with exclusiveMinimum: true, and an example of exactly 10 is
+// then rejected ("number must be more than 10").
+func exampleInBounds(n float64, prop *OpenAPIProperty) bool {
+	if prop.Minimum != nil {
+		if n < *prop.Minimum ||
+			(prop.ExclusiveMinimum != nil && *prop.ExclusiveMinimum && n == *prop.Minimum) {
+			return false
+		}
+	}
+	if prop.Maximum != nil {
+		if n > *prop.Maximum ||
+			(prop.ExclusiveMaximum != nil && *prop.ExclusiveMaximum && n == *prop.Maximum) {
+			return false
+		}
+	}
+	return true
+}
+
 // extractParameters separates parameters (path, query, header) from body fields
 // Returns parameters array and body fields (non-parameter fields)
 func (g *OpenAPIGenerator) extractParameters(route *models.Route) ([]Parameter, []models.FieldInfo) {
@@ -1769,8 +1878,10 @@ func (g *OpenAPIGenerator) extractParameters(route *models.Route) ([]Parameter, 
 				Description: field.Description,
 				Schema:      g.fieldInfoToProperty(field),
 			}
-			if field.Example != "" {
-				param.Example = field.Example
+			// Mirror the schema's coerced example; both are validated
+			// independently, so they must not diverge.
+			if param.Schema != nil && param.Schema.Example != nil {
+				param.Example = param.Schema.Example
 			}
 			params = append(params, param)
 		} else {
