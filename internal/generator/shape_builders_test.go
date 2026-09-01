@@ -11,7 +11,6 @@ func prim(name string) models.TypeShape {
 func named(name string) models.TypeShape {
 	return models.TypeShape{Kind: models.ShapeNamed, Name: name}
 }
-func unknownShape() models.TypeShape { return models.TypeShape{Kind: models.ShapeUnknown} }
 func ptrOf(s models.TypeShape) models.TypeShape {
 	return models.TypeShape{Kind: models.ShapePointer, Elem: &s}
 }

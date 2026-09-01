@@ -50,6 +50,8 @@ const (
 
 	// Go primitive type names referenced for type discrimination
 	goTypeInt64   = "int64"
+	goTypeByte    = "byte"
+	goTypeUint8   = "uint8"
 	goTypeFloat32 = "float32"
 	goTypeFloat64 = "float64"
 )
@@ -72,7 +74,7 @@ func MapConstraintToOpenAPI(shape models.TypeShape, underlyingKind string, const
 	// effectiveKind is "" (neither string nor numeric), so min/max/len route to
 	// minProperties/maxProperties (entry-count cardinality) rather than being dropped.
 	byteSlice := base.Kind == models.ShapeSlice && base.Elem != nil &&
-		(base.Elem.Name == "byte" || base.Elem.Name == "uint8")
+		(base.Elem.Name == goTypeByte || base.Elem.Name == goTypeUint8)
 	isSlice := base.Kind == models.ShapeSlice && !byteSlice
 	isMap := base.Kind == models.ShapeMap
 	// base.Name is "" for every container, which effectiveKind classifies as
@@ -632,7 +634,7 @@ func isStringType(typeName string) bool {
 func isIntegerType(typeName string) bool {
 	switch typeName {
 	case "int", "int8", "int16", "int32", goTypeInt64,
-		"uint", "uint8", "uint16", "uint32", "uint64":
+		"uint", goTypeUint8, "uint16", "uint32", "uint64":
 		return true
 	}
 	return false

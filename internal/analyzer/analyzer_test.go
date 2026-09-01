@@ -5285,7 +5285,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 		count := 0
 		for _, f := range ti.Fields {
 			if f.JSONName == "tag" {
-				tagType = f.Type
+				tagType = renderShape(f.Shape)
 				count++
 			}
 		}

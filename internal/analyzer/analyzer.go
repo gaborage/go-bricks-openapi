@@ -3334,7 +3334,6 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *
 func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field) models.FieldInfo {
 	fieldInfo := models.FieldInfo{
 		Name:        name,
-		Type:        a.typeToString(field.Type),
 		Shape:       a.typeShape(field.Type),
 		Constraints: make(map[string]string),
 	}
@@ -3370,48 +3369,21 @@ func (a *ProjectAnalyzer) parseFieldTags(fieldInfo *models.FieldInfo, tag *ast.B
 	}
 }
 
-// typeToString converts an AST type expression to a string representation
-func (a *ProjectAnalyzer) typeToString(expr ast.Expr) string {
-	switch t := expr.(type) {
-	case *ast.Ident:
-		return t.Name
-
-	case *ast.StarExpr:
-		return "*" + a.typeToString(t.X)
-
-	case *ast.ArrayType:
-		return "[]" + a.typeToString(t.Elt)
-
-	case *ast.MapType:
-		return "map[" + a.typeToString(t.Key) + "]" + a.typeToString(t.Value)
-
-	case *ast.SelectorExpr:
-		if pkg, ok := t.X.(*ast.Ident); ok {
-			return pkg.Name + "." + t.Sel.Name
-		}
-
-	case *ast.InterfaceType:
-		return "interface{}"
-	}
-
-	return "unknown"
-}
-
 // builtinShapeNames are the identifiers decoded as ShapePrimitive. The
 // primitive-vs-named distinction is informational — no consumer's OUTPUT may
 // depend on it (behavior keys on Name and on container kinds).
 var builtinShapeNames = map[string]bool{
-	"string": true, "bool": true, "byte": true, "rune": true, "error": true,
+	"string": true, goTypeByte: true, "rune": true, "error": true, "bool": true,
 	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
-	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
+	"uint": true, goTypeUint8: true, "uint16": true, "uint32": true, "uint64": true,
 	"uintptr": true, "float32": true, "float64": true,
 	"complex64": true, "complex128": true, "any": true,
 }
 
-// typeShape decodes an AST type expression into its structural Shape, mirroring
-// typeToString's case set exactly. Total: unmodeled nodes (chan, func, struct
-// literals, generics) decode as ShapeUnknown, matching typeToString's "unknown".
-// A fixed-size array decodes as ShapeSlice — the same lossiness typeToString has.
+// typeShape decodes an AST type expression into its structural Shape. Total:
+// unmodeled nodes (chan, func, struct literals, generics) decode as
+// ShapeUnknown. A fixed-size array decodes as ShapeSlice, dropping its length —
+// the same lossiness the rendered type string it replaced always had.
 func (a *ProjectAnalyzer) typeShape(expr ast.Expr) models.TypeShape {
 	switch t := expr.(type) {
 	case *ast.Ident:

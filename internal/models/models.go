@@ -106,7 +106,6 @@ type TypeShape struct {
 
 type FieldInfo struct {
 	Name string
-	Type string
 	// Shape is the field's decoded type structure. Stamped by the analyzer at
 	// extraction; hand-built test Projects must stamp it too — the generator
 	// has NO string-parsing fallback.

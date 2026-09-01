@@ -2916,7 +2916,7 @@ func TestFieldInfoToPropertyNullable(t *testing.T) {
 		}
 		for _, f := range cases {
 			p := gen.fieldInfoToProperty(f)
-			assert.False(t, p.Nullable, "field %q (%s) must not be nullable", f.JSONName, f.Type)
+			assert.False(t, p.Nullable, "field %q (%s) must not be nullable", f.JSONName, f.Shape.Kind)
 		}
 	})
 

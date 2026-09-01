@@ -41,23 +41,37 @@ func mustParse(t *testing.T, src string) ast.Expr {
 	return expr
 }
 
-var shapeParityCorpus = []string{
-	"string", "int", "int64", "uint8", "byte", "bool", "float64", "any",
-	"Address", "time.Time", "json.RawMessage", "uuid.UUID",
-	"*string", "*Address", "**Address", "*time.Time",
-	"[]string", "[]byte", "[]uint8", "[]Address", "[][]int", "*[]Address",
-	"map[string]int", "map[string][]Address", "map[string]map[string]int",
-	"*map[string]int", "map[int]string",
-	"interface{}", "*interface{}", "[]interface{}",
-	"chan int", "func()", "struct{}", "[3]int",
+// shapeParityCorpus pins the decoder against the rendered strings the retired
+// typeToString produced for the same expressions — including its lossiness:
+// a fixed-size array rendered as a slice, and chan/func/struct literals as
+// "unknown". renderShape is the test-only inverse; production never renders.
+var shapeParityCorpus = map[string]string{
+	"string": "string", "int": "int", "int64": "int64", "uint8": "uint8",
+	"byte": "byte", "bool": "bool", "float64": "float64", "any": "any",
+	"Address": "Address", "time.Time": "time.Time",
+	"json.RawMessage": "json.RawMessage", "uuid.UUID": "uuid.UUID",
+	"*string": "*string", "*Address": "*Address", "**Address": "**Address",
+	"*time.Time": "*time.Time",
+	"[]string":   "[]string", "[]byte": "[]byte", "[]uint8": "[]uint8",
+	"[]Address": "[]Address", "[][]int": "[][]int", "*[]Address": "*[]Address",
+	"map[string]int":            "map[string]int",
+	"map[string][]Address":      "map[string][]Address",
+	"map[string]map[string]int": "map[string]map[string]int",
+	"*map[string]int":           "*map[string]int",
+	"map[int]string":            "map[int]string",
+	"interface{}":               "interface{}",
+	"*interface{}":              "*interface{}",
+	"[]interface{}":             "[]interface{}",
+	"chan int":                  "unknown",
+	"func()":                    "unknown",
+	"struct{}":                  "unknown",
+	"[3]int":                    "[]int", // typeToString dropped the length too
 }
 
-func TestTypeShapeParityWithTypeToString(t *testing.T) {
+func TestTypeShapeParity(t *testing.T) {
 	a := New("")
-	for _, src := range shapeParityCorpus {
-		expr := mustParse(t, src)
-		want := a.typeToString(expr)
-		got := renderShape(a.typeShape(expr))
+	for src, want := range shapeParityCorpus {
+		got := renderShape(a.typeShape(mustParse(t, src)))
 		if got != want {
 			t.Errorf("shape parity for %q: got %q, want %q", src, got, want)
 		}

@@ -1568,9 +1568,14 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, shape models.
 		return
 	}
 
-	// Handle basic types. A container's Name is "", and an unmodeled shape's is
-	// too, so both fall to the object default exactly as "unknown" did.
-	switch s.Name {
+	setBasicTypeAndFormat(prop, s.Name)
+}
+
+// setBasicTypeAndFormat maps a leaf type NAME to its OpenAPI type and format.
+// A container's Name is "", and an unmodeled shape's is too, so both fall to
+// the object default exactly as the "unknown" string did.
+func setBasicTypeAndFormat(prop *OpenAPIProperty, name string) {
+	switch name {
 	case goTypeString:
 		prop.Type = typeString
 	case "int", "int8", "int16", formatInt32:
