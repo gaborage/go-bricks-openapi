@@ -78,8 +78,8 @@ const (
 	// Qualified/composite Go types with a well-known OpenAPI representation.
 	goTypeTimeTime     = "time.Time"
 	goTypeTimeDuration = "time.Duration"
-	goTypeByteSlice    = "[]byte"
-	goTypeUint8Slice   = "[]uint8"
+	goTypeByte         = "byte"
+	goTypeUint8        = "uint8"
 	goTypeUUID         = "uuid.UUID"
 	goTypeRawMessage   = "json.RawMessage"
 )
@@ -1351,12 +1351,16 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 	// A struct-valued map (map[string]Address) is an object whose
 	// additionalProperties is a $ref to the value component. Handle it here, where
 	// the analyzer-resolved MapValueRefName is available (setTypeAndFormat sees
-	// only the type string and so can only type primitive-valued maps). A map of
+	// only the shape and so can only type primitive-valued maps). A map of
 	// slices (map[string][]Address) wraps the $ref in an array.
-	if valueType, isMap := mapValueType(field.Type); isMap && field.MapValueRefName != "" {
+	unwrapped := shapeAfterPointer(field.Shape)
+	if unwrapped.Kind == models.ShapeMap && field.MapValueRefName != "" {
 		ref := &OpenAPIProperty{Ref: refPath(field.MapValueRefName)}
 		prop.Type = typeObject
-		if isSliceType(valueType) {
+		// The old code ran isSliceType over the VALUE string, which itself
+		// stripped one leading "*" — hence the inner unwrap, so
+		// map[string]*[]Address still wraps the $ref in an array.
+		if unwrapped.Elem != nil && shapeAfterPointer(*unwrapped.Elem).Kind == models.ShapeSlice {
 			prop.AdditionalProperties = &OpenAPIProperty{Type: typeArray, Items: ref}
 		} else {
 			prop.AdditionalProperties = ref
@@ -1370,14 +1374,14 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 	// named scalar ([]Cents) the resolved kind is the ELEMENT's, so emit an array
 	// whose items carry that kind (and the dive element constraints).
 	if field.UnderlyingKind != "" {
-		if isSliceType(field.Type) {
+		if unwrapped.Kind == models.ShapeSlice {
 			prop.Type = typeArray
 			prop.Items = &OpenAPIProperty{Type: field.UnderlyingKind}
 			g.applyConstraints(prop, field)        // minItems/maxItems on the array
 			g.applyElementConstraints(prop, field) // dive rules on items
 			return prop
 		}
-		// Path 5 — named scalar (Cents). isSliceType is false here, and
+		// Path 5 — named scalar (Cents). The slice branch is false here, and
 		// prop.Type is set from UnderlyingKind just above, so a `nullable`
 		// emitted here always has a declared type to extend.
 		prop.Type = field.UnderlyingKind
@@ -1386,8 +1390,8 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 		return prop
 	}
 
-	// Map Go type to OpenAPI type and format
-	g.setTypeAndFormat(prop, field.Type)
+	// Map the Go type shape to OpenAPI type and format
+	g.setTypeAndFormat(prop, field.Shape)
 
 	// Apply collection/scalar constraints (incl. minItems/maxItems for slices),
 	// then element-scope (dive) constraints onto the array's items.
@@ -1395,12 +1399,12 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 	g.applyElementConstraints(prop, field)
 
 	// Pointer to a scalar / well-known type only. NOT pointer-to-slice
-	// (*[]string) or pointer-to-map (*map[string]int) — out of scope. Test the
-	// raw field.Type, before isSliceType/mapValueType strip the `*`. The
+	// (*[]string) or pointer-to-map (*map[string]int) — out of scope. isPointerField
+	// tests the raw shape, while unwrapped has already shed that one pointer. The
 	// prop.Type != "" term keeps `nullable` off a typeless schema (plan 017
 	// made any/interface{} emit no type), where it would have nothing to extend.
-	if _, isMap := mapValueType(field.Type); isPointerField(field) &&
-		!isSliceType(field.Type) && !isMap && prop.Type != "" {
+	if isPointerField(field) && unwrapped.Kind != models.ShapeSlice &&
+		unwrapped.Kind != models.ShapeMap && prop.Type != "" {
 		prop.Nullable = true
 	}
 
@@ -1413,7 +1417,7 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 // keywords — which is why this is a distinct path.
 func (g *OpenAPIGenerator) refProperty(field *models.FieldInfo) *OpenAPIProperty {
 	ref := &OpenAPIProperty{Ref: refPath(field.RefName)}
-	if isSliceType(field.Type) {
+	if shapeAfterPointer(field.Shape).Kind == models.ShapeSlice {
 		// The inner $ref must stand alone, but the array wrapper carries the
 		// field's documentation and cardinality (minItems/maxItems). Element-scope
 		// (dive) rules have nowhere valid to go on a $ref element, so they drop.
@@ -1461,12 +1465,6 @@ func (g *OpenAPIGenerator) applyElementConstraints(prop *OpenAPIProperty, field 
 	}
 }
 
-// isSliceType reports whether a Go type string denotes a slice (after an
-// optional leading pointer), e.g. "[]Address" or "*[]Address".
-func isSliceType(goType string) bool {
-	return strings.HasPrefix(strings.TrimPrefix(goType, "*"), "[]")
-}
-
 // isPointerField reports whether a field serializes JSON null (a Go pointer),
 // which OpenAPI 3.0 models with `nullable: true`.
 //
@@ -1477,7 +1475,17 @@ func isSliceType(goType string) bool {
 // with ParamType != ""), so this guard suppresses the parameter caller and
 // nothing else.
 func isPointerField(field *models.FieldInfo) bool {
-	return field.ParamType == "" && strings.HasPrefix(field.Type, "*")
+	return field.ParamType == "" && field.Shape.Kind == models.ShapePointer
+}
+
+// shapeAfterPointer unwraps ONE pointer level — the generator's uniform
+// discipline, mirroring the single strings.TrimPrefix(goType, "*") every
+// retired string helper here used.
+func shapeAfterPointer(s models.TypeShape) models.TypeShape {
+	if s.Kind == models.ShapePointer && s.Elem != nil {
+		return *s.Elem
+	}
+	return s
 }
 
 // wellKnownType holds the OpenAPI type/format for a recognized stdlib/library type.
@@ -1493,7 +1501,6 @@ type wellKnownType struct {
 //   - time.Duration  -> integer (int64): encoding/json (which go-bricks uses)
 //     marshals a Duration as its underlying int64 nanosecond count — a JSON
 //     number, NOT a string.
-//   - []byte/[]uint8 -> base64 string (encoding/json marshals byte slices base64)
 //   - uuid.UUID      -> uuid-formatted string
 //   - json.RawMessage-> arbitrary JSON object
 //
@@ -1504,38 +1511,33 @@ type wellKnownType struct {
 var wellKnownFormats = map[string]wellKnownType{
 	goTypeTimeTime:     {typeString, formatDateTime},
 	goTypeTimeDuration: {typeInteger, formatInt64},
-	goTypeByteSlice:    {typeString, formatBinary},
-	goTypeUint8Slice:   {typeString, formatBinary},
 	goTypeUUID:         {typeString, formatUUID},
 	goTypeRawMessage:   {typeObject, ""},
 }
 
-// mapValueType reports whether goType is a map (after an optional leading
-// pointer) and returns its value type string. Keys are assumed simple (no nested
-// brackets), which holds for JSON string-keyed maps. This is a deliberate twin of
-// analyzer.mapValueType (kept private in each package rather than shared as an
-// exported helper — see the note there); keep the two in sync.
-func mapValueType(goType string) (string, bool) {
-	goType = strings.TrimPrefix(goType, "*")
-	if !strings.HasPrefix(goType, "map[") {
-		return "", false
+// wellKnownShape resolves the well-known stdlib/library schemas by shape:
+// []byte / []uint8 (a base64 binary string, matched on the element name so a
+// []pkg.uint8 selector correctly misses), and the qualified names in
+// wellKnownFormats (time.Time, time.Duration, uuid.UUID, json.RawMessage).
+func wellKnownShape(s models.TypeShape) (wellKnownType, bool) {
+	if s.Kind == models.ShapeSlice && s.Elem != nil &&
+		(s.Elem.Name == goTypeByte || s.Elem.Name == goTypeUint8) {
+		return wellKnownType{typeString, formatBinary}, true
 	}
-	rest := goType[len("map["):]
-	i := strings.IndexByte(rest, ']')
-	if i < 0 {
-		return "", false
+	if s.Kind == models.ShapeNamed {
+		wk, ok := wellKnownFormats[s.Name]
+		return wk, ok
 	}
-	return rest[i+1:], true
+	return wellKnownType{}, false
 }
 
-// setTypeAndFormat maps Go types to OpenAPI type and format
-func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, goType string) {
-	// Strip pointer prefix
-	goType = strings.TrimPrefix(goType, "*")
+// setTypeAndFormat maps a field's Shape to OpenAPI type and format.
+func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, shape models.TypeShape) {
+	s := shapeAfterPointer(shape)
 
 	// Well-known types first: []byte must win over the generic []T array branch,
 	// and time.Time/uuid.UUID over the qualified-type object fallback.
-	if wk, ok := wellKnownFormats[goType]; ok {
+	if wk, ok := wellKnownShape(s); ok {
 		prop.Type = wk.typ
 		if wk.format != "" {
 			prop.Format = wk.format
@@ -1544,26 +1546,31 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, goType string
 	}
 
 	// Handle arrays
-	if strings.HasPrefix(goType, "[]") {
+	if s.Kind == models.ShapeSlice {
 		prop.Type = typeArray
-		elementType := strings.TrimPrefix(goType, "[]")
 		prop.Items = &OpenAPIProperty{}
-		g.setTypeAndFormat(prop.Items, elementType)
+		if s.Elem != nil {
+			g.setTypeAndFormat(prop.Items, *s.Elem)
+		}
 		return
 	}
 
 	// Handle maps as objects with a typed additionalProperties (string-keyed).
 	// Struct-valued maps emit a $ref via fieldInfoToProperty; this nested path
-	// (maps inside slices/maps) recurses on the value type by string only.
-	if valueType, ok := mapValueType(goType); ok {
+	// (maps inside slices/maps) recurses on the value shape. The recursive call
+	// strips one pointer at its head, so map[string]*int unwraps as before.
+	if s.Kind == models.ShapeMap {
 		prop.Type = typeObject
 		prop.AdditionalProperties = &OpenAPIProperty{}
-		g.setTypeAndFormat(prop.AdditionalProperties, valueType)
+		if s.Elem != nil {
+			g.setTypeAndFormat(prop.AdditionalProperties, *s.Elem)
+		}
 		return
 	}
 
-	// Handle basic types
-	switch goType {
+	// Handle basic types. A container's Name is "", and an unmodeled shape's is
+	// too, so both fall to the object default exactly as "unknown" did.
+	switch s.Name {
 	case goTypeString:
 		prop.Type = typeString
 	case "int", "int8", "int16", formatInt32:

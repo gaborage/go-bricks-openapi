@@ -1210,13 +1210,13 @@ func TestCalculateProjectStats(t *testing.T) {
 								Request: &models.TypeInfo{
 									Name: "CreateUserReq",
 									Fields: []models.FieldInfo{
-										{Name: "Name", Type: "string"},
+										{Name: "Name", Shape: prim("string")},
 									},
 								},
 								Response: &models.TypeInfo{
 									Name: "User",
 									Fields: []models.FieldInfo{
-										{Name: "ID", Type: "int64"},
+										{Name: "ID", Shape: prim("int64")},
 									},
 								},
 							},
@@ -1242,7 +1242,7 @@ func TestCalculateProjectStats(t *testing.T) {
 								HandlerName: "listUsers",
 								Response: &models.TypeInfo{
 									Name:   "UserList",
-									Fields: []models.FieldInfo{{Name: "Users", Type: "[]User"}},
+									Fields: []models.FieldInfo{{Name: "Users", Shape: sliceOf(named("User"))}},
 								},
 							},
 							{

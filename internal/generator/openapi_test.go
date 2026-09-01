@@ -903,11 +903,11 @@ func TestReferencedSchemaNamesJOSE(t *testing.T) {
 	joseResp := &models.TypeInfo{Name: "AttestAck", Package: "attest", JOSE: true}
 	plainReq := &models.TypeInfo{
 		Name: "CreateUserReq", Package: "users",
-		Fields: []models.FieldInfo{{Name: "Name", Type: "string", JSONName: "name"}},
+		Fields: []models.FieldInfo{{Name: "Name", Shape: prim("string"), JSONName: "name"}},
 	}
 	plainResp := &models.TypeInfo{
 		Name: "User", Package: "users",
-		Fields: []models.FieldInfo{{Name: "ID", Type: "int64", JSONName: "id"}},
+		Fields: []models.FieldInfo{{Name: "ID", Shape: prim("int64"), JSONName: "id"}},
 	}
 
 	routes := []models.Route{
@@ -932,7 +932,7 @@ func TestReferencedSchemaNamesJOSE(t *testing.T) {
 func TestReferencedSchemaNamesNilTypeEntry(t *testing.T) {
 	withRef := &models.TypeInfo{
 		Name: "Order", Package: "orders",
-		Fields: []models.FieldInfo{{Name: "Customer", Type: "Customer", RefName: "Customer"}},
+		Fields: []models.FieldInfo{{Name: "Customer", Shape: named("Customer"), RefName: "Customer"}},
 	}
 	types := map[string]*models.TypeInfo{
 		"X":     nil,
@@ -996,13 +996,13 @@ func TestGenerateSchemasFromTypes(t *testing.T) {
 
 	createUserReq := &models.TypeInfo{
 		Name: "CreateUserReq", Package: "users",
-		Fields: []models.FieldInfo{{Name: "Name", Type: "string", JSONName: "name"}},
+		Fields: []models.FieldInfo{{Name: "Name", Shape: prim("string"), JSONName: "name"}},
 	}
 	user := &models.TypeInfo{
 		Name: "User", Package: "users",
 		Fields: []models.FieldInfo{
-			{Name: "ID", Type: "int64", JSONName: "id"},
-			{Name: "Name", Type: "string", JSONName: "name"},
+			{Name: "ID", Shape: prim("int64"), JSONName: "id"},
+			{Name: "Name", Shape: prim("string"), JSONName: "name"},
 		},
 	}
 
@@ -1073,9 +1073,9 @@ func TestTypeInfoToSchema(t *testing.T) {
 				Name:    "User",
 				Package: "users",
 				Fields: []models.FieldInfo{
-					{Name: "ID", Type: "int64", JSONName: "id", Required: true},
-					{Name: "Name", Type: "string", JSONName: "name", Required: true},
-					{Name: "Email", Type: "string", JSONName: "email"},
+					{Name: "ID", Shape: prim("int64"), JSONName: "id", Required: true},
+					{Name: "Name", Shape: prim("string"), JSONName: "name", Required: true},
+					{Name: "Email", Shape: prim("string"), JSONName: "email"},
 				},
 			},
 			expectNil:     false,
@@ -1089,7 +1089,7 @@ func TestTypeInfoToSchema(t *testing.T) {
 				Name:    "UpdateReq",
 				Package: "users",
 				Fields: []models.FieldInfo{
-					{Name: "Name", Type: "*string", JSONName: "name"},
+					{Name: "Name", Shape: ptrOf(prim("string")), JSONName: "name"},
 				},
 			},
 			expectNil:     false,
@@ -1106,10 +1106,10 @@ func TestTypeInfoToSchema(t *testing.T) {
 				Name:    "UpdateUserReq",
 				Package: "users",
 				Fields: []models.FieldInfo{
-					{Name: "ID", Type: "string", ParamType: "path", ParamName: "id", Required: true},
-					{Name: "Token", Type: "string", ParamType: "header", ParamName: "X-Api-Token"},
-					{Name: "Name", Type: "string", JSONName: "name", Required: true},
-					{Name: "Email", Type: "string", JSONName: "email", Required: true},
+					{Name: "ID", Shape: prim("string"), ParamType: "path", ParamName: "id", Required: true},
+					{Name: "Token", Shape: prim("string"), ParamType: "header", ParamName: "X-Api-Token"},
+					{Name: "Name", Shape: prim("string"), JSONName: "name", Required: true},
+					{Name: "Email", Shape: prim("string"), JSONName: "email", Required: true},
 				},
 			},
 			expectNil:     false,
@@ -1187,7 +1187,7 @@ func TestTypeInfoToSchemaNamelessFieldSkipIsNarrow(t *testing.T) {
 	schema := gen.typeInfoToSchema(&models.TypeInfo{
 		Name: "Report",
 		Fields: []models.FieldInfo{
-			{Name: "Total", Type: "int", JSONName: ""},
+			{Name: "Total", Shape: prim("int"), JSONName: ""},
 		},
 	})
 	require.NotNil(t, schema)
@@ -1199,27 +1199,27 @@ func TestFieldInfoToPropertyRef(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
 	t.Run("struct_field_is_ref", func(t *testing.T) {
-		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Addr", Type: "Address", RefName: "Address"})
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Addr", Shape: named("Address"), RefName: "Address"})
 		assert.Equal(t, refPath("Address"), prop.Ref)
 		assert.Empty(t, prop.Type, "a $ref must not carry a sibling type")
 		assert.Nil(t, prop.Items)
 	})
 	t.Run("slice_of_struct_is_items_ref", func(t *testing.T) {
-		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Addrs", Type: "[]Address", RefName: "Address"})
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Addrs", Shape: sliceOf(named("Address")), RefName: "Address"})
 		assert.Equal(t, typeArray, prop.Type)
 		require.NotNil(t, prop.Items)
 		assert.Equal(t, refPath("Address"), prop.Items.Ref)
 		assert.Empty(t, prop.Ref)
 	})
 	t.Run("slice_of_pointer_struct_is_items_ref", func(t *testing.T) {
-		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Reports", Type: "[]*User", RefName: "User"})
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Reports", Shape: sliceOf(ptrOf(named("User"))), RefName: "User"})
 		assert.Equal(t, typeArray, prop.Type)
 		require.NotNil(t, prop.Items)
 		assert.Equal(t, refPath("User"), prop.Items.Ref)
 	})
 	t.Run("slice_of_ref_keeps_array_level_docs", func(t *testing.T) {
 		prop := gen.fieldInfoToProperty(&models.FieldInfo{
-			Name: "Addrs", Type: "[]Address", RefName: "Address",
+			Name: "Addrs", Shape: sliceOf(named("Address")), RefName: "Address",
 			Description: "the user's addresses", Example: "n/a",
 		})
 		assert.Equal(t, typeArray, prop.Type)
@@ -1231,7 +1231,7 @@ func TestFieldInfoToPropertyRef(t *testing.T) {
 	})
 	t.Run("non_ref_field_keeps_type_and_constraints", func(t *testing.T) {
 		prop := gen.fieldInfoToProperty(&models.FieldInfo{
-			Name: "Name", Type: "string",
+			Name: "Name", Shape: prim("string"),
 			Constraints: map[string]string{"min": "2"},
 		})
 		assert.Equal(t, typeString, prop.Type)
@@ -1258,7 +1258,7 @@ func TestFieldInfoToProperty(t *testing.T) {
 			name: "string field",
 			field: &models.FieldInfo{
 				Name:     "Name",
-				Type:     "string",
+				Shape:    prim("string"),
 				JSONName: "name",
 			},
 			expectedType: "string",
@@ -1267,7 +1267,7 @@ func TestFieldInfoToProperty(t *testing.T) {
 			name: "string with description and example",
 			field: &models.FieldInfo{
 				Name:        "Email",
-				Type:        "string",
+				Shape:       prim("string"),
 				JSONName:    "email",
 				Description: "User email address",
 				Example:     "user@example.com",
@@ -1280,7 +1280,7 @@ func TestFieldInfoToProperty(t *testing.T) {
 			name: "string with min constraint",
 			field: &models.FieldInfo{
 				Name:        "Username",
-				Type:        "string",
+				Shape:       prim("string"),
 				JSONName:    "username",
 				Constraints: map[string]string{"min": "3"},
 			},
@@ -1292,7 +1292,7 @@ func TestFieldInfoToProperty(t *testing.T) {
 			name: "integer field",
 			field: &models.FieldInfo{
 				Name:     "Age",
-				Type:     "int",
+				Shape:    prim("int"),
 				JSONName: "age",
 			},
 			expectedType:   "integer",
@@ -1302,7 +1302,7 @@ func TestFieldInfoToProperty(t *testing.T) {
 			name: "int64 field",
 			field: &models.FieldInfo{
 				Name:     "ID",
-				Type:     "int64",
+				Shape:    prim("int64"),
 				JSONName: "id",
 			},
 			expectedType:   "integer",
@@ -1312,7 +1312,7 @@ func TestFieldInfoToProperty(t *testing.T) {
 			name: "float64 field",
 			field: &models.FieldInfo{
 				Name:     "Price",
-				Type:     "float64",
+				Shape:    prim("float64"),
 				JSONName: "price",
 			},
 			expectedType:   "number",
@@ -1322,7 +1322,7 @@ func TestFieldInfoToProperty(t *testing.T) {
 			name: "boolean field",
 			field: &models.FieldInfo{
 				Name:     "Active",
-				Type:     "bool",
+				Shape:    prim("bool"),
 				JSONName: "active",
 			},
 			expectedType: "boolean",
@@ -1331,7 +1331,7 @@ func TestFieldInfoToProperty(t *testing.T) {
 			name: "array field",
 			field: &models.FieldInfo{
 				Name:     "Tags",
-				Type:     "[]string",
+				Shape:    sliceOf(prim("string")),
 				JSONName: "tags",
 			},
 			expectedType: "array",
@@ -1360,37 +1360,37 @@ func TestSetTypeAndFormat(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		goType         string
+		shape          models.TypeShape
 		expectedType   string
 		expectedFormat string
 		hasItems       bool
 		itemType       string
 	}{
-		{name: "string", goType: "string", expectedType: "string"},
-		{name: "pointer string", goType: "*string", expectedType: "string"},
-		{name: "int", goType: "int", expectedType: "integer", expectedFormat: "int32"},
-		{name: "int32", goType: "int32", expectedType: "integer", expectedFormat: "int32"},
-		{name: "int64", goType: "int64", expectedType: "integer", expectedFormat: "int64"},
-		{name: "uint", goType: "uint", expectedType: "integer", expectedFormat: "int32"},
-		{name: "uint64", goType: "uint64", expectedType: "integer", expectedFormat: "int64"},
-		{name: "float32", goType: "float32", expectedType: "number", expectedFormat: "float"},
-		{name: "float64", goType: "float64", expectedType: "number", expectedFormat: "double"},
-		{name: "bool", goType: "bool", expectedType: "boolean"},
-		{name: "array of strings", goType: "[]string", expectedType: "array", hasItems: true, itemType: "string"},
-		{name: "array of int", goType: "[]int", expectedType: "array", hasItems: true, itemType: "integer"},
-		{name: "map", goType: "map[string]any", expectedType: typeObject},
-		{name: "custom struct", goType: "CustomType", expectedType: typeObject},
+		{name: "string", shape: prim("string"), expectedType: "string"},
+		{name: "pointer string", shape: ptrOf(prim("string")), expectedType: "string"},
+		{name: "int", shape: prim("int"), expectedType: "integer", expectedFormat: "int32"},
+		{name: "int32", shape: prim("int32"), expectedType: "integer", expectedFormat: "int32"},
+		{name: "int64", shape: prim("int64"), expectedType: "integer", expectedFormat: "int64"},
+		{name: "uint", shape: prim("uint"), expectedType: "integer", expectedFormat: "int32"},
+		{name: "uint64", shape: prim("uint64"), expectedType: "integer", expectedFormat: "int64"},
+		{name: "float32", shape: prim("float32"), expectedType: "number", expectedFormat: "float"},
+		{name: "float64", shape: prim("float64"), expectedType: "number", expectedFormat: "double"},
+		{name: "bool", shape: prim("bool"), expectedType: "boolean"},
+		{name: "array of strings", shape: sliceOf(prim("string")), expectedType: "array", hasItems: true, itemType: "string"},
+		{name: "array of int", shape: sliceOf(prim("int")), expectedType: "array", hasItems: true, itemType: "integer"},
+		{name: "map", shape: mapOf(prim("string"), prim("any")), expectedType: typeObject},
+		{name: "custom struct", shape: named("CustomType"), expectedType: typeObject},
 		// "any"/interface{} are "any JSON value" — an empty schema (no type), NOT
 		// type:object, since type:object would wrongly forbid scalars/arrays/null.
-		{name: "any", goType: "any", expectedType: ""},
-		{name: "interface{}", goType: "interface{}", expectedType: ""},
-		{name: "array of interface{}", goType: "[]interface{}", expectedType: "array", hasItems: true, itemType: ""},
+		{name: "any", shape: prim("any"), expectedType: ""},
+		{name: "interface{}", shape: prim("interface{}"), expectedType: ""},
+		{name: "array of interface{}", shape: sliceOf(prim("interface{}")), expectedType: "array", hasItems: true, itemType: ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			prop := &OpenAPIProperty{}
-			gen.setTypeAndFormat(prop, tt.goType)
+			gen.setTypeAndFormat(prop, tt.shape)
 
 			if prop.Type != tt.expectedType {
 				t.Errorf(expectedTypeErrorMsg, tt.expectedType, prop.Type)
@@ -1413,23 +1413,25 @@ func TestSetTypeAndFormat(t *testing.T) {
 func TestSetTypeAndFormatWellKnownTypes(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 	tests := []struct {
-		name, goType, wantType, wantFormat string
+		name                 string
+		shape                models.TypeShape
+		wantType, wantFormat string
 	}{
-		{"time.Time", goTypeTimeTime, typeString, formatDateTime},
-		{"pointer time.Time", "*" + goTypeTimeTime, typeString, formatDateTime},
+		{"time.Time", named(goTypeTimeTime), typeString, formatDateTime},
+		{"pointer time.Time", ptrOf(named(goTypeTimeTime)), typeString, formatDateTime},
 		// encoding/json marshals a Duration as its int64 ns count, NOT a string.
-		{"time.Duration", goTypeTimeDuration, typeInteger, formatInt64},
-		{"byte slice", goTypeByteSlice, typeString, formatBinary},
-		{"uint8 slice alias", goTypeUint8Slice, typeString, formatBinary},
-		{"uuid.UUID", goTypeUUID, typeString, formatUUID},
-		{"json.RawMessage", goTypeRawMessage, typeObject, ""},
+		{"time.Duration", named(goTypeTimeDuration), typeInteger, formatInt64},
+		{"byte slice", sliceOf(prim(goTypeByte)), typeString, formatBinary},
+		{"uint8 slice alias", sliceOf(prim(goTypeUint8)), typeString, formatBinary},
+		{"uuid.UUID", named(goTypeUUID), typeString, formatUUID},
+		{"json.RawMessage", named(goTypeRawMessage), typeObject, ""},
 		// []byte must win over the generic []T array branch (not become an array).
-		{"byte slice not array", goTypeByteSlice, typeString, formatBinary},
+		{"byte slice not array", sliceOf(prim(goTypeByte)), typeString, formatBinary},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			prop := &OpenAPIProperty{}
-			gen.setTypeAndFormat(prop, tt.goType)
+			gen.setTypeAndFormat(prop, tt.shape)
 			assert.Equal(t, tt.wantType, prop.Type)
 			assert.Equal(t, tt.wantFormat, prop.Format)
 			assert.Nil(t, prop.Items, "well-known types must not be modeled as arrays")
@@ -1444,7 +1446,7 @@ func TestSetTypeAndFormatUnsignedMinimum(t *testing.T) {
 		goType, format string
 	}{{"uint", formatInt32}, {"uint8", formatInt32}, {"uint16", formatInt32}, {"uint32", formatInt32}, {"uint64", formatInt64}} {
 		prop := &OpenAPIProperty{}
-		gen.setTypeAndFormat(prop, ut.goType)
+		gen.setTypeAndFormat(prop, prim(ut.goType))
 		assert.Equal(t, typeInteger, prop.Type, ut.goType)
 		assert.Equal(t, ut.format, prop.Format, ut.goType)
 		if assert.NotNil(t, prop.Minimum, "%s must carry minimum:0", ut.goType) {
@@ -1453,7 +1455,7 @@ func TestSetTypeAndFormatUnsignedMinimum(t *testing.T) {
 	}
 	for _, st := range []string{"int", "int8", "int16", "int32", "int64"} {
 		prop := &OpenAPIProperty{}
-		gen.setTypeAndFormat(prop, st)
+		gen.setTypeAndFormat(prop, prim(st))
 		assert.Nil(t, prop.Minimum, "%s (signed) must NOT carry minimum", st)
 	}
 }
@@ -1463,7 +1465,7 @@ func TestSetTypeAndFormatMaps(t *testing.T) {
 
 	t.Run("primitive value", func(t *testing.T) {
 		prop := &OpenAPIProperty{}
-		gen.setTypeAndFormat(prop, "map[string]string")
+		gen.setTypeAndFormat(prop, mapOf(prim("string"), prim("string")))
 		assert.Equal(t, typeObject, prop.Type)
 		require.NotNil(t, prop.AdditionalProperties)
 		assert.Equal(t, typeString, prop.AdditionalProperties.Type)
@@ -1471,7 +1473,7 @@ func TestSetTypeAndFormatMaps(t *testing.T) {
 
 	t.Run("integer value carries format", func(t *testing.T) {
 		prop := &OpenAPIProperty{}
-		gen.setTypeAndFormat(prop, "map[string]int64")
+		gen.setTypeAndFormat(prop, mapOf(prim("string"), prim("int64")))
 		require.NotNil(t, prop.AdditionalProperties)
 		assert.Equal(t, typeInteger, prop.AdditionalProperties.Type)
 		assert.Equal(t, formatInt64, prop.AdditionalProperties.Format)
@@ -1479,18 +1481,18 @@ func TestSetTypeAndFormatMaps(t *testing.T) {
 
 	t.Run("interface{} value is an empty (unconstrained) schema", func(t *testing.T) {
 		prop := &OpenAPIProperty{}
-		gen.setTypeAndFormat(prop, "map[string]interface{}")
+		gen.setTypeAndFormat(prop, mapOf(prim("string"), prim("interface{}")))
 		assert.Equal(t, typeObject, prop.Type)
 		require.NotNil(t, prop.AdditionalProperties)
 		assert.Empty(t, prop.AdditionalProperties.Type)
 	})
 
-	// Tightens the "map" row in TestSetTypeAndFormat (goType: "map[string]any"):
+	// Tightens the "map" row in TestSetTypeAndFormat (shape: mapOf(prim("string"), prim("any"))):
 	// the outer map is still type:object, but its additionalProperties must no
 	// longer carry type:object for an "any" value.
 	t.Run("any value is an empty (unconstrained) schema", func(t *testing.T) {
 		prop := &OpenAPIProperty{}
-		gen.setTypeAndFormat(prop, "map[string]any")
+		gen.setTypeAndFormat(prop, mapOf(prim("string"), prim("any")))
 		assert.Equal(t, typeObject, prop.Type)
 		require.NotNil(t, prop.AdditionalProperties)
 		assert.Empty(t, prop.AdditionalProperties.Type)
@@ -1504,7 +1506,7 @@ func TestFieldInfoToPropertyMapValueRef(t *testing.T) {
 		// object + additionalProperties.$ref (NOT a bare $ref for the whole field,
 		// which is the RefName path).
 		prop := gen.fieldInfoToProperty(&models.FieldInfo{
-			Name: "Addrs", Type: "map[string]Address", JSONName: "addrs", MapValueRefName: "Address",
+			Name: "Addrs", Shape: mapOf(prim("string"), named("Address")), JSONName: "addrs", MapValueRefName: "Address",
 		})
 		assert.Equal(t, typeObject, prop.Type)
 		assert.Empty(t, prop.Ref, "a map field must not be a whole-field $ref")
@@ -1516,7 +1518,7 @@ func TestFieldInfoToPropertyMapValueRef(t *testing.T) {
 		// map[string][]Address -> additionalProperties is an ARRAY of $ref, not a
 		// bare $ref (the array layer must survive).
 		prop := gen.fieldInfoToProperty(&models.FieldInfo{
-			Name: "History", Type: "map[string][]Address", JSONName: "history", MapValueRefName: "Address",
+			Name: "History", Shape: mapOf(prim("string"), sliceOf(named("Address"))), JSONName: "history", MapValueRefName: "Address",
 		})
 		assert.Equal(t, typeObject, prop.Type)
 		require.NotNil(t, prop.AdditionalProperties)
@@ -1547,14 +1549,14 @@ func TestApplyConstraints(t *testing.T) {
 		{
 			name: "no constraints",
 			field: &models.FieldInfo{
-				Type:        "string",
+				Shape:       prim("string"),
 				Constraints: map[string]string{},
 			},
 		},
 		{
 			name: "email format",
 			field: &models.FieldInfo{
-				Type:        "string",
+				Shape:       prim("string"),
 				Constraints: map[string]string{"email": ""},
 			},
 			expectedFormat: "email",
@@ -1562,7 +1564,7 @@ func TestApplyConstraints(t *testing.T) {
 		{
 			name: "string min/max length",
 			field: &models.FieldInfo{
-				Type:        "string",
+				Shape:       prim("string"),
 				Constraints: map[string]string{"min": "5", "max": "50"},
 			},
 			expectedMinLength: intPtr(5),
@@ -1571,7 +1573,7 @@ func TestApplyConstraints(t *testing.T) {
 		{
 			name: "integer min/max",
 			field: &models.FieldInfo{
-				Type:        "int64",
+				Shape:       prim("int64"),
 				Constraints: map[string]string{"min": "1", "max": "100"},
 			},
 			expectedMinimum: float64Ptr(1.0),
@@ -1580,7 +1582,7 @@ func TestApplyConstraints(t *testing.T) {
 		{
 			name: "integer gt (exclusive minimum)",
 			field: &models.FieldInfo{
-				Type:        "int",
+				Shape:       prim("int"),
 				Constraints: map[string]string{"gt": "0"},
 			},
 			expectedMinimum:      float64Ptr(0.0),
@@ -1589,7 +1591,7 @@ func TestApplyConstraints(t *testing.T) {
 		{
 			name: "regexp pattern",
 			field: &models.FieldInfo{
-				Type:        "string",
+				Shape:       prim("string"),
 				Constraints: map[string]string{"regexp": "^[A-Z][a-z]+$"},
 			},
 			expectedPattern: "^[A-Z][a-z]+$",
@@ -1597,7 +1599,7 @@ func TestApplyConstraints(t *testing.T) {
 		{
 			name: "oneof enum",
 			field: &models.FieldInfo{
-				Type:        "string",
+				Shape:       prim("string"),
 				Constraints: map[string]string{"oneof": "admin user guest"},
 			},
 			expectedEnumCount: 3,
@@ -1605,7 +1607,7 @@ func TestApplyConstraints(t *testing.T) {
 		{
 			name: "map min/max -> minProperties/maxProperties",
 			field: &models.FieldInfo{
-				Type:        "map[string]string",
+				Shape:       mapOf(prim("string"), prim("string")),
 				Constraints: map[string]string{"min": "1", "max": "10"},
 			},
 			expectedMinProperties: intPtr(1),
@@ -1614,7 +1616,7 @@ func TestApplyConstraints(t *testing.T) {
 		{
 			name: "map len -> minProperties == maxProperties",
 			field: &models.FieldInfo{
-				Type:        "map[string]int",
+				Shape:       mapOf(prim("string"), prim("int")),
 				Constraints: map[string]string{"len": "3"},
 			},
 			expectedMinProperties: intPtr(3),
@@ -1705,7 +1707,7 @@ func TestGenerateWithTypedRequestResponse(t *testing.T) {
 							Fields: []models.FieldInfo{
 								{
 									Name:        "Name",
-									Type:        "string",
+									Shape:       prim("string"),
 									JSONName:    "name",
 									Required:    true,
 									Description: "User's full name",
@@ -1713,14 +1715,14 @@ func TestGenerateWithTypedRequestResponse(t *testing.T) {
 								},
 								{
 									Name:        "Email",
-									Type:        "string",
+									Shape:       prim("string"),
 									JSONName:    "email",
 									Required:    true,
 									Constraints: map[string]string{"email": ""},
 								},
 								{
 									Name:        "Age",
-									Type:        "int",
+									Shape:       prim("int"),
 									JSONName:    "age",
 									Constraints: map[string]string{"gte": "18", "lte": "120"},
 								},
@@ -1732,19 +1734,19 @@ func TestGenerateWithTypedRequestResponse(t *testing.T) {
 							Fields: []models.FieldInfo{
 								{
 									Name:     "ID",
-									Type:     "int64",
+									Shape:    prim("int64"),
 									JSONName: "id",
 									Required: true,
 								},
 								{
 									Name:     "Name",
-									Type:     "string",
+									Shape:    prim("string"),
 									JSONName: "name",
 									Required: true,
 								},
 								{
 									Name:     "Email",
-									Type:     "string",
+									Shape:    prim("string"),
 									JSONName: "email",
 									Required: true,
 								},
@@ -1855,7 +1857,7 @@ func TestExtractParameters(t *testing.T) {
 					Fields: []models.FieldInfo{
 						{
 							Name:      "ID",
-							Type:      "int64",
+							Shape:     prim("int64"),
 							ParamType: "path",
 							ParamName: "id",
 							Required:  true,
@@ -1877,7 +1879,7 @@ func TestExtractParameters(t *testing.T) {
 					Fields: []models.FieldInfo{
 						{
 							Name:        "Page",
-							Type:        "int",
+							Shape:       prim("int"),
 							ParamType:   "query",
 							ParamName:   "page",
 							Description: pageNumberDescription,
@@ -1885,7 +1887,7 @@ func TestExtractParameters(t *testing.T) {
 						},
 						{
 							Name:      "Limit",
-							Type:      "int",
+							Shape:     prim("int"),
 							ParamType: "query",
 							ParamName: "limit",
 						},
@@ -1906,7 +1908,7 @@ func TestExtractParameters(t *testing.T) {
 					Fields: []models.FieldInfo{
 						{
 							Name:      "ContentType",
-							Type:      "string",
+							Shape:     prim("string"),
 							ParamType: "header",
 							ParamName: "Content-Type",
 							Required:  true,
@@ -1928,25 +1930,25 @@ func TestExtractParameters(t *testing.T) {
 					Fields: []models.FieldInfo{
 						{
 							Name:      "ID",
-							Type:      "int64",
+							Shape:     prim("int64"),
 							ParamType: "path",
 							ParamName: "id",
 						},
 						{
 							Name:      "Async",
-							Type:      "bool",
+							Shape:     prim("bool"),
 							ParamType: "query",
 							ParamName: "async",
 						},
 						{
 							Name:     "Name",
-							Type:     "string",
+							Shape:    prim("string"),
 							JSONName: "name",
 							Required: true,
 						},
 						{
 							Name:     "Email",
-							Type:     "string",
+							Shape:    prim("string"),
 							JSONName: "email",
 						},
 					},
@@ -1966,12 +1968,12 @@ func TestExtractParameters(t *testing.T) {
 					Fields: []models.FieldInfo{
 						{
 							Name:     "Name",
-							Type:     "string",
+							Shape:    prim("string"),
 							JSONName: "name",
 						},
 						{
 							Name:     "Email",
-							Type:     "string",
+							Shape:    prim("string"),
 							JSONName: "email",
 						},
 					},
@@ -1990,7 +1992,7 @@ func TestExtractParameters(t *testing.T) {
 					Fields: []models.FieldInfo{
 						{
 							Name:      "ID",
-							Type:      "int64",
+							Shape:     prim("int64"),
 							ParamType: "path",
 							ParamName: "id",
 							Example:   "123",
@@ -2197,7 +2199,7 @@ func TestBuildRequestBody(t *testing.T) {
 		{
 			name: "with schema name",
 			bodyFields: []models.FieldInfo{
-				{Name: "Name", Type: "string"},
+				{Name: "Name", Shape: prim("string")},
 			},
 			schemaName: "CreateUserReq",
 			expectedOutput: []string{
@@ -2212,7 +2214,7 @@ func TestBuildRequestBody(t *testing.T) {
 		{
 			name: "without schema name (inline)",
 			bodyFields: []models.FieldInfo{
-				{Name: "Data", Type: "string"},
+				{Name: "Data", Shape: prim("string")},
 			},
 			schemaName: "",
 			expectedOutput: []string{
@@ -2373,9 +2375,9 @@ func TestTypeInfoToSchemaSkipsIgnoredFields(t *testing.T) {
 		Name:    "TestStruct",
 		Package: "test",
 		Fields: []models.FieldInfo{
-			{Name: "ID", Type: "int64", JSONName: "id", Required: true},
-			{Name: "Internal", Type: "string", JSONName: "-"}, // Should be skipped
-			{Name: "Name", Type: "string", JSONName: "name"},
+			{Name: "ID", Shape: prim("int64"), JSONName: "id", Required: true},
+			{Name: "Internal", Shape: prim("string"), JSONName: "-"}, // Should be skipped
+			{Name: "Name", Shape: prim("string"), JSONName: "name"},
 		},
 	}
 
@@ -2420,7 +2422,7 @@ func TestGenerateWithParameters(t *testing.T) {
 							Fields: []models.FieldInfo{
 								{
 									Name:        "ID",
-									Type:        "int64",
+									Shape:       prim("int64"),
 									ParamType:   "path",
 									ParamName:   "id",
 									Description: "User identifier",
@@ -2428,7 +2430,7 @@ func TestGenerateWithParameters(t *testing.T) {
 								},
 								{
 									Name:      "Include",
-									Type:      "string",
+									Shape:     prim("string"),
 									ParamType: "query",
 									ParamName: "include",
 								},
@@ -2445,13 +2447,13 @@ func TestGenerateWithParameters(t *testing.T) {
 							Fields: []models.FieldInfo{
 								{
 									Name:     "Name",
-									Type:     "string",
+									Shape:    prim("string"),
 									JSONName: "name",
 									Required: true,
 								},
 								{
 									Name:     "Email",
-									Type:     "string",
+									Shape:    prim("string"),
 									JSONName: "email",
 									Required: true,
 								},
@@ -2722,7 +2724,7 @@ func TestNo422AndTypedErrorEnvelope(t *testing.T) {
 			Routes: []models.Route{{
 				Method: "POST", Path: "/users", HandlerName: "create", Module: "users", Package: "users",
 				Request: &models.TypeInfo{Name: "CreateUser", Package: "users", Fields: []models.FieldInfo{
-					{Name: "Email", Type: "string", JSONName: "email", Required: true, RawValidation: "required,email"},
+					{Name: "Email", Shape: prim("string"), JSONName: "email", Required: true, RawValidation: "required,email"},
 				}},
 			}},
 		}},
@@ -2784,7 +2786,7 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
 	t.Run("numeric lt -> maximum + exclusiveMaximum", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "int", JSONName: "n", Constraints: map[string]string{"lt": "100"}})
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: prim("int"), JSONName: "n", Constraints: map[string]string{"lt": "100"}})
 		require.NotNil(t, p.Maximum)
 		assert.Equal(t, 100.0, *p.Maximum)
 		require.NotNil(t, p.ExclusiveMaximum)
@@ -2792,14 +2794,14 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 	})
 
 	t.Run("string gt -> minLength, not minimum", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "string", JSONName: "s", Constraints: map[string]string{"gt": "3"}})
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: prim("string"), JSONName: "s", Constraints: map[string]string{"gt": "3"}})
 		require.NotNil(t, p.MinLength)
 		assert.Equal(t, 4, *p.MinLength)
 		assert.Nil(t, p.Minimum, "a string gt must not leak a numeric minimum")
 	})
 
 	t.Run("named numeric via UnderlyingKind -> minimum/maximum", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "Cents", UnderlyingKind: "integer", JSONName: "amt", Constraints: map[string]string{"min": "1", "max": "100"}})
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: named("Cents"), UnderlyingKind: "integer", JSONName: "amt", Constraints: map[string]string{"min": "1", "max": "100"}})
 		require.NotNil(t, p.Minimum)
 		assert.Equal(t, 1.0, *p.Minimum)
 		require.NotNil(t, p.Maximum)
@@ -2808,7 +2810,7 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 
 	t.Run("slice cardinality + dive element format", func(t *testing.T) {
 		p := gen.fieldInfoToProperty(&models.FieldInfo{
-			Type: "[]string", JSONName: "tags",
+			Shape: sliceOf(prim("string")), JSONName: "tags",
 			Constraints:        map[string]string{"min": "1", "max": "10"},
 			ElementConstraints: map[string]string{"email": "true"},
 		})
@@ -2825,7 +2827,7 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 		// []Cents -> field.UnderlyingKind=="integer" (analyzer strips the slice), so
 		// dive,gte=0 maps to a numeric minimum on the items, not a dropped constraint.
 		p := gen.fieldInfoToProperty(&models.FieldInfo{
-			Type: "[]Cents", UnderlyingKind: "integer", JSONName: "amounts",
+			Shape: sliceOf(named("Cents")), UnderlyingKind: "integer", JSONName: "amounts",
 			ElementConstraints: map[string]string{"gte": "0"},
 		})
 		assert.Equal(t, typeArray, p.Type)
@@ -2836,7 +2838,7 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 
 	t.Run("ref-slice carries minItems on the array wrapper", func(t *testing.T) {
 		p := gen.fieldInfoToProperty(&models.FieldInfo{
-			Type: "[]Address", RefName: "Address", JSONName: "addrs",
+			Shape: sliceOf(named("Address")), RefName: "Address", JSONName: "addrs",
 			Constraints: map[string]string{"min": "1"},
 		})
 		assert.Equal(t, typeArray, p.Type)
@@ -2848,7 +2850,7 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 
 	t.Run("map cardinality -> minProperties/maxProperties on object", func(t *testing.T) {
 		p := gen.fieldInfoToProperty(&models.FieldInfo{
-			Type: "map[string]string", JSONName: "meta",
+			Shape: mapOf(prim("string"), prim("string")), JSONName: "meta",
 			Constraints: map[string]string{"min": "1", "max": "10"},
 		})
 		assert.Equal(t, typeObject, p.Type)
@@ -2869,28 +2871,28 @@ func TestFieldInfoToPropertyNullable(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
 	t.Run("pointer scalar is nullable, format preserved", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "*int64", JSONName: "balance"})
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: ptrOf(prim("int64")), JSONName: "balance"})
 		assert.Equal(t, typeInteger, p.Type)
 		assert.Equal(t, formatInt64, p.Format)
 		assert.True(t, p.Nullable)
 	})
 
 	t.Run("pointer well-known type is nullable, format preserved", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "*time.Time", JSONName: "deletedAt"})
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: ptrOf(named("time.Time")), JSONName: "deletedAt"})
 		assert.Equal(t, typeString, p.Type)
 		assert.Equal(t, formatDateTime, p.Format)
 		assert.True(t, p.Nullable)
 	})
 
 	t.Run("pointer uuid is nullable, format preserved", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "*uuid.UUID", JSONName: "id"})
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: ptrOf(named("uuid.UUID")), JSONName: "id"})
 		assert.Equal(t, typeString, p.Type)
 		assert.Equal(t, formatUUID, p.Format)
 		assert.True(t, p.Nullable)
 	})
 
 	t.Run("pointer to struct wraps the $ref in allOf with nullable", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "*User", RefName: "User", JSONName: "manager"})
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: ptrOf(named("User")), RefName: "User", JSONName: "manager"})
 		assert.Empty(t, p.Ref, "a pointer-to-struct must not emit a bare top-level $ref")
 		assert.Equal(t, typeObject, p.Type)
 		require.Len(t, p.AllOf, 1)
@@ -2899,7 +2901,7 @@ func TestFieldInfoToPropertyNullable(t *testing.T) {
 	})
 
 	t.Run("value struct (non-pointer) keeps a bare ref, not nullable", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "User", RefName: "User", JSONName: "profile"})
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: named("User"), RefName: "User", JSONName: "profile"})
 		assert.Equal(t, refPath("User"), p.Ref)
 		assert.Nil(t, p.AllOf)
 		assert.False(t, p.Nullable)
@@ -2907,10 +2909,10 @@ func TestFieldInfoToPropertyNullable(t *testing.T) {
 
 	t.Run("slices and pointer-to-collection are never nullable", func(t *testing.T) {
 		cases := []*models.FieldInfo{
-			{Type: "[]int64", JSONName: "a"},
-			{Type: "[]*int64", JSONName: "b"},
-			{Type: "*[]int64", JSONName: "c"},
-			{Type: "*map[string]int", JSONName: "d"},
+			{Shape: sliceOf(prim("int64")), JSONName: "a"},
+			{Shape: sliceOf(ptrOf(prim("int64"))), JSONName: "b"},
+			{Shape: ptrOf(sliceOf(prim("int64"))), JSONName: "c"},
+			{Shape: ptrOf(mapOf(prim("string"), prim("int"))), JSONName: "d"},
 		}
 		for _, f := range cases {
 			p := gen.fieldInfoToProperty(f)
@@ -2919,19 +2921,19 @@ func TestFieldInfoToPropertyNullable(t *testing.T) {
 	})
 
 	t.Run("non-pointer scalar is not nullable and omits the yaml key", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "int64", JSONName: "id"})
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: prim("int64"), JSONName: "id"})
 		assert.False(t, p.Nullable)
 		out := mustMarshalYAML(t, p)
 		assert.NotContains(t, out, "nullable", "non-pointer field must omit the nullable key entirely")
 	})
 
 	t.Run("pointer query parameter is not nullable (RULING 1)", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "*string", ParamType: "query", ParamName: "cursor"})
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: ptrOf(prim("string")), ParamType: "query", ParamName: "cursor"})
 		assert.False(t, p.Nullable)
 	})
 
 	t.Run("pointer-to-struct parameter keeps a bare ref, no allOf, no nullable (RULING 1)", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "*User", RefName: "User", ParamType: "query", ParamName: "filter"})
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: ptrOf(named("User")), RefName: "User", ParamType: "query", ParamName: "filter"})
 		assert.Equal(t, refPath("User"), p.Ref)
 		assert.Nil(t, p.AllOf)
 		assert.False(t, p.Nullable)
@@ -3105,7 +3107,7 @@ func TestJOSEErrorCatalog(t *testing.T) {
 			Routes: []models.Route{{
 				Method: "POST", Path: "/seal", HandlerName: "seal", Module: "vault", Package: "vault",
 				Request: &models.TypeInfo{Name: "SealReq", Package: "vault", JOSE: true, Fields: []models.FieldInfo{
-					{Name: "Payload", Type: "string", JSONName: "payload"},
+					{Name: "Payload", Shape: prim("string"), JSONName: "payload"},
 				}},
 			}},
 		}},
