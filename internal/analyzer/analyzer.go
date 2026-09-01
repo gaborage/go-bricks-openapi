@@ -3352,6 +3352,7 @@ func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field) models.F
 	fieldInfo := models.FieldInfo{
 		Name:        name,
 		Type:        a.typeToString(field.Type),
+		Shape:       a.typeShape(field.Type),
 		Constraints: make(map[string]string),
 	}
 
@@ -3411,6 +3412,54 @@ func (a *ProjectAnalyzer) typeToString(expr ast.Expr) string {
 	}
 
 	return "unknown"
+}
+
+// builtinShapeNames are the identifiers decoded as ShapePrimitive. The
+// primitive-vs-named distinction is informational — no consumer's OUTPUT may
+// depend on it (behavior keys on Name and on container kinds).
+var builtinShapeNames = map[string]bool{
+	"string": true, "bool": true, "byte": true, "rune": true, "error": true,
+	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
+	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
+	"uintptr": true, "float32": true, "float64": true,
+	"complex64": true, "complex128": true, "any": true,
+}
+
+// typeShape decodes an AST type expression into its structural Shape, mirroring
+// typeToString's case set exactly. Total: unmodeled nodes (chan, func, struct
+// literals, generics) decode as ShapeUnknown, matching typeToString's "unknown".
+// A fixed-size array decodes as ShapeSlice — the same lossiness typeToString has.
+func (a *ProjectAnalyzer) typeShape(expr ast.Expr) models.TypeShape {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		if builtinShapeNames[t.Name] {
+			return models.TypeShape{Kind: models.ShapePrimitive, Name: t.Name}
+		}
+		return models.TypeShape{Kind: models.ShapeNamed, Name: t.Name}
+
+	case *ast.StarExpr:
+		elem := a.typeShape(t.X)
+		return models.TypeShape{Kind: models.ShapePointer, Elem: &elem}
+
+	case *ast.ArrayType:
+		elem := a.typeShape(t.Elt)
+		return models.TypeShape{Kind: models.ShapeSlice, Elem: &elem}
+
+	case *ast.MapType:
+		key := a.typeShape(t.Key)
+		elem := a.typeShape(t.Value)
+		return models.TypeShape{Kind: models.ShapeMap, Key: &key, Elem: &elem}
+
+	case *ast.SelectorExpr:
+		if pkg, ok := t.X.(*ast.Ident); ok {
+			return models.TypeShape{Kind: models.ShapeNamed, Name: pkg.Name + "." + t.Sel.Name}
+		}
+
+	case *ast.InterfaceType:
+		return models.TypeShape{Kind: models.ShapePrimitive, Name: "interface{}"}
+	}
+
+	return models.TypeShape{Kind: models.ShapeUnknown}
 }
 
 // parsedTags holds the extracted information from struct field tags
