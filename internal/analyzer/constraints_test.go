@@ -448,7 +448,17 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 			description: "pointer-to-map stripped, cardinality applies",
 		},
 		{
-			name: "struct-valued map cardinality", shape: mapOf(prim("string"), unknownShape()),
+			// The pre-Shape spelling of this row was map[string]struct{}, an
+			// anonymous struct the decoder does not model — hence the unknown
+			// value shape. The named-struct row below is the case the old name
+			// claimed; both must route identically.
+			name: "unmodeled-value map cardinality", shape: mapOf(prim("string"), unknownShape()),
+			constraints: map[string]string{"min": "1", "max": "5"},
+			expected:    []OpenAPIConstraint{{Name: "minProperties", Value: 1}, {Name: "maxProperties", Value: 5}},
+			description: "cardinality is independent of the map value type",
+		},
+		{
+			name: "struct-valued map cardinality", shape: mapOf(prim("string"), named("Address")),
 			constraints: map[string]string{"min": "1", "max": "5"},
 			expected:    []OpenAPIConstraint{{Name: "minProperties", Value: 1}, {Name: "maxProperties", Value: 5}},
 			description: "cardinality is independent of the map value type",
