@@ -49,11 +49,14 @@ const (
 	kindNumber  = "number"
 
 	// Go primitive type names referenced for type discrimination
-	goTypeInt64   = "int64"
-	goTypeByte    = "byte"
-	goTypeUint8   = "uint8"
-	goTypeFloat32 = "float32"
-	goTypeFloat64 = "float64"
+	goTypeInt64     = "int64"
+	goTypeByte      = "byte"
+	goTypeUint8     = "uint8"
+	goTypeBool      = "bool"
+	goTypeAny       = "any"
+	goTypeInterface = "interface{}"
+	goTypeFloat32   = "float32"
+	goTypeFloat64   = "float64"
 )
 
 // MapConstraintToOpenAPI converts validation constraints to OpenAPI schema properties

@@ -3369,15 +3369,17 @@ func (a *ProjectAnalyzer) parseFieldTags(fieldInfo *models.FieldInfo, tag *ast.B
 	}
 }
 
-// builtinShapeNames are the identifiers decoded as ShapePrimitive. The
-// primitive-vs-named distinction is informational — no consumer's OUTPUT may
-// depend on it (behavior keys on Name and on container kinds).
-var builtinShapeNames = map[string]bool{
-	"string": true, goTypeByte: true, "rune": true, "error": true, "bool": true,
-	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
-	"uint": true, goTypeUint8: true, "uint16": true, "uint32": true, "uint64": true,
-	"uintptr": true, "float32": true, "float64": true,
-	"complex64": true, "complex128": true, "any": true,
+// isBuiltinShapeName reports whether an identifier is decoded as ShapePrimitive
+// rather than ShapeNamed. It reuses the constraint mapper's classifiers for the
+// string and numeric families so there is one list of builtin names, not two.
+// The distinction is informational — no consumer's OUTPUT may depend on it
+// (behavior keys on TypeShape.Name and on container kinds).
+func isBuiltinShapeName(name string) bool {
+	switch name {
+	case goTypeBool, goTypeByte, goTypeAny, "rune", "error", "uintptr", "complex64", "complex128":
+		return true
+	}
+	return isStringType(name) || isNumericType(name)
 }
 
 // typeShape decodes an AST type expression into its structural Shape. Total:
@@ -3387,7 +3389,7 @@ var builtinShapeNames = map[string]bool{
 func (a *ProjectAnalyzer) typeShape(expr ast.Expr) models.TypeShape {
 	switch t := expr.(type) {
 	case *ast.Ident:
-		if builtinShapeNames[t.Name] {
+		if isBuiltinShapeName(t.Name) {
 			return models.TypeShape{Kind: models.ShapePrimitive, Name: t.Name}
 		}
 		return models.TypeShape{Kind: models.ShapeNamed, Name: t.Name}
@@ -3411,7 +3413,7 @@ func (a *ProjectAnalyzer) typeShape(expr ast.Expr) models.TypeShape {
 		}
 
 	case *ast.InterfaceType:
-		return models.TypeShape{Kind: models.ShapePrimitive, Name: "interface{}"}
+		return models.TypeShape{Kind: models.ShapePrimitive, Name: goTypeInterface}
 	}
 
 	return models.TypeShape{Kind: models.ShapeUnknown}
