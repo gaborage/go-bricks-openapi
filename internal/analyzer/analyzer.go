@@ -3292,6 +3292,13 @@ func mergeFieldsByPrecedence(shallow, promoted []models.FieldInfo) []models.Fiel
 // and mutually-embedded cycles.
 func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *ast.File, filePath string, visited map[string]struct{}, depth int) (fields []models.FieldInfo, promoted bool) {
 	typeName := shapeBaseName(a.typeShape(field.Type))
+	if typeName == "" {
+		// Preserve the pre-Shape warning text: the retired string pipeline
+		// rendered an unmodeled embed (a generic instantiation like Base[T],
+		// which is valid Go) as "unknown", and that name reaches the
+		// malformed-struct-tag warning below.
+		typeName = unknownTypeName
+	}
 
 	// An explicit json name turns embedding into nesting (a parent-level field).
 	if field.Tag != nil {

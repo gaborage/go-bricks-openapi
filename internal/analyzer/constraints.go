@@ -49,10 +49,13 @@ const (
 	kindNumber  = "number"
 
 	// Go primitive type names referenced for type discrimination
-	goTypeInt64     = "int64"
-	goTypeByte      = "byte"
-	goTypeUint8     = "uint8"
-	goTypeBool      = "bool"
+	goTypeInt64 = "int64"
+	goTypeByte  = "byte"
+	goTypeUint8 = "uint8"
+	goTypeBool  = "bool"
+	// unknownTypeName is the name the retired type-string renderer produced for
+	// an AST node it did not model; embeddedFields still reports it in warnings.
+	unknownTypeName = "unknown"
 	goTypeAny       = "any"
 	goTypeInterface = "interface{}"
 	goTypeFloat32   = "float32"
