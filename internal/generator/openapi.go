@@ -1447,16 +1447,18 @@ func (g *OpenAPIGenerator) applyElementConstraints(prop *OpenAPIProperty, field 
 	// strips */[] before classifying), so it is the ELEMENT's kind for a
 	// slice-of-named-scalar (e.g. []Cents -> "integer"), letting element numeric
 	// constraints map. Empty for builtin elements, where the type string suffices.
-	elemType := sliceElementType(field.Type)
-	for _, c := range analyzer.MapConstraintToOpenAPI(elemType, field.UnderlyingKind, field.ElementConstraints) {
+	// Element shape: unwrap ONE pointer then ONE slice layer — the exact
+	// discipline of the old sliceElementType ("*[]Address" -> "Address").
+	elem := field.Shape
+	if elem.Kind == models.ShapePointer && elem.Elem != nil {
+		elem = *elem.Elem
+	}
+	if elem.Kind == models.ShapeSlice && elem.Elem != nil {
+		elem = *elem.Elem
+	}
+	for _, c := range analyzer.MapConstraintToOpenAPI(elem, field.UnderlyingKind, field.ElementConstraints) {
 		g.applyConstraint(prop.Items, c)
 	}
-}
-
-// sliceElementType strips a leading pointer and slice marker to expose the element
-// type ("[]string" -> "string", "*[]Address" -> "Address").
-func sliceElementType(goType string) string {
-	return strings.TrimPrefix(strings.TrimPrefix(goType, "*"), "[]")
 }
 
 // isSliceType reports whether a Go type string denotes a slice (after an
@@ -1608,7 +1610,7 @@ func (g *OpenAPIGenerator) applyConstraints(prop *OpenAPIProperty, field *models
 
 	// Use the constraint mapper from analyzer package; UnderlyingKind lets named
 	// scalars (type Cents int64, time.Duration) map numeric/string constraints.
-	openAPIConstraints := analyzer.MapConstraintToOpenAPI(field.Type, field.UnderlyingKind, field.Constraints)
+	openAPIConstraints := analyzer.MapConstraintToOpenAPI(field.Shape, field.UnderlyingKind, field.Constraints)
 
 	// Apply each constraint using specialized applicators
 	for _, constraint := range openAPIConstraints {

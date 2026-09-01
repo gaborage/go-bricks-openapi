@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/gaborage/go-bricks-openapi/internal/models"
 )
 
 // OpenAPIConstraint represents a single OpenAPI schema constraint
@@ -54,10 +56,14 @@ const (
 
 // MapConstraintToOpenAPI converts validation constraints to OpenAPI schema properties
 // Takes the field type and constraints map, returns OpenAPI-compatible constraints
-func MapConstraintToOpenAPI(fieldType, underlyingKind string, constraints map[string]string) []OpenAPIConstraint {
+func MapConstraintToOpenAPI(shape models.TypeShape, underlyingKind string, constraints map[string]string) []OpenAPIConstraint {
 	var result []OpenAPIConstraint
 
-	baseType := strings.TrimPrefix(fieldType, "*")
+	// The old string form stripped exactly ONE leading "*" (TrimPrefix) — mirror it.
+	base := shape
+	if base.Kind == models.ShapePointer && base.Elem != nil {
+		base = *base.Elem
+	}
 	// []byte/[]uint8 are well-known base64 string types, not arrays — treat them as
 	// scalars (the well-known mapper already types them string/binary), not slices.
 	// Their min/max are byte counts, which do NOT equal the base64-encoded character
@@ -65,9 +71,14 @@ func MapConstraintToOpenAPI(fieldType, underlyingKind string, constraints map[st
 	// minLength/maxLength. Map types are handled by a parallel branch below: their
 	// effectiveKind is "" (neither string nor numeric), so min/max/len route to
 	// minProperties/maxProperties (entry-count cardinality) rather than being dropped.
-	isSlice := isSliceType(fieldType) && !isByteSlice(baseType)
-	isMap := isMapType(fieldType)
-	effKind := effectiveKind(baseType, underlyingKind)
+	byteSlice := base.Kind == models.ShapeSlice && base.Elem != nil &&
+		(base.Elem.Name == "byte" || base.Elem.Name == "uint8")
+	isSlice := base.Kind == models.ShapeSlice && !byteSlice
+	isMap := base.Kind == models.ShapeMap
+	// base.Name is "" for every container, which effectiveKind classifies as
+	// neither string nor numeric — exactly what the "[]string"/"map[..." strings
+	// it used to receive did.
+	effKind := effectiveKind(base.Name, underlyingKind)
 
 	// Iterate keys in sorted order so the emitted constraints are deterministic.
 	// Go map iteration is randomized, and distinct validator keys can collapse to
@@ -321,21 +332,6 @@ func effectiveKind(baseType, underlyingKind string) string {
 
 func isEffectiveString(k string) bool  { return k == goTypeString }
 func isEffectiveNumeric(k string) bool { return k == kindInteger || k == kindNumber }
-
-// isByteSlice reports whether t is []byte/[]uint8 (a base64 string, not an array).
-func isByteSlice(t string) bool { return t == "[]byte" || t == "[]uint8" }
-
-// isSliceType reports whether t denotes a slice (after an optional leading
-// pointer). Twin of generator.isSliceType — keep in sync.
-func isSliceType(t string) bool {
-	return strings.HasPrefix(strings.TrimPrefix(t, "*"), "[]")
-}
-
-// isMapType reports whether t denotes a map (after an optional leading pointer),
-// e.g. "map[string]int" or "*map[string]int". Mirrors isSliceType.
-func isMapType(t string) bool {
-	return strings.HasPrefix(strings.TrimPrefix(t, "*"), "map[")
-}
 
 // formatTagMap maps boolean validator format tags to their OpenAPI `format`.
 var formatTagMap = map[string]string{
