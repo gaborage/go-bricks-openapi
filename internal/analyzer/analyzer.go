@@ -2893,18 +2893,18 @@ func (a *ProjectAnalyzer) registerFieldRefAt(f *models.FieldInfo, pkg string, as
 	if f.JSONName == jsonSkipValue && f.ParamType == "" {
 		return
 	}
-	if vName, isMap := mapValueStructName(f.Type); isMap {
+	if vName, isMap := shapeMapValueBase(f.Shape); isMap {
 		if reg := a.registerTypeAt(vName, pkg, astFile, filePath, depth); reg != nil {
 			f.MapValueRefName = reg.Name
 		}
 		return
 	}
-	if reg := a.registerTypeAt(baseStructTypeName(f.Type), pkg, astFile, filePath, depth); reg != nil {
+	if reg := a.registerTypeAt(shapeBaseName(f.Shape), pkg, astFile, filePath, depth); reg != nil {
 		f.RefName = reg.Name
 		return // a struct ref carries no scalar underlying kind
 	}
 	// Not a struct: classify a named, non-struct scalar (Cents -> integer, etc.).
-	f.UnderlyingKind = a.resolveUnderlyingKind(f.Type, astFile, filePath)
+	f.UnderlyingKind = a.resolveUnderlyingKind(shapeBaseName(f.Shape), astFile, filePath)
 }
 
 // knownUnderlyingKinds maps qualified stdlib/library types with a non-struct
@@ -2916,11 +2916,11 @@ var knownUnderlyingKinds = map[string]string{
 
 // resolveUnderlyingKind returns the OpenAPI 3-way kind ("integer"/"number"/
 // "string") of a named, non-struct scalar type, or "" when the type is a builtin
-// primitive (handled directly), a struct, or unresolved. It strips pointer/slice
-// markers, recognizes a small set of qualified stdlib types, and resolves
-// local `type X <primitive>` declarations to their underlying kind.
-func (a *ProjectAnalyzer) resolveUnderlyingKind(typeStr string, astFile *ast.File, filePath string) string {
-	base := baseStructTypeName(typeStr)
+// primitive (handled directly), a struct, or unresolved. base is the already
+// unwrapped terminal name (see shapeBaseName); this recognizes a small set of
+// qualified stdlib types and resolves local `type X <primitive>` declarations
+// to their underlying kind.
+func (a *ProjectAnalyzer) resolveUnderlyingKind(base string, astFile *ast.File, filePath string) string {
 	if k, ok := knownUnderlyingKinds[base]; ok {
 		return k
 	}
@@ -3029,57 +3029,40 @@ func underlyingIdentString(t ast.Expr) (string, bool) {
 	return "", false
 }
 
-// baseStructTypeName strips slice and pointer markers from a Go type string to
-// expose the underlying named type (e.g. "[]*Address" -> "Address"). Qualified
-// types (pkg.T) and maps are returned as-is and will not resolve to a local
-// struct (cross-package and map value resolution are handled separately).
-func baseStructTypeName(t string) string {
+// shapeBaseName unwraps pointer and slice layers to any depth (mirroring the
+// loop the old string helper ran over "**[]*Address") and returns the terminal
+// type name. Maps and unmodeled shapes return "" — a name no declaration can
+// carry, so every registry lookup fails exactly as it did for the raw
+// "map[string]Address" / "unknown" strings the old code passed through.
+func shapeBaseName(s models.TypeShape) string {
 	for {
-		switch {
-		case strings.HasPrefix(t, "*"):
-			t = t[1:]
-		case strings.HasPrefix(t, "[]"):
-			t = t[2:]
+		switch s.Kind {
+		case models.ShapePointer, models.ShapeSlice:
+			if s.Elem == nil {
+				return ""
+			}
+			s = *s.Elem
+		case models.ShapeNamed, models.ShapePrimitive:
+			return s.Name
 		default:
-			return t
+			return ""
 		}
 	}
 }
 
-// mapValueType reports whether goType is a map (after an optional leading
-// pointer) and returns its value type string verbatim. For map[string]Address it
-// returns ("Address", true); for map[string][]Address it returns ("[]Address",
-// true). The key is assumed simple (no nested brackets), which holds for
-// JSON-serializable string-keyed maps.
-//
-// NOTE: the generator keeps a twin of this pure parser (generator.mapValueType);
-// it is intentionally NOT exported and shared, to avoid an exported cross-package
-// helper (which the repo convention would require to carry a context.Context the
-// pure parser has no use for). Keep the two in sync.
-func mapValueType(goType string) (string, bool) {
-	goType = strings.TrimPrefix(goType, "*")
-	if !strings.HasPrefix(goType, "map[") {
+// shapeMapValueBase reports whether s is a map after ONE optional leading
+// pointer — the exact depth of the old strings.TrimPrefix(goType, "*"), so
+// **map[string]T is not a map here — and returns the base name of its value
+// shape. For map[string]string it returns ("string", true), where the caller's
+// registry lookup then fails for the primitive, leaving MapValueRefName empty.
+func shapeMapValueBase(s models.TypeShape) (string, bool) {
+	if s.Kind == models.ShapePointer && s.Elem != nil {
+		s = *s.Elem
+	}
+	if s.Kind != models.ShapeMap || s.Elem == nil {
 		return "", false
 	}
-	rest := goType[len("map["):]
-	i := strings.IndexByte(rest, ']')
-	if i < 0 {
-		return "", false
-	}
-	return rest[i+1:], true
-}
-
-// mapValueStructName returns the base struct name of a map's value type (after
-// unwrapping a pointer/slice on the value). For map[string]Address ->
-// ("Address", true); for map[string]string -> ("string", true), where the
-// caller's registerType lookup then fails for the primitive, leaving
-// MapValueRefName empty.
-func mapValueStructName(t string) (string, bool) {
-	v, ok := mapValueType(t)
-	if !ok {
-		return "", false
-	}
-	return baseStructTypeName(v), true
+	return shapeBaseName(*s.Elem), true
 }
 
 // unquoteLiteral decodes a Go string literal's source text into its value.
@@ -3308,7 +3291,7 @@ func mergeFieldsByPrecedence(shallow, promoted []models.FieldInfo) []models.Fiel
 // ancestor set (add-before-recurse / delete-after backtracking) terminates self-
 // and mutually-embedded cycles.
 func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *ast.File, filePath string, visited map[string]struct{}, depth int) (fields []models.FieldInfo, promoted bool) {
-	typeName := baseStructTypeName(a.typeToString(field.Type))
+	typeName := shapeBaseName(a.typeShape(field.Type))
 
 	// An explicit json name turns embedding into nesting (a parent-level field).
 	if field.Tag != nil {
