@@ -1,3 +1,5 @@
+> **SUPERSEDED (2026-09-01).** Executed and landed via PR #55 (`refactor/field-shape-facts`); the merged code, its commit bodies, and the golden suite are the authoritative record. Retained unchanged below as the executed plan.
+
 # Field Shape Facts Implementation Plan (PR #1 of 2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
