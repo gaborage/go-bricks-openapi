@@ -3630,16 +3630,6 @@ func (m *Module) create(req Node, ctx server.HandlerContext) (server.Result[int]
 	assert.Empty(t, fields["Tags"].RefName, "[]string field must not get a RefName")
 }
 
-func TestBaseStructTypeName(t *testing.T) {
-	assert.Equal(t, "Address", baseStructTypeName("Address"))
-	assert.Equal(t, "Address", baseStructTypeName("*Address"))
-	assert.Equal(t, "Address", baseStructTypeName("[]Address"))
-	assert.Equal(t, "Address", baseStructTypeName("[]*Address"))
-	assert.Equal(t, "Address", baseStructTypeName("**[]*Address"), "double pointer before slice")
-	assert.Equal(t, "string", baseStructTypeName("[]string"))
-	assert.Equal(t, "map[string]Address", baseStructTypeName("map[string]Address"), "maps returned as-is")
-}
-
 // analyzeModuleProject writes src as a module file under a temp project and runs
 // AnalyzeProject, returning the project (for inspecting project.Types).
 func analyzeModuleProject(t *testing.T, src string) *models.Project {
@@ -5102,29 +5092,6 @@ func TestStatusForConstructorEdgeCases(t *testing.T) {
 	assert.Equal(t, 204, statusForConstructor("NoContent", nil))
 }
 
-// TestMapValueStructName covers the map value-type extraction helper.
-func TestMapValueStructName(t *testing.T) {
-	cases := []struct {
-		in    string
-		want  string
-		isMap bool
-	}{
-		{"map[string]Address", "Address", true},
-		{"map[string]string", "string", true},
-		{"*map[string]Address", "Address", true},
-		{"map[string][]Address", "Address", true}, // value slice unwrapped
-		{"map[string]*Address", "Address", true},  // value pointer unwrapped
-		{"[]Address", "", false},
-		{"Address", "", false},
-		{"*Address", "", false},
-	}
-	for _, c := range cases {
-		got, isMap := mapValueStructName(c.in)
-		assert.Equal(t, c.isMap, isMap, c.in)
-		assert.Equal(t, c.want, got, c.in)
-	}
-}
-
 // TestMapValueRefRegistration verifies a struct-valued map registers its value
 // type as a component and stamps MapValueRefName (not RefName) on the field.
 func TestMapValueRefRegistration(t *testing.T) {
@@ -5318,7 +5285,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 		count := 0
 		for _, f := range ti.Fields {
 			if f.JSONName == "tag" {
-				tagType = f.Type
+				tagType = renderShape(f.Shape)
 				count++
 			}
 		}

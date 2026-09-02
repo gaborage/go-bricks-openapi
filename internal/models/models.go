@@ -77,9 +77,39 @@ type TypeInfo struct {
 }
 
 // FieldInfo represents a struct field with validation metadata
+// ShapeKind classifies one level of a TypeShape. See CONTEXT.md: "Shape".
+type ShapeKind string
+
+const (
+	ShapePointer   ShapeKind = "pointer"
+	ShapeSlice     ShapeKind = "slice"
+	ShapeMap       ShapeKind = "map"
+	ShapeNamed     ShapeKind = "named"     // a declared or qualified type name (Address, time.Time)
+	ShapePrimitive ShapeKind = "primitive" // a builtin (string, int64, byte, any, interface{})
+	ShapeUnknown   ShapeKind = "unknown"   // an AST shape the decoder does not model (chan, func, generics)
+)
+
+// TypeShape is the syntactic container structure of a field's declared type,
+// decoded once from the AST at extraction. Purely syntactic — it carries no
+// registry knowledge (that is Resolution: RefName/MapValueRefName/UnderlyingKind).
+// The zero value (Kind "") is treated everywhere as ShapeUnknown.
+type TypeShape struct {
+	Kind ShapeKind
+	// Name is set for ShapeNamed and ShapePrimitive: the identifier as written,
+	// qualified for selector types ("time.Time"), including "interface{}" and "any".
+	Name string
+	// Key is the map key shape (ShapeMap only).
+	Key *TypeShape
+	// Elem is the pointed-to / element / map-value shape (ShapePointer, ShapeSlice, ShapeMap).
+	Elem *TypeShape
+}
+
 type FieldInfo struct {
-	Name          string
-	Type          string
+	Name string
+	// Shape is the field's decoded type structure. Stamped by the analyzer at
+	// extraction; hand-built test Projects must stamp it too — the generator
+	// has NO string-parsing fallback.
+	Shape         TypeShape
 	JSONName      string            // Parsed from `json:"name"` tag
 	ParamType     string            // "path", "query", "header", or "" for body fields
 	ParamName     string            // Parsed from `param:"name"`, `query:"name"`, or `header:"name"` tags

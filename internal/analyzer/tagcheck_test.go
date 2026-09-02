@@ -329,3 +329,57 @@ func (m *Module) createThing(req CreateThingReq, ctx server.HandlerContext) (Thi
 	assert.Contains(t, warnings[0], "Base")
 	assert.Contains(t, warnings[0], "json")
 }
+
+// TestUnreadableTagKeysEmbeddedGenericName pins the warning text for an
+// embedded GENERIC type (Base[T], an *ast.IndexExpr — valid Go since 1.18).
+// The decoder does not model that node, so its shape is ShapeUnknown and
+// shapeBaseName yields ""; embeddedFields substitutes "unknown", which is the
+// name the retired typeToString/baseStructTypeName pipeline produced. The
+// embed itself is unresolvable either way and contributes no fields; only the
+// warning text depends on the name, and it must not move.
+func TestUnreadableTagKeysEmbeddedGenericName(t *testing.T) {
+	dir := writeAnalyzerProject(t, "module.go", `package gizmos
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string { return "gizmos" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.POST(hr, r, "/gizmos", m.createGizmo, server.WithTags("gizmos"))
+}
+
+type Base[T any] struct {
+	Value T
+}
+
+type CreateGizmoReq struct {
+	Base[string] "json:\"base\"\n\tvalidate:\"required\""
+}
+
+type GizmoResp struct {
+	ID string "json:\"id\""
+}
+
+func (m *Module) createGizmo(req CreateGizmoReq, ctx server.HandlerContext) (GizmoResp, server.IAPIError) {
+	return GizmoResp{}, nil
+}
+`)
+
+	a := New(dir)
+	if _, err := a.AnalyzeProject(); err != nil {
+		t.Fatalf("AnalyzeProject: %v", err)
+	}
+
+	warnings := tagWarnings(a.Warnings(t.Context()))
+	require.Len(t, warnings, 1, "expected exactly one malformed-tag warning, got: %v", a.Warnings(t.Context()))
+	assert.Contains(t, warnings[0], "struct tag on field unknown at",
+		"an unmodeled embed must still be named \"unknown\" in the warning")
+	assert.Contains(t, warnings[0], "validate")
+}
