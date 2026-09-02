@@ -106,6 +106,8 @@ Repo-specific gates and settled invariants for `go-bricks-openapi`. This is a st
 - Test files are linted, but `gocyclo`, `gosec`, `goconst`, `dupl`, `errcheck`, and `govet` are excluded on `_test.go`.
 - The golangci-lint pin lives in two places that must move together: the `GOLANGCI_VERSION` variable in `Makefile`, and the `golangci-lint-action` `version:` key in `ci.yml`.
 - A newer local golangci-lint can pass where the pinned one fails: PR #55 was clean under a local v2.13.2 while CI's pinned v2.12.2 flagged `goconst` (its occurrence counting differs and includes `_test.go` files). Lint with the pinned version — `make dev-deps` installs it — before trusting a local `make lint`.
+- The mechanism: `make dev-deps` installs the pin into `$(go env GOPATH)/bin`, but `make lint` runs bare `golangci-lint`, so a Homebrew install earlier on `PATH` shadows it silently. Run `PATH="$HOME/go/bin:$PATH" make lint` (or check `golangci-lint --version` first).
+- `goconst` counts occurrences across the whole package including `_test.go` files (it only suppresses *findings* there), so moving a file into a package can push existing literals over the threshold with no new code — PR #58 hit 18 such findings from a pure relocation.
 
 ## Commits & releases
 
