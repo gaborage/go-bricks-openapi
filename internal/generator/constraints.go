@@ -1,4 +1,4 @@
-package analyzer
+package generator
 
 import (
 	"cmp"
@@ -10,8 +10,8 @@ import (
 	"github.com/gaborage/go-bricks-openapi/internal/models"
 )
 
-// OpenAPIConstraint represents a single OpenAPI schema constraint
-type OpenAPIConstraint struct {
+// openAPIConstraint represents a single OpenAPI schema constraint
+type openAPIConstraint struct {
 	Name  string // OpenAPI property name (e.g., "minLength", "minimum", "format")
 	Value any    // Constraint value (string, int, bool, []string for enum)
 }
@@ -35,23 +35,24 @@ const (
 	// Validator tag values
 	validatorOneOf    = "oneof"
 	validatorDatetime = "datetime"
+	validatorRegexp   = "regexp"
 
 	// OpenAPI format values
-	formatEmail    = "email"
-	formatUUID     = "uuid"
-	formatDate     = "date"
-	formatDateTime = "date-time"
-	formatByte     = "byte"
-	formatIPv4     = "ipv4"
+	formatEmail = "email"
+	formatDate  = "date"
+	formatByte  = "byte"
+	formatIPv4  = "ipv4"
 
-	// OpenAPI 3-way kind value (also a value of FieldInfo.UnderlyingKind).
-	kindNumber = "number"
+	// Validate-tag vocabulary the mapper reads. The analyzer keeps its own
+	// copies; these are the generator-side values.
+	constraintRequired = "required"
+	boolTrueString     = "true"
 )
 
-// MapConstraintToOpenAPI converts validation constraints to OpenAPI schema properties
+// mapConstraintToOpenAPI converts validation constraints to OpenAPI schema properties
 // Takes the field type and constraints map, returns OpenAPI-compatible constraints
-func MapConstraintToOpenAPI(shape models.TypeShape, underlyingKind string, constraints map[string]string) []OpenAPIConstraint {
-	var result []OpenAPIConstraint
+func mapConstraintToOpenAPI(shape models.TypeShape, underlyingKind string, constraints map[string]string) []openAPIConstraint {
+	var result []openAPIConstraint
 
 	// The old string form stripped exactly ONE leading "*" (TrimPrefix) — mirror it.
 	base := shape
@@ -127,10 +128,10 @@ var upperBoundKeywords = map[string]bool{
 // iteration emitted last. Non-bound constraints pass through unchanged in input
 // order; each resolved bound is anchored at its first occurrence so the slice
 // stays deterministic and stable.
-func resolveMostRestrictive(in []OpenAPIConstraint) []OpenAPIConstraint {
+func resolveMostRestrictive(in []openAPIConstraint) []openAPIConstraint {
 	winners := map[string]boundState{}
 	var order []string // bound keywords in first-seen order
-	var out []OpenAPIConstraint
+	var out []openAPIConstraint
 
 	for i := 0; i < len(in); i++ {
 		c := in[i]
@@ -142,7 +143,7 @@ func resolveMostRestrictive(in []OpenAPIConstraint) []OpenAPIConstraint {
 		i += consumed - 1 // advance past a consumed exclusive partner
 		if _, seen := winners[c.Name]; !seen {
 			order = append(order, c.Name)
-			out = append(out, OpenAPIConstraint{Name: boundPlaceholder, Value: c.Name}) // reserve slot
+			out = append(out, openAPIConstraint{Name: boundPlaceholder, Value: c.Name}) // reserve slot
 		}
 		winners[c.Name] = mergeBound(winners[c.Name], cand, isLowerBound(c.Name))
 	}
@@ -169,7 +170,7 @@ func isBoundKeyword(name string) bool { return isLowerBound(name) || isUpperBoun
 // exclusiveMaximum:true partner that handleNumericComparison emits immediately
 // after a minimum/maximum. It returns the candidate bound and the number of input
 // entries it spans (1, or 2 when an exclusive partner is consumed).
-func readBound(in []OpenAPIConstraint, i int) (cand boundState, spanned int) {
+func readBound(in []openAPIConstraint, i int) (cand boundState, spanned int) {
 	cand = boundState{value: in[i].Value, set: true}
 	partner := exclusivePartner(in[i].Name)
 	if partner != "" && i+1 < len(in) && in[i+1].Name == partner {
@@ -252,9 +253,9 @@ func boundFloat64(v any) float64 {
 
 // materializeBounds replaces each reserved placeholder with its resolved bound,
 // re-emitting the exclusive flag only when the winning bound is exclusive.
-func materializeBounds(out []OpenAPIConstraint, winners map[string]boundState, order []string) []OpenAPIConstraint {
+func materializeBounds(out []openAPIConstraint, winners map[string]boundState, order []string) []openAPIConstraint {
 	idx := 0 // next bound keyword (in first-seen order) to emit
-	final := make([]OpenAPIConstraint, 0, len(out))
+	final := make([]openAPIConstraint, 0, len(out))
 	for _, c := range out {
 		if c.Name != boundPlaceholder {
 			final = append(final, c)
@@ -263,9 +264,9 @@ func materializeBounds(out []OpenAPIConstraint, winners map[string]boundState, o
 		name := order[idx]
 		idx++
 		w := winners[name]
-		final = append(final, OpenAPIConstraint{Name: name, Value: w.value})
+		final = append(final, openAPIConstraint{Name: name, Value: w.value})
 		if w.exclusive {
-			final = append(final, OpenAPIConstraint{Name: exclusivePartner(name), Value: true})
+			final = append(final, openAPIConstraint{Name: exclusivePartner(name), Value: true})
 		}
 	}
 	return final
@@ -285,17 +286,17 @@ func sortedKeys(m map[string]string) []string {
 // dispatchScalarConstraint routes a single (non-slice) constraint key to the first
 // matching handler. Order matters: format/pattern tags are tried before the
 // numeric/string handlers so a key is claimed by exactly one handler.
-func dispatchScalarConstraint(key, value, effKind string) []OpenAPIConstraint {
-	handlers := []func() []OpenAPIConstraint{
-		func() []OpenAPIConstraint { return handleFormatConstraint(key, value) },
-		func() []OpenAPIConstraint { return handlePatternFormatConstraint(key, value) },
-		func() []OpenAPIConstraint { return handleMinConstraint(key, value, effKind) },
-		func() []OpenAPIConstraint { return handleMaxConstraint(key, value, effKind) },
-		func() []OpenAPIConstraint { return handleLenConstraint(key, value, effKind) },
-		func() []OpenAPIConstraint { return handleNumericComparison(key, value, effKind) },
-		func() []OpenAPIConstraint { return handleEnumConstraint(key, value, effKind) },
-		func() []OpenAPIConstraint { return handleEqConstraint(key, value, effKind) },
-		func() []OpenAPIConstraint { return handlePatternConstraint(key, value) },
+func dispatchScalarConstraint(key, value, effKind string) []openAPIConstraint {
+	handlers := []func() []openAPIConstraint{
+		func() []openAPIConstraint { return handleFormatConstraint(key, value) },
+		func() []openAPIConstraint { return handlePatternFormatConstraint(key, value) },
+		func() []openAPIConstraint { return handleMinConstraint(key, value, effKind) },
+		func() []openAPIConstraint { return handleMaxConstraint(key, value, effKind) },
+		func() []openAPIConstraint { return handleLenConstraint(key, value, effKind) },
+		func() []openAPIConstraint { return handleNumericComparison(key, value, effKind) },
+		func() []openAPIConstraint { return handleEnumConstraint(key, value, effKind) },
+		func() []openAPIConstraint { return handleEqConstraint(key, value, effKind) },
+		func() []openAPIConstraint { return handlePatternConstraint(key, value) },
 	}
 	for _, h := range handlers {
 		if c := h(); c != nil {
@@ -317,15 +318,15 @@ func effectiveKind(baseType, underlyingKind string) string {
 	case isStringType(baseType):
 		return goTypeString
 	case isIntegerType(baseType):
-		return kindInteger
+		return typeInteger
 	case isFloatType(baseType):
-		return kindNumber
+		return typeNumber
 	}
 	return ""
 }
 
 func isEffectiveString(k string) bool  { return k == goTypeString }
-func isEffectiveNumeric(k string) bool { return k == kindInteger || k == kindNumber }
+func isEffectiveNumeric(k string) bool { return k == typeInteger || k == typeNumber }
 
 // formatTagMap maps boolean validator format tags to their OpenAPI `format`.
 var formatTagMap = map[string]string{
@@ -343,24 +344,28 @@ var formatTagMap = map[string]string{
 
 // handleFormatConstraint maps boolean format tags to OpenAPI `format`. datetime is
 // value-aware: a date-only layout maps to `date`, otherwise `date-time`.
-func handleFormatConstraint(key, value string) []OpenAPIConstraint {
+func handleFormatConstraint(key, value string) []openAPIConstraint {
 	if key == validatorDatetime {
 		if value == "" || value == boolTrueString {
-			return []OpenAPIConstraint{{Name: constraintFormat, Value: formatDateTime}}
+			return []openAPIConstraint{{Name: constraintFormat, Value: formatDateTime}}
 		}
-		return []OpenAPIConstraint{{Name: constraintFormat, Value: datetimeFormat(value)}}
+		return []openAPIConstraint{{Name: constraintFormat, Value: datetimeFormat(value)}}
 	}
 	if format, ok := formatTagMap[key]; ok {
-		return []OpenAPIConstraint{{Name: constraintFormat, Value: format}}
+		return []openAPIConstraint{{Name: constraintFormat, Value: format}}
 	}
 	return nil
 }
+
+// patternAlpha is pulled out of the map below only because the generator package
+// repeats this regex elsewhere; the other entries have no second occurrence.
+const patternAlpha = `^[a-zA-Z]+$`
 
 // stringContentPatterns maps boolean string-content tags to a canonical anchored
 // regex. JSON-Schema `pattern` is documentation-grade here (kin-openapi/redocly
 // accept arbitrary regex), so these mirror validator/v10 semantics closely.
 var stringContentPatterns = map[string]string{
-	"alpha":    `^[a-zA-Z]+$`,
+	"alpha":    patternAlpha,
 	"alphanum": `^[a-zA-Z0-9]+$`,
 	"numeric":  `^[-+]?[0-9]+(?:\.[0-9]+)?$`,
 	"hexcolor": `^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`,
@@ -374,62 +379,62 @@ var stringContentPatterns = map[string]string{
 // unconstrained: there is no single OpenAPI format for "IPv4 or IPv6" and a
 // correct combined regex is huge/error-prone, so we document the type as string
 // with no pattern rather than over- or mis-constrain it (covered by a test).
-func handlePatternFormatConstraint(key, value string) []OpenAPIConstraint {
+func handlePatternFormatConstraint(key, value string) []openAPIConstraint {
 	if p, ok := stringContentPatterns[key]; ok {
-		return []OpenAPIConstraint{{Name: constraintPattern, Value: p}}
+		return []openAPIConstraint{{Name: constraintPattern, Value: p}}
 	}
 	if value == "" {
 		return nil
 	}
 	switch key {
 	case "contains":
-		return []OpenAPIConstraint{{Name: constraintPattern, Value: regexp.QuoteMeta(value)}}
+		return []openAPIConstraint{{Name: constraintPattern, Value: regexp.QuoteMeta(value)}}
 	case "startswith":
-		return []OpenAPIConstraint{{Name: constraintPattern, Value: "^" + regexp.QuoteMeta(value)}}
+		return []openAPIConstraint{{Name: constraintPattern, Value: "^" + regexp.QuoteMeta(value)}}
 	case "endswith":
-		return []OpenAPIConstraint{{Name: constraintPattern, Value: regexp.QuoteMeta(value) + "$"}}
+		return []openAPIConstraint{{Name: constraintPattern, Value: regexp.QuoteMeta(value) + "$"}}
 	}
 	return nil
 }
 
 // handleMinConstraint maps 'min' to minLength (strings) or minimum (numbers).
-func handleMinConstraint(key, value, effKind string) []OpenAPIConstraint {
+func handleMinConstraint(key, value, effKind string) []openAPIConstraint {
 	if key != "min" {
 		return nil
 	}
 	if isEffectiveString(effKind) {
 		if length, err := strconv.Atoi(value); err == nil {
-			return []OpenAPIConstraint{{Name: constraintMinLength, Value: length}}
+			return []openAPIConstraint{{Name: constraintMinLength, Value: length}}
 		}
 	} else if isEffectiveNumeric(effKind) {
 		//nolint:S8148 // NOSONAR: invalid validation tag values are silently skipped
 		if minVal, err := parseNumeric(value); err == nil {
-			return []OpenAPIConstraint{{Name: constraintMinimum, Value: minVal}}
+			return []openAPIConstraint{{Name: constraintMinimum, Value: minVal}}
 		}
 	}
 	return nil
 }
 
 // handleMaxConstraint maps 'max' to maxLength (strings) or maximum (numbers).
-func handleMaxConstraint(key, value, effKind string) []OpenAPIConstraint {
+func handleMaxConstraint(key, value, effKind string) []openAPIConstraint {
 	if key != "max" {
 		return nil
 	}
 	if isEffectiveString(effKind) {
 		if length, err := strconv.Atoi(value); err == nil {
-			return []OpenAPIConstraint{{Name: constraintMaxLength, Value: length}}
+			return []openAPIConstraint{{Name: constraintMaxLength, Value: length}}
 		}
 	} else if isEffectiveNumeric(effKind) {
 		//nolint:S8148 // NOSONAR: invalid validation tag values are silently skipped
 		if maxVal, err := parseNumeric(value); err == nil {
-			return []OpenAPIConstraint{{Name: constraintMaximum, Value: maxVal}}
+			return []openAPIConstraint{{Name: constraintMaximum, Value: maxVal}}
 		}
 	}
 	return nil
 }
 
 // handleLenConstraint maps 'len' on a string to an exact length (minLength == maxLength).
-func handleLenConstraint(key, value, effKind string) []OpenAPIConstraint {
+func handleLenConstraint(key, value, effKind string) []openAPIConstraint {
 	if key != "len" || !isEffectiveString(effKind) {
 		return nil
 	}
@@ -437,7 +442,7 @@ func handleLenConstraint(key, value, effKind string) []OpenAPIConstraint {
 	if err != nil {
 		return nil
 	}
-	return []OpenAPIConstraint{
+	return []openAPIConstraint{
 		{Name: constraintMinLength, Value: length},
 		{Name: constraintMaxLength, Value: length},
 	}
@@ -445,7 +450,7 @@ func handleLenConstraint(key, value, effKind string) []OpenAPIConstraint {
 
 // handleNumericComparison maps gt/gte/lt/lte: range constraints for numerics, and
 // minLength/maxLength for strings (a string comparison constrains its length).
-func handleNumericComparison(key, value, effKind string) []OpenAPIConstraint {
+func handleNumericComparison(key, value, effKind string) []openAPIConstraint {
 	if isEffectiveString(effKind) {
 		return handleStringLengthComparison(key, value)
 	}
@@ -458,13 +463,13 @@ func handleNumericComparison(key, value, effKind string) []OpenAPIConstraint {
 	}
 	switch key {
 	case "gt":
-		return []OpenAPIConstraint{{Name: constraintMinimum, Value: numVal}, {Name: constraintExclusiveMinimum, Value: true}}
+		return []openAPIConstraint{{Name: constraintMinimum, Value: numVal}, {Name: constraintExclusiveMinimum, Value: true}}
 	case "gte":
-		return []OpenAPIConstraint{{Name: constraintMinimum, Value: numVal}}
+		return []openAPIConstraint{{Name: constraintMinimum, Value: numVal}}
 	case "lt":
-		return []OpenAPIConstraint{{Name: constraintMaximum, Value: numVal}, {Name: constraintExclusiveMaximum, Value: true}}
+		return []openAPIConstraint{{Name: constraintMaximum, Value: numVal}, {Name: constraintExclusiveMaximum, Value: true}}
 	case "lte":
-		return []OpenAPIConstraint{{Name: constraintMaximum, Value: numVal}}
+		return []openAPIConstraint{{Name: constraintMaximum, Value: numVal}}
 	}
 	return nil
 }
@@ -472,20 +477,20 @@ func handleNumericComparison(key, value, effKind string) []OpenAPIConstraint {
 // handleStringLengthComparison maps gt/gte/lt/lte on a string field to
 // minLength/maxLength (gt=N -> minLength N+1, lt=N -> maxLength N-1), clamped to
 // non-negative so the emitted bound stays valid OpenAPI.
-func handleStringLengthComparison(key, value string) []OpenAPIConstraint {
+func handleStringLengthComparison(key, value string) []openAPIConstraint {
 	n, err := strconv.Atoi(value)
 	if err != nil {
 		return nil
 	}
 	switch key {
 	case "gt":
-		return []OpenAPIConstraint{{Name: constraintMinLength, Value: clampNonNeg(n + 1)}}
+		return []openAPIConstraint{{Name: constraintMinLength, Value: clampNonNeg(n + 1)}}
 	case "gte":
-		return []OpenAPIConstraint{{Name: constraintMinLength, Value: clampNonNeg(n)}}
+		return []openAPIConstraint{{Name: constraintMinLength, Value: clampNonNeg(n)}}
 	case "lt":
-		return []OpenAPIConstraint{{Name: constraintMaxLength, Value: clampNonNeg(n - 1)}}
+		return []openAPIConstraint{{Name: constraintMaxLength, Value: clampNonNeg(n - 1)}}
 	case "lte":
-		return []OpenAPIConstraint{{Name: constraintMaxLength, Value: clampNonNeg(n)}}
+		return []openAPIConstraint{{Name: constraintMaxLength, Value: clampNonNeg(n)}}
 	}
 	return nil
 }
@@ -498,36 +503,36 @@ func clampNonNeg(n int) int {
 }
 
 // handleSliceCardinality maps min/max/len on a slice field to minItems/maxItems.
-func handleSliceCardinality(key, value string) []OpenAPIConstraint {
+func handleSliceCardinality(key, value string) []openAPIConstraint {
 	n, err := strconv.Atoi(value)
 	if err != nil {
 		return nil
 	}
 	switch key {
 	case "min":
-		return []OpenAPIConstraint{{Name: constraintMinItems, Value: n}}
+		return []openAPIConstraint{{Name: constraintMinItems, Value: n}}
 	case "max":
-		return []OpenAPIConstraint{{Name: constraintMaxItems, Value: n}}
+		return []openAPIConstraint{{Name: constraintMaxItems, Value: n}}
 	case "len":
-		return []OpenAPIConstraint{{Name: constraintMinItems, Value: n}, {Name: constraintMaxItems, Value: n}}
+		return []openAPIConstraint{{Name: constraintMinItems, Value: n}, {Name: constraintMaxItems, Value: n}}
 	}
 	return nil
 }
 
 // handleMapCardinality maps min/max/len on a map field to minProperties/
 // maxProperties (entry-count cardinality). Mirrors handleSliceCardinality.
-func handleMapCardinality(key, value string) []OpenAPIConstraint {
+func handleMapCardinality(key, value string) []openAPIConstraint {
 	n, err := strconv.Atoi(value)
 	if err != nil {
 		return nil
 	}
 	switch key {
 	case "min":
-		return []OpenAPIConstraint{{Name: constraintMinProperties, Value: n}}
+		return []openAPIConstraint{{Name: constraintMinProperties, Value: n}}
 	case "max":
-		return []OpenAPIConstraint{{Name: constraintMaxProperties, Value: n}}
+		return []openAPIConstraint{{Name: constraintMaxProperties, Value: n}}
 	case "len":
-		return []OpenAPIConstraint{{Name: constraintMinProperties, Value: n}, {Name: constraintMaxProperties, Value: n}}
+		return []openAPIConstraint{{Name: constraintMinProperties, Value: n}, {Name: constraintMaxProperties, Value: n}}
 	}
 	return nil
 }
@@ -535,7 +540,7 @@ func handleMapCardinality(key, value string) []OpenAPIConstraint {
 // handleEnumConstraint maps 'oneof' to an enum array, numeric-coercing values for
 // numeric fields. Tokenization is quote-aware so single-quoted multi-word values
 // (oneof='New York' 'Los Angeles') stay intact.
-func handleEnumConstraint(key, value, effKind string) []OpenAPIConstraint {
+func handleEnumConstraint(key, value, effKind string) []openAPIConstraint {
 	if key != validatorOneOf {
 		return nil
 	}
@@ -543,16 +548,16 @@ func handleEnumConstraint(key, value, effKind string) []OpenAPIConstraint {
 	if len(tokens) == 0 {
 		return nil
 	}
-	return []OpenAPIConstraint{{Name: constraintEnum, Value: coerceEnum(tokens, effKind)}}
+	return []openAPIConstraint{{Name: constraintEnum, Value: coerceEnum(tokens, effKind)}}
 }
 
 // handleEqConstraint maps 'eq=<v>' to a single-element enum (the cleanest OpenAPI
 // expression of equality). 'ne' has no clean scalar representation and is dropped.
-func handleEqConstraint(key, value, effKind string) []OpenAPIConstraint {
+func handleEqConstraint(key, value, effKind string) []openAPIConstraint {
 	if key != "eq" {
 		return nil
 	}
-	return []OpenAPIConstraint{{Name: constraintEnum, Value: coerceEnum([]string{value}, effKind)}}
+	return []openAPIConstraint{{Name: constraintEnum, Value: coerceEnum([]string{value}, effKind)}}
 }
 
 // coerceEnum converts enum tokens to []any, parsing numerics for numeric fields.
@@ -610,11 +615,11 @@ func datetimeFormat(layout string) string {
 }
 
 // handlePatternConstraint maps the 'regexp' tag to an OpenAPI pattern.
-func handlePatternConstraint(key, value string) []OpenAPIConstraint {
-	if key != "regexp" {
+func handlePatternConstraint(key, value string) []openAPIConstraint {
+	if key != validatorRegexp {
 		return nil
 	}
-	return []OpenAPIConstraint{{Name: constraintPattern, Value: value}}
+	return []openAPIConstraint{{Name: constraintPattern, Value: value}}
 }
 
 // parseNumeric converts a string to a numeric value (int or float)
@@ -627,4 +632,29 @@ func parseNumeric(value string) (any, error) {
 
 	// Fall back to float
 	return strconv.ParseFloat(value, 64)
+}
+
+// Go builtin type-name classification, kept generator-private. The analyzer
+// holds the same lexical fact for the Shape decoder (builtins.go); the lists
+// are duplicated rather than shared because they answer different questions
+// and change only when Go's builtin type set does.
+
+// isStringType checks if the type is a string type
+func isStringType(typeName string) bool {
+	return typeName == goTypeString
+}
+
+// isIntegerType reports whether the Go type name is a signed/unsigned integer.
+func isIntegerType(typeName string) bool {
+	switch typeName {
+	case goTypeInt, goTypeInt8, goTypeInt16, goTypeInt32, goTypeInt64,
+		goTypeUint, goTypeUint8, goTypeUint16, goTypeUint32, goTypeUint64:
+		return true
+	}
+	return false
+}
+
+// isFloatType reports whether the Go type name is a floating-point type.
+func isFloatType(typeName string) bool {
+	return typeName == goTypeFloat32 || typeName == goTypeFloat64
 }

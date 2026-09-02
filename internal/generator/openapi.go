@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gaborage/go-bricks-openapi/internal/analyzer"
 	"github.com/gaborage/go-bricks-openapi/internal/models"
 	"go.yaml.in/yaml/v3"
 )
@@ -69,8 +68,15 @@ const (
 	goTypeString    = "string"
 	goTypeFloat32   = "float32"
 	goTypeFloat64   = "float64"
+	goTypeInt       = "int"
+	goTypeInt8      = "int8"
+	goTypeInt16     = "int16"
+	goTypeInt32     = "int32"
+	goTypeInt64     = "int64"
 	goTypeBool      = "bool"
 	goTypeUint      = "uint"
+	goTypeUint16    = "uint16"
+	goTypeUint32    = "uint32"
 	goTypeUint64    = "uint64"
 	goTypeAny       = "any"
 	goTypeInterface = "interface{}"
@@ -1460,7 +1466,7 @@ func (g *OpenAPIGenerator) applyElementConstraints(prop *OpenAPIProperty, field 
 	if elem.Kind == models.ShapeSlice && elem.Elem != nil {
 		elem = *elem.Elem
 	}
-	for _, c := range analyzer.MapConstraintToOpenAPI(elem, field.UnderlyingKind, field.ElementConstraints) {
+	for _, c := range mapConstraintToOpenAPI(elem, field.UnderlyingKind, field.ElementConstraints) {
 		g.applyConstraint(prop.Items, c)
 	}
 }
@@ -1578,10 +1584,10 @@ func setBasicTypeAndFormat(prop *OpenAPIProperty, name string) {
 	switch name {
 	case goTypeString:
 		prop.Type = typeString
-	case "int", "int8", "int16", formatInt32:
+	case goTypeInt, goTypeInt8, goTypeInt16, goTypeInt32:
 		prop.Type = typeInteger
 		prop.Format = formatInt32
-	case goTypeUint, "uint8", "uint16", "uint32":
+	case goTypeUint, goTypeUint8, goTypeUint16, goTypeUint32:
 		prop.Type = typeInteger
 		prop.Format = formatInt32
 		prop.Minimum = floatPtr(0) // unsigned: never negative
@@ -1620,9 +1626,9 @@ func (g *OpenAPIGenerator) applyConstraints(prop *OpenAPIProperty, field *models
 		return
 	}
 
-	// Use the constraint mapper from analyzer package; UnderlyingKind lets named
-	// scalars (type Cents int64, time.Duration) map numeric/string constraints.
-	openAPIConstraints := analyzer.MapConstraintToOpenAPI(field.Shape, field.UnderlyingKind, field.Constraints)
+	// UnderlyingKind lets named scalars (type Cents int64, time.Duration) map
+	// numeric/string constraints.
+	openAPIConstraints := mapConstraintToOpenAPI(field.Shape, field.UnderlyingKind, field.Constraints)
 
 	// Apply each constraint using specialized applicators
 	for _, constraint := range openAPIConstraints {
@@ -1630,27 +1636,27 @@ func (g *OpenAPIGenerator) applyConstraints(prop *OpenAPIProperty, field *models
 	}
 }
 
-// constraintApplicators maps an OpenAPIConstraint name to the function that writes
+// constraintApplicators maps an openAPIConstraint name to the function that writes
 // it onto a property. Static — defined once rather than per applyConstraint call
 // (applyConstraint runs once per emitted constraint, incl. the per-element loop).
 var constraintApplicators = map[string]func(*OpenAPIProperty, any){
-	"format":           applyFormatConstraint,
-	"minLength":        applyMinLengthConstraint,
-	"maxLength":        applyMaxLengthConstraint,
-	"minItems":         applyMinItemsConstraint,
-	"maxItems":         applyMaxItemsConstraint,
-	"minProperties":    applyMinPropertiesConstraint,
-	"maxProperties":    applyMaxPropertiesConstraint,
-	"minimum":          applyMinimumConstraint,
-	"maximum":          applyMaximumConstraint,
-	"exclusiveMinimum": applyExclusiveMinimumConstraint,
-	"exclusiveMaximum": applyExclusiveMaximumConstraint,
-	"pattern":          applyPatternConstraint,
-	"enum":             applyEnumConstraint,
+	constraintFormat:           applyFormatConstraint,
+	constraintMinLength:        applyMinLengthConstraint,
+	constraintMaxLength:        applyMaxLengthConstraint,
+	constraintMinItems:         applyMinItemsConstraint,
+	constraintMaxItems:         applyMaxItemsConstraint,
+	constraintMinProperties:    applyMinPropertiesConstraint,
+	constraintMaxProperties:    applyMaxPropertiesConstraint,
+	constraintMinimum:          applyMinimumConstraint,
+	constraintMaximum:          applyMaximumConstraint,
+	constraintExclusiveMinimum: applyExclusiveMinimumConstraint,
+	constraintExclusiveMaximum: applyExclusiveMaximumConstraint,
+	constraintPattern:          applyPatternConstraint,
+	constraintEnum:             applyEnumConstraint,
 }
 
 // applyConstraint routes a constraint to its specialized applicator.
-func (g *OpenAPIGenerator) applyConstraint(prop *OpenAPIProperty, constraint analyzer.OpenAPIConstraint) {
+func (g *OpenAPIGenerator) applyConstraint(prop *OpenAPIProperty, constraint openAPIConstraint) {
 	if applicator, exists := constraintApplicators[constraint.Name]; exists {
 		applicator(prop, constraint.Value)
 	}
