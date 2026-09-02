@@ -105,6 +105,7 @@ Repo-specific gates and settled invariants for `go-bricks-openapi`. This is a st
 - `lll` is at 215, not the 120 default.
 - Test files are linted, but `gocyclo`, `gosec`, `goconst`, `dupl`, `errcheck`, and `govet` are excluded on `_test.go`.
 - The golangci-lint pin lives in two places that must move together: the `GOLANGCI_VERSION` variable in `Makefile`, and the `golangci-lint-action` `version:` key in `ci.yml`.
+- A newer local golangci-lint can pass where the pinned one fails: PR #55 was clean under a local v2.13.2 while CI's pinned v2.12.2 flagged `goconst` (its occurrence counting differs and includes `_test.go` files). Lint with the pinned version — `make dev-deps` installs it — before trusting a local `make lint`.
 
 ## Commits & releases
 
@@ -134,3 +135,13 @@ Repo-specific gates and settled invariants for `go-bricks-openapi`. This is a st
 Stale design docs here are not deleted — they get a `> **SUPERSEDED (date).**` banner naming the authoritative source (see `docs/superpowers/specs/`). Apply the same convention to this file if it goes stale: supersede in place, don't delete.
 
 See README's "Known limitations" section for the analyzer's known gaps — those are decided tradeoffs, not bugs to fix.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues for `gaborage/go-bricks-openapi`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root (created lazily). See `docs/agents/domain.md`.
