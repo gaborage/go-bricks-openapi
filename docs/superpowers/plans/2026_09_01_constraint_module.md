@@ -456,6 +456,7 @@ func applyMinConstraint(s *constraintSet, key, value, effKind string) bool {
 ```
 
 Mapping of the old emissions:
+
 | old handler emits | new call |
 |---|---|
 | `{format, X}` | `s.setFormat(X)` |
@@ -635,6 +636,7 @@ func applyValidationConstraints(prop *OpenAPIProperty, field *models.FieldInfo) 
 ```
 
 Equivalence check per old call site (read each in the 2a tree before replacing):
+
 | site | old calls | new | note |
 |---|---|---|---|
 | `buildFieldProperty` UnderlyingKind-slice branch ≈1376–1377 | `applyConstraints` + `applyElementConstraints` | one call | `Items` is an inline `{Type: kind}` — element path runs, same as before |
