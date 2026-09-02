@@ -870,7 +870,7 @@ func TestEmitContentWarnings(t *testing.T) {
 		t.Error("module with no routes should warn")
 	}
 	typed := &models.Project{Modules: []models.Module{{Name: "m", Routes: []models.Route{
-		{Method: "GET", Path: "/x", HandlerName: "h", Response: &models.TypeInfo{Name: "R", Fields: []models.FieldInfo{{Name: "ID", JSONName: "id"}}}},
+		{Method: "GET", Path: "/x", HandlerName: "h", Response: &models.TypeInfo{Name: "R", Fields: []models.FieldInfo{{Name: "ID", JSONName: "id", Shape: prim("string")}}}},
 	}}}}
 	if emitContentWarnings(typed) {
 		t.Error("a typed route should not warn")
