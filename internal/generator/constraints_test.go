@@ -1,4 +1,4 @@
-package analyzer
+package generator
 
 import (
 	"testing"
@@ -6,87 +6,69 @@ import (
 	"github.com/gaborage/go-bricks-openapi/internal/models"
 )
 
-// Test-only TypeShape builders, mirroring what the analyzer's decoder stamps.
-func prim(name string) models.TypeShape {
-	return models.TypeShape{Kind: models.ShapePrimitive, Name: name}
-}
-func named(name string) models.TypeShape {
-	return models.TypeShape{Kind: models.ShapeNamed, Name: name}
-}
-func unknownShape() models.TypeShape { return models.TypeShape{Kind: models.ShapeUnknown} }
-func ptrOf(s models.TypeShape) models.TypeShape {
-	return models.TypeShape{Kind: models.ShapePointer, Elem: &s}
-}
-func sliceOf(s models.TypeShape) models.TypeShape {
-	return models.TypeShape{Kind: models.ShapeSlice, Elem: &s}
-}
-func mapOf(k, v models.TypeShape) models.TypeShape {
-	return models.TypeShape{Kind: models.ShapeMap, Key: &k, Elem: &v}
-}
-
 func TestMapConstraintToOpenAPI(t *testing.T) {
 	tests := []struct {
 		name           string
 		shape          models.TypeShape
 		underlyingKind string
 		constraints    map[string]string
-		expected       []OpenAPIConstraint
+		expected       []openAPIConstraint
 		description    string
 	}{
 		{
 			name:        "email format",
 			shape:       prim("string"),
 			constraints: map[string]string{"email": "true"},
-			expected:    []OpenAPIConstraint{{Name: "format", Value: "email"}},
+			expected:    []openAPIConstraint{{Name: "format", Value: "email"}},
 			description: "should map email to format constraint",
 		},
 		{
 			name:        "url format",
 			shape:       prim("string"),
 			constraints: map[string]string{"url": "true"},
-			expected:    []OpenAPIConstraint{{Name: "format", Value: "uri"}},
+			expected:    []openAPIConstraint{{Name: "format", Value: "uri"}},
 			description: "should map url to uri format",
 		},
 		{
 			name:        "uuid format",
 			shape:       prim("string"),
 			constraints: map[string]string{"uuid": "true"},
-			expected:    []OpenAPIConstraint{{Name: "format", Value: "uuid"}},
+			expected:    []openAPIConstraint{{Name: "format", Value: "uuid"}},
 			description: "should map uuid to format constraint",
 		},
 		{
 			name:        "date format",
 			shape:       prim("string"),
 			constraints: map[string]string{"date": "true"},
-			expected:    []OpenAPIConstraint{{Name: "format", Value: "date"}},
+			expected:    []openAPIConstraint{{Name: "format", Value: "date"}},
 			description: "should map date to format constraint",
 		},
 		{
 			name:        "datetime format",
 			shape:       prim("string"),
 			constraints: map[string]string{validatorDatetime: "true"},
-			expected:    []OpenAPIConstraint{{Name: "format", Value: "date-time"}},
+			expected:    []openAPIConstraint{{Name: "format", Value: "date-time"}},
 			description: "should map datetime to date-time format",
 		},
 		{
 			name:        "string min length",
 			shape:       prim("string"),
 			constraints: map[string]string{"min": "5"},
-			expected:    []OpenAPIConstraint{{Name: "minLength", Value: 5}},
+			expected:    []openAPIConstraint{{Name: "minLength", Value: 5}},
 			description: "should map min to minLength for strings",
 		},
 		{
 			name:        "string max length",
 			shape:       prim("string"),
 			constraints: map[string]string{"max": "100"},
-			expected:    []OpenAPIConstraint{{Name: "maxLength", Value: 100}},
+			expected:    []openAPIConstraint{{Name: "maxLength", Value: 100}},
 			description: "should map max to maxLength for strings",
 		},
 		{
 			name:        "string exact length",
 			shape:       prim("string"),
 			constraints: map[string]string{"len": "10"},
-			expected: []OpenAPIConstraint{
+			expected: []openAPIConstraint{
 				{Name: "minLength", Value: 10},
 				{Name: "maxLength", Value: 10},
 			},
@@ -96,42 +78,42 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 			name:        "integer minimum",
 			shape:       prim("int"),
 			constraints: map[string]string{"min": "18"},
-			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(18)}},
+			expected:    []openAPIConstraint{{Name: "minimum", Value: int64(18)}},
 			description: "should map min to minimum for integers",
 		},
 		{
 			name:        "integer maximum",
 			shape:       prim("int"),
 			constraints: map[string]string{"max": "120"},
-			expected:    []OpenAPIConstraint{{Name: "maximum", Value: int64(120)}},
+			expected:    []openAPIConstraint{{Name: "maximum", Value: int64(120)}},
 			description: "should map max to maximum for integers",
 		},
 		{
 			name:        "int64 minimum",
 			shape:       prim("int64"),
 			constraints: map[string]string{"min": "1000"},
-			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(1000)}},
+			expected:    []openAPIConstraint{{Name: "minimum", Value: int64(1000)}},
 			description: "should handle int64 type",
 		},
 		{
 			name:        "float minimum",
 			shape:       prim("float64"),
 			constraints: map[string]string{"min": "0.5"},
-			expected:    []OpenAPIConstraint{{Name: "minimum", Value: 0.5}},
+			expected:    []openAPIConstraint{{Name: "minimum", Value: 0.5}},
 			description: "should map min to minimum for floats",
 		},
 		{
 			name:        "float maximum",
 			shape:       prim("float64"),
 			constraints: map[string]string{"max": "99.9"},
-			expected:    []OpenAPIConstraint{{Name: "maximum", Value: 99.9}},
+			expected:    []openAPIConstraint{{Name: "maximum", Value: 99.9}},
 			description: "should map max to maximum for floats",
 		},
 		{
 			name:        "greater than (exclusive minimum)",
 			shape:       prim("int"),
 			constraints: map[string]string{"gt": "0"},
-			expected: []OpenAPIConstraint{
+			expected: []openAPIConstraint{
 				{Name: "minimum", Value: int64(0)},
 				{Name: constraintExclusiveMinimum, Value: true},
 			},
@@ -141,14 +123,14 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 			name:        "greater than or equal",
 			shape:       prim("int"),
 			constraints: map[string]string{"gte": "1"},
-			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(1)}},
+			expected:    []openAPIConstraint{{Name: "minimum", Value: int64(1)}},
 			description: "should map gte to minimum",
 		},
 		{
 			name:        "less than (exclusive maximum)",
 			shape:       prim("int"),
 			constraints: map[string]string{"lt": "100"},
-			expected: []OpenAPIConstraint{
+			expected: []openAPIConstraint{
 				{Name: "maximum", Value: int64(100)},
 				{Name: "exclusiveMaximum", Value: true},
 			},
@@ -158,42 +140,42 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 			name:        "less than or equal",
 			shape:       prim("int"),
 			constraints: map[string]string{"lte": "99"},
-			expected:    []OpenAPIConstraint{{Name: "maximum", Value: int64(99)}},
+			expected:    []openAPIConstraint{{Name: "maximum", Value: int64(99)}},
 			description: "should map lte to maximum",
 		},
 		{
 			name:        "oneof enum",
 			shape:       prim("string"),
 			constraints: map[string]string{"oneof": "red green blue"},
-			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{"red", "green", "blue"}}},
+			expected:    []openAPIConstraint{{Name: "enum", Value: []any{"red", "green", "blue"}}},
 			description: "should map oneof to enum array",
 		},
 		{
 			name:        "oneof numeric enum int",
 			shape:       prim("int"),
 			constraints: map[string]string{"oneof": "1 2 3"},
-			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{int64(1), int64(2), int64(3)}}},
+			expected:    []openAPIConstraint{{Name: "enum", Value: []any{int64(1), int64(2), int64(3)}}},
 			description: "should map oneof to numeric enum for int type",
 		},
 		{
 			name:        "oneof numeric enum float64",
 			shape:       prim("float64"),
 			constraints: map[string]string{"oneof": "1.5 2.5 3.5"},
-			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{1.5, 2.5, 3.5}}},
+			expected:    []openAPIConstraint{{Name: "enum", Value: []any{1.5, 2.5, 3.5}}},
 			description: "should map oneof to numeric enum for float64 type",
 		},
 		{
 			name:        "oneof pointer numeric type",
 			shape:       ptrOf(prim("int")),
 			constraints: map[string]string{"oneof": "10 20 30"},
-			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{int64(10), int64(20), int64(30)}}},
+			expected:    []openAPIConstraint{{Name: "enum", Value: []any{int64(10), int64(20), int64(30)}}},
 			description: "should handle pointer numeric types correctly",
 		},
 		{
 			name:        "regexp pattern",
 			shape:       prim("string"),
 			constraints: map[string]string{"regexp": "^[A-Z]+$"},
-			expected:    []OpenAPIConstraint{{Name: "pattern", Value: "^[A-Z]+$"}},
+			expected:    []openAPIConstraint{{Name: "pattern", Value: "^[A-Z]+$"}},
 			description: "should map regexp to pattern",
 		},
 		{
@@ -203,7 +185,7 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 				"required": "true",
 				"email":    "true",
 			},
-			expected:    []OpenAPIConstraint{{Name: "format", Value: "email"}},
+			expected:    []openAPIConstraint{{Name: "format", Value: "email"}},
 			description: "should skip required constraint (handled at schema level)",
 		},
 		{
@@ -215,7 +197,7 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 				"min":      "5",
 				"max":      "100",
 			},
-			expected: []OpenAPIConstraint{
+			expected: []openAPIConstraint{
 				{Name: "format", Value: "email"},
 				{Name: "minLength", Value: 5},
 				{Name: "maxLength", Value: 100},
@@ -230,7 +212,7 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 				"min":      "1",
 				"max":      "1000",
 			},
-			expected: []OpenAPIConstraint{
+			expected: []openAPIConstraint{
 				{Name: "minimum", Value: int64(1)},
 				{Name: "maximum", Value: int64(1000)},
 			},
@@ -240,211 +222,211 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 			name:        "pointer type stripped",
 			shape:       ptrOf(prim("string")),
 			constraints: map[string]string{"min": "5"},
-			expected:    []OpenAPIConstraint{{Name: "minLength", Value: 5}},
+			expected:    []openAPIConstraint{{Name: "minLength", Value: 5}},
 			description: "should strip pointer prefix from type",
 		},
 		{
 			name:        "empty constraints",
 			shape:       prim("string"),
 			constraints: map[string]string{},
-			expected:    []OpenAPIConstraint{},
+			expected:    []openAPIConstraint{},
 			description: "should return empty array for no constraints",
 		},
 		// --- PR11: named-numeric via UnderlyingKind ---
 		{
-			name: "named integer min/max via UnderlyingKind", shape: named("Cents"), underlyingKind: kindInteger,
+			name: "named integer min/max via UnderlyingKind", shape: named("Cents"), underlyingKind: typeInteger,
 			constraints: map[string]string{"min": "100", "max": "1000"},
-			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(100)}, {Name: "maximum", Value: int64(1000)}},
+			expected:    []openAPIConstraint{{Name: "minimum", Value: int64(100)}, {Name: "maximum", Value: int64(1000)}},
 			description: "type Cents int64 must map numeric constraints (was dropped)",
 		},
 		{
-			name: "time.Duration gte via UnderlyingKind", shape: named("time.Duration"), underlyingKind: kindInteger,
+			name: "time.Duration gte via UnderlyingKind", shape: named("time.Duration"), underlyingKind: typeInteger,
 			constraints: map[string]string{"gte": "1"},
-			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(1)}},
+			expected:    []openAPIConstraint{{Name: "minimum", Value: int64(1)}},
 			description: "time.Duration maps numeric constraints",
 		},
 		{
-			name: "named integer gt via UnderlyingKind", shape: named("Cents"), underlyingKind: kindInteger,
+			name: "named integer gt via UnderlyingKind", shape: named("Cents"), underlyingKind: typeInteger,
 			constraints: map[string]string{"gt": "0"},
-			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(0)}, {Name: constraintExclusiveMinimum, Value: true}},
+			expected:    []openAPIConstraint{{Name: "minimum", Value: int64(0)}, {Name: constraintExclusiveMinimum, Value: true}},
 			description: "gt on named numeric emits minimum + exclusiveMinimum",
 		},
 		{
-			name: "named integer oneof via UnderlyingKind", shape: named("Status"), underlyingKind: kindInteger,
+			name: "named integer oneof via UnderlyingKind", shape: named("Status"), underlyingKind: typeInteger,
 			constraints: map[string]string{"oneof": "1 2 3"},
-			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{int64(1), int64(2), int64(3)}}},
+			expected:    []openAPIConstraint{{Name: "enum", Value: []any{int64(1), int64(2), int64(3)}}},
 			description: "oneof on named numeric yields numeric enum",
 		},
 		// --- PR11: string length comparisons ---
 		{
 			name: "string gt -> minLength+1", shape: prim("string"),
 			constraints: map[string]string{"gt": "3"},
-			expected:    []OpenAPIConstraint{{Name: "minLength", Value: 4}},
+			expected:    []openAPIConstraint{{Name: "minLength", Value: 4}},
 			description: "gt on string constrains length",
 		},
 		{
 			name: "string gt=0 non-empty idiom", shape: prim("string"),
 			constraints: map[string]string{"gt": "0"},
-			expected:    []OpenAPIConstraint{{Name: "minLength", Value: 1}},
+			expected:    []openAPIConstraint{{Name: "minLength", Value: 1}},
 			description: "gt=0 -> minLength 1",
 		},
 		{
 			name: "string lt -> maxLength-1", shape: prim("string"),
 			constraints: map[string]string{"lt": "10"},
-			expected:    []OpenAPIConstraint{{Name: "maxLength", Value: 9}},
+			expected:    []openAPIConstraint{{Name: "maxLength", Value: 9}},
 			description: "lt on string constrains length",
 		},
 		{
 			name: "string gt negative clamps to 0", shape: prim("string"),
 			constraints: map[string]string{"gt": "-5"},
-			expected:    []OpenAPIConstraint{{Name: "minLength", Value: 0}},
+			expected:    []openAPIConstraint{{Name: "minLength", Value: 0}},
 			description: "negative length clamps to non-negative",
 		},
 		// --- PR11: slice cardinality ---
 		{
 			name: "slice min -> minItems", shape: sliceOf(prim("string")),
 			constraints: map[string]string{"min": "1"},
-			expected:    []OpenAPIConstraint{{Name: "minItems", Value: 1}},
+			expected:    []openAPIConstraint{{Name: "minItems", Value: 1}},
 			description: "min on []T maps to minItems",
 		},
 		{
 			name: "slice len -> minItems+maxItems", shape: sliceOf(prim("int")),
 			constraints: map[string]string{"len": "3"},
-			expected:    []OpenAPIConstraint{{Name: "minItems", Value: 3}, {Name: "maxItems", Value: 3}},
+			expected:    []openAPIConstraint{{Name: "minItems", Value: 3}, {Name: "maxItems", Value: 3}},
 			description: "len on []T maps to minItems == maxItems",
 		},
 		{
 			name: "pointer slice min -> minItems", shape: ptrOf(sliceOf(prim("string"))),
 			constraints: map[string]string{"min": "2"},
-			expected:    []OpenAPIConstraint{{Name: "minItems", Value: 2}},
+			expected:    []openAPIConstraint{{Name: "minItems", Value: 2}},
 			description: "pointer-to-slice stripped, cardinality applies",
 		},
 		{
 			name: "byte slice is not an array", shape: sliceOf(prim("byte")),
 			constraints: map[string]string{"min": "10"},
-			expected:    []OpenAPIConstraint{},
+			expected:    []openAPIConstraint{},
 			description: "[]byte is a base64 string, not a cardinality-bearing array",
 		},
 		// --- PR11: oneof quoting, eq, ne, datetime, formats, patterns ---
 		{
 			name: "oneof quoted multi-word", shape: prim("string"),
 			constraints: map[string]string{"oneof": "'New York' 'Los Angeles'"},
-			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{"New York", "Los Angeles"}}},
+			expected:    []openAPIConstraint{{Name: "enum", Value: []any{"New York", "Los Angeles"}}},
 			description: "quote-aware oneof keeps spaces",
 		},
 		{
 			name: "oneof unquoted still splits", shape: prim("string"),
 			constraints: map[string]string{"oneof": "active pending"},
-			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{"active", "pending"}}},
+			expected:    []openAPIConstraint{{Name: "enum", Value: []any{"active", "pending"}}},
 			description: "unquoted oneof splits on spaces",
 		},
 		{
 			name: "eq -> single-element enum", shape: prim("string"),
 			constraints: map[string]string{"eq": "GOLD"},
-			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{"GOLD"}}},
+			expected:    []openAPIConstraint{{Name: "enum", Value: []any{"GOLD"}}},
 			description: "eq maps to a single-value enum",
 		},
 		{
 			name: "ne -> nothing", shape: prim("string"),
 			constraints: map[string]string{"ne": "X"},
-			expected:    []OpenAPIConstraint{},
+			expected:    []openAPIConstraint{},
 			description: "ne has no clean OpenAPI representation",
 		},
 		{
 			name: "datetime date-only layout -> date", shape: prim("string"),
 			constraints: map[string]string{validatorDatetime: "2006-01-02"},
-			expected:    []OpenAPIConstraint{{Name: "format", Value: "date"}},
+			expected:    []openAPIConstraint{{Name: "format", Value: "date"}},
 			description: "date-only layout maps to format date",
 		},
 		{
 			name: "datetime with clock -> date-time", shape: prim("string"),
 			constraints: map[string]string{validatorDatetime: "2006-01-02T15:04:05Z07:00"},
-			expected:    []OpenAPIConstraint{{Name: "format", Value: "date-time"}},
+			expected:    []openAPIConstraint{{Name: "format", Value: "date-time"}},
 			description: "layout with clock tokens maps to date-time",
 		},
 		{
 			name: "ipv4 format", shape: prim("string"),
 			constraints: map[string]string{formatIPv4: "true"},
-			expected:    []OpenAPIConstraint{{Name: "format", Value: formatIPv4}},
+			expected:    []openAPIConstraint{{Name: "format", Value: formatIPv4}},
 			description: "ipv4 maps to format ipv4",
 		},
 		{
 			name: "base64 -> byte format", shape: prim("string"),
 			constraints: map[string]string{"base64": "true"},
-			expected:    []OpenAPIConstraint{{Name: "format", Value: "byte"}},
+			expected:    []openAPIConstraint{{Name: "format", Value: "byte"}},
 			description: "base64 maps to OpenAPI byte format",
 		},
 		{
 			name: "alpha -> anchored pattern", shape: prim("string"),
 			constraints: map[string]string{"alpha": "true"},
-			expected:    []OpenAPIConstraint{{Name: "pattern", Value: `^[a-zA-Z]+$`}},
+			expected:    []openAPIConstraint{{Name: "pattern", Value: `^[a-zA-Z]+$`}},
 			description: "alpha maps to a letter-only pattern",
 		},
 		{
 			name: "startswith -> anchored escaped pattern", shape: prim("string"),
 			constraints: map[string]string{"startswith": "a.b"},
-			expected:    []OpenAPIConstraint{{Name: "pattern", Value: `^a\.b`}},
+			expected:    []openAPIConstraint{{Name: "pattern", Value: `^a\.b`}},
 			description: "startswith escapes metacharacters and anchors at start",
 		},
 		{
 			name: "bare ip -> no format/pattern (documented)", shape: prim("string"),
 			constraints: map[string]string{"ip": "true"},
-			expected:    []OpenAPIConstraint{},
+			expected:    []openAPIConstraint{},
 			description: "bare ip has no single clean OpenAPI format; left unconstrained by design",
 		},
 		{
 			name: "contains -> unanchored escaped pattern", shape: prim("string"),
 			constraints: map[string]string{"contains": "a.b"},
-			expected:    []OpenAPIConstraint{{Name: "pattern", Value: `a\.b`}},
+			expected:    []openAPIConstraint{{Name: "pattern", Value: `a\.b`}},
 			description: "contains escapes metacharacters, no anchors",
 		},
 		{
 			name: "endswith -> end-anchored escaped pattern", shape: prim("string"),
 			constraints: map[string]string{"endswith": ".json"},
-			expected:    []OpenAPIConstraint{{Name: "pattern", Value: `\.json$`}},
+			expected:    []openAPIConstraint{{Name: "pattern", Value: `\.json$`}},
 			description: "endswith escapes and anchors at end",
 		},
 		{
 			name: "string gte -> minLength", shape: prim("string"),
 			constraints: map[string]string{"gte": "3"},
-			expected:    []OpenAPIConstraint{{Name: "minLength", Value: 3}},
+			expected:    []openAPIConstraint{{Name: "minLength", Value: 3}},
 			description: "gte on string is a length floor",
 		},
 		{
 			name: "string lte -> maxLength", shape: prim("string"),
 			constraints: map[string]string{"lte": "10"},
-			expected:    []OpenAPIConstraint{{Name: "maxLength", Value: 10}},
+			expected:    []openAPIConstraint{{Name: "maxLength", Value: 10}},
 			description: "lte on string is a length ceiling",
 		},
 		{
 			name: "slice max -> maxItems", shape: sliceOf(prim("string")),
 			constraints: map[string]string{"max": "5"},
-			expected:    []OpenAPIConstraint{{Name: "maxItems", Value: 5}},
+			expected:    []openAPIConstraint{{Name: "maxItems", Value: 5}},
 			description: "max on []T maps to maxItems",
 		},
 		// --- map cardinality (issue #3) ---
 		{
 			name: "map min -> minProperties", shape: mapOf(prim("string"), prim("string")),
 			constraints: map[string]string{"min": "1"},
-			expected:    []OpenAPIConstraint{{Name: "minProperties", Value: 1}},
+			expected:    []openAPIConstraint{{Name: "minProperties", Value: 1}},
 			description: "min on map[string]T maps to minProperties",
 		},
 		{
 			name: "map max -> maxProperties", shape: mapOf(prim("string"), prim("string")),
 			constraints: map[string]string{"max": "10"},
-			expected:    []OpenAPIConstraint{{Name: "maxProperties", Value: 10}},
+			expected:    []openAPIConstraint{{Name: "maxProperties", Value: 10}},
 			description: "max on map[string]T maps to maxProperties",
 		},
 		{
 			name: "map len -> minProperties+maxProperties", shape: mapOf(prim("string"), prim("string")),
 			constraints: map[string]string{"len": "3"},
-			expected:    []OpenAPIConstraint{{Name: "minProperties", Value: 3}, {Name: "maxProperties", Value: 3}},
+			expected:    []openAPIConstraint{{Name: "minProperties", Value: 3}, {Name: "maxProperties", Value: 3}},
 			description: "len on map[string]T maps to minProperties == maxProperties",
 		},
 		{
 			name: "pointer map min -> minProperties", shape: ptrOf(mapOf(prim("string"), prim("int"))),
 			constraints: map[string]string{"min": "2"},
-			expected:    []OpenAPIConstraint{{Name: "minProperties", Value: 2}},
+			expected:    []openAPIConstraint{{Name: "minProperties", Value: 2}},
 			description: "pointer-to-map stripped, cardinality applies",
 		},
 		{
@@ -454,26 +436,26 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 			// claimed; both must route identically.
 			name: "unmodeled-value map cardinality", shape: mapOf(prim("string"), unknownShape()),
 			constraints: map[string]string{"min": "1", "max": "5"},
-			expected:    []OpenAPIConstraint{{Name: "minProperties", Value: 1}, {Name: "maxProperties", Value: 5}},
+			expected:    []openAPIConstraint{{Name: "minProperties", Value: 1}, {Name: "maxProperties", Value: 5}},
 			description: "cardinality is independent of the map value type",
 		},
 		{
 			name: "struct-valued map cardinality", shape: mapOf(prim("string"), named("Address")),
 			constraints: map[string]string{"min": "1", "max": "5"},
-			expected:    []OpenAPIConstraint{{Name: "minProperties", Value: 1}, {Name: "maxProperties", Value: 5}},
+			expected:    []openAPIConstraint{{Name: "minProperties", Value: 1}, {Name: "maxProperties", Value: 5}},
 			description: "cardinality is independent of the map value type",
 		},
 		// --- Issue #2: most-restrictive bound when multiple rules collapse to one keyword ---
 		{
 			name: "numeric min+gte -> larger minimum", shape: prim("int"),
 			constraints: map[string]string{"min": "1", "gte": "10"},
-			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(10)}},
+			expected:    []openAPIConstraint{{Name: "minimum", Value: int64(10)}},
 			description: "validator enforces both; effective minimum is the larger (10)",
 		},
 		{
 			name: "numeric max+lt -> smaller exclusive maximum", shape: prim("int"),
 			constraints: map[string]string{"max": "100", "lt": "50"},
-			expected: []OpenAPIConstraint{
+			expected: []openAPIConstraint{
 				{Name: "maximum", Value: int64(50)},
 				{Name: "exclusiveMaximum", Value: true},
 			},
@@ -482,25 +464,25 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 		{
 			name: "string min+gte -> larger minLength", shape: prim("string"),
 			constraints: map[string]string{"min": "2", "gte": "5"},
-			expected:    []OpenAPIConstraint{{Name: "minLength", Value: 5}},
+			expected:    []openAPIConstraint{{Name: "minLength", Value: 5}},
 			description: "effective minLength is the larger (5)",
 		},
 		{
 			name: "string max+lte -> smaller maxLength", shape: prim("string"),
 			constraints: map[string]string{"max": "20", "lte": "8"},
-			expected:    []OpenAPIConstraint{{Name: "maxLength", Value: 8}},
+			expected:    []openAPIConstraint{{Name: "maxLength", Value: 8}},
 			description: "effective maxLength is the smaller (8)",
 		},
 		{
 			name: "numeric gt+gte equal magnitudes -> inclusive binds", shape: prim("int"),
 			constraints: map[string]string{"gt": "5", "gte": "10"},
-			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(10)}},
+			expected:    []openAPIConstraint{{Name: "minimum", Value: int64(10)}},
 			description: "gte=10 (>gt=5) binds; inclusive 10 wins, no exclusiveMinimum",
 		},
 		{
 			name: "numeric gte+gt equal values -> exclusive wins", shape: prim("int"),
 			constraints: map[string]string{"gte": "10", "gt": "10"},
-			expected: []OpenAPIConstraint{
+			expected: []openAPIConstraint{
 				{Name: "minimum", Value: int64(10)},
 				{Name: "exclusiveMinimum", Value: true},
 			},
@@ -509,7 +491,7 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 		{
 			name: "slice min+len -> larger minItems plus maxItems", shape: sliceOf(prim("string")),
 			constraints: map[string]string{"min": "1", "len": "3"},
-			expected: []OpenAPIConstraint{
+			expected: []openAPIConstraint{
 				{Name: "minItems", Value: 3},
 				{Name: "maxItems", Value: 3},
 			},
@@ -521,14 +503,14 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 			// wrongly treat them as equal and keep the smaller (first-seen) bound.
 			name: "int64 minimum overlap above 2^53 keeps the exact larger bound", shape: prim("int64"),
 			constraints: map[string]string{"gte": "9007199254740992", "min": "9007199254740993"},
-			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(9007199254740993)}},
+			expected:    []openAPIConstraint{{Name: "minimum", Value: int64(9007199254740993)}},
 			description: "distinct int64 bounds above 2^53 compare as int64, not float64",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := MapConstraintToOpenAPI(tt.shape, tt.underlyingKind, tt.constraints)
+			result := mapConstraintToOpenAPI(tt.shape, tt.underlyingKind, tt.constraints)
 
 			if len(result) != len(tt.expected) {
 				t.Errorf("%s: expected %d constraints, got %d", tt.description, len(tt.expected), len(result))
@@ -593,13 +575,13 @@ func TestMapConstraintToOpenAPIDeterministicOverlap(t *testing.T) {
 	}
 }
 
-// assertDeterministicConstraint asserts MapConstraintToOpenAPI emits keyword with
+// assertDeterministicConstraint asserts mapConstraintToOpenAPI emits keyword with
 // wantValue on every run. It repeats many times because a single run can
 // coincidentally match even when the underlying iteration order is nondeterministic.
 func assertDeterministicConstraint(t *testing.T, shape models.TypeShape, constraints map[string]string, keyword string, wantValue any) {
 	t.Helper()
 	for i := 0; i < 100; i++ {
-		got, found := constraintByName(MapConstraintToOpenAPI(shape, "", constraints), keyword)
+		got, found := constraintByName(mapConstraintToOpenAPI(shape, "", constraints), keyword)
 		if !found {
 			t.Fatalf("iteration %d: keyword %q not emitted", i, keyword)
 		}
@@ -614,7 +596,7 @@ func assertDeterministicConstraint(t *testing.T, shape models.TypeShape, constra
 // It returns the LAST match, mirroring the generator's last-writer-wins overwrite
 // when several validator keys collapse to the same keyword (e.g. min & gte both
 // emit a "minimum" entry) — which is the value that actually lands in the spec.
-func constraintByName(result []OpenAPIConstraint, name string) (any, bool) {
+func constraintByName(result []openAPIConstraint, name string) (any, bool) {
 	var value any
 	found := false
 	for _, c := range result {
@@ -629,7 +611,7 @@ func constraintByName(result []OpenAPIConstraint, name string) (any, bool) {
 // assertConstraintsMatch verifies every expected constraint is present in
 // resultMap with the expected value. Enum constraints are compared element-wise
 // since they are slices; scalar constraints are compared via direct equality.
-func assertConstraintsMatch(t *testing.T, description string, expected []OpenAPIConstraint, resultMap map[string]any) {
+func assertConstraintsMatch(t *testing.T, description string, expected []openAPIConstraint, resultMap map[string]any) {
 	t.Helper()
 	for _, exp := range expected {
 		gotValue, ok := resultMap[exp.Name]
@@ -666,60 +648,6 @@ func assertEnumConstraint(t *testing.T, description string, expected, got any) {
 		if expectedArr[i] != gotArr[i] {
 			t.Errorf("%s: enum[%d]: expected %v, got %v", description, i, expectedArr[i], gotArr[i])
 		}
-	}
-}
-
-func TestIsStringType(t *testing.T) {
-	tests := []struct {
-		typeName string
-		expected bool
-	}{
-		{"string", true},
-		{"int", false},
-		{"float64", false},
-		{"bool", false},
-		{"[]string", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.typeName, func(t *testing.T) {
-			result := isStringType(tt.typeName)
-			if result != tt.expected {
-				t.Errorf("isStringType(%q): expected %v, got %v", tt.typeName, tt.expected, result)
-			}
-		})
-	}
-}
-
-func TestIsNumericType(t *testing.T) {
-	tests := []struct {
-		typeName string
-		expected bool
-	}{
-		{"int", true},
-		{"int8", true},
-		{"int16", true},
-		{"int32", true},
-		{"int64", true},
-		{"uint", true},
-		{"uint8", true},
-		{"uint16", true},
-		{"uint32", true},
-		{"uint64", true},
-		{"float32", true},
-		{"float64", true},
-		{"string", false},
-		{"bool", false},
-		{"[]int", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.typeName, func(t *testing.T) {
-			result := isNumericType(tt.typeName)
-			if result != tt.expected {
-				t.Errorf("isNumericType(%q): expected %v, got %v", tt.typeName, tt.expected, result)
-			}
-		})
 	}
 }
 

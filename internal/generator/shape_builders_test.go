@@ -20,3 +20,4 @@ func sliceOf(s models.TypeShape) models.TypeShape {
 func mapOf(k, v models.TypeShape) models.TypeShape {
 	return models.TypeShape{Kind: models.ShapeMap, Key: &k, Elem: &v}
 }
+func unknownShape() models.TypeShape { return models.TypeShape{Kind: models.ShapeUnknown} }
