@@ -1530,8 +1530,6 @@ func TestFieldInfoToPropertyMapValueRef(t *testing.T) {
 }
 
 func TestApplyConstraints(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
-
 	tests := []struct {
 		name                  string
 		field                 *models.FieldInfo
@@ -1627,7 +1625,7 @@ func TestApplyConstraints(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			prop := &OpenAPIProperty{}
-			gen.applyConstraints(prop, tt.field)
+			applyValidationConstraints(prop, tt.field)
 
 			assertOptionalString(t, "format", tt.expectedFormat, prop.Format)
 			assertOptionalPtr(t, "MinLength", tt.expectedMinLength, prop.MinLength)
@@ -1642,6 +1640,76 @@ func TestApplyConstraints(t *testing.T) {
 				t.Errorf("Expected %d enum values, got %d", tt.expectedEnumCount, len(prop.Enum))
 			}
 		})
+	}
+}
+
+func TestApplyValidationConstraintsRefItemsTakeNothing(t *testing.T) {
+	// Slice-of-$ref: collection cardinality lands on the array, element (dive)
+	// rules have nowhere valid to go on a $ref and must be dropped — the rule
+	// refProperty used to enforce by simply not calling the element path.
+	arr := &OpenAPIProperty{Type: typeArray, Items: &OpenAPIProperty{Ref: "#/components/schemas/Address"}}
+	field := &models.FieldInfo{
+		Shape:              sliceOf(named("Address")),
+		Constraints:        map[string]string{"min": "1"},
+		ElementConstraints: map[string]string{"email": "true"},
+	}
+	applyValidationConstraints(arr, field)
+	if arr.MinItems == nil || *arr.MinItems != 1 {
+		t.Errorf("minItems not applied: %+v", arr)
+	}
+	if arr.Items.Format != "" || arr.Items.Pattern != "" {
+		t.Errorf("element rules must not be stamped beside a $ref: %+v", arr.Items)
+	}
+}
+
+func TestApplyValidationConstraintsElementPath(t *testing.T) {
+	prop := &OpenAPIProperty{Type: typeArray, Items: &OpenAPIProperty{Type: typeString}}
+	field := &models.FieldInfo{
+		Shape:              sliceOf(prim("string")),
+		Constraints:        map[string]string{"max": "3"},
+		ElementConstraints: map[string]string{"email": "true"},
+	}
+	applyValidationConstraints(prop, field)
+	if prop.MaxItems == nil || *prop.MaxItems != 3 || prop.Items.Format != "email" {
+		t.Errorf("collection and element scopes both apply: %+v / %+v", prop, prop.Items)
+	}
+}
+
+func TestApplyValidationConstraintsElementPathPointerToSlice(t *testing.T) {
+	// *[]string: the pointer-unwrap branch in applyValidationConstraints has no
+	// other package test exercising it directly.
+	prop := &OpenAPIProperty{Type: typeArray, Items: &OpenAPIProperty{Type: typeString}}
+	field := &models.FieldInfo{
+		Shape:              ptrOf(sliceOf(prim("string"))),
+		Constraints:        map[string]string{"max": "3"},
+		ElementConstraints: map[string]string{"email": "true"},
+	}
+	applyValidationConstraints(prop, field)
+	if prop.MaxItems == nil || *prop.MaxItems != 3 || prop.Items.Format != "email" {
+		t.Errorf("collection and element scopes both apply through the pointer unwrap: %+v / %+v", prop, prop.Items)
+	}
+}
+
+func TestApplyValidationConstraintsUintFloorOverwritten(t *testing.T) {
+	// Ordering invariant: setTypeAndFormat pre-stamps minimum: 0 for uints and
+	// relies on constraint application running afterwards to overwrite it.
+	var gen OpenAPIGenerator
+	prop := &OpenAPIProperty{}
+	field := &models.FieldInfo{Shape: prim("uint"), Constraints: map[string]string{"min": "5"}}
+	gen.setTypeAndFormat(prop, field.Shape)
+	if prop.Minimum == nil || *prop.Minimum != 0 {
+		t.Fatalf("precondition: uint pre-stamp missing: %+v", prop)
+	}
+	applyValidationConstraints(prop, field)
+	if *prop.Minimum != 5 {
+		t.Errorf("explicit min must overwrite the uint floor, got %v", *prop.Minimum)
+	}
+	// And with no constraint, the floor survives.
+	bare := &OpenAPIProperty{}
+	gen.setTypeAndFormat(bare, prim("uint"))
+	applyValidationConstraints(bare, &models.FieldInfo{Shape: prim("uint")})
+	if bare.Minimum == nil || *bare.Minimum != 0 {
+		t.Errorf("empty constraints must leave the uint floor: %+v", bare)
 	}
 }
 
@@ -1803,10 +1871,6 @@ func TestGenerateWithTypedRequestResponse(t *testing.T) {
 
 func float64Ptr(f float64) *float64 {
 	return &f
-}
-
-func boolPtr(b bool) *bool {
-	return &b
 }
 
 // mustMarshalYAML marshals v with the same 2-space indent the generator uses,
@@ -2329,42 +2393,6 @@ func TestAssignOperationByMethod(t *testing.T) {
 		assert.Nil(t, item.Get)
 		assert.Nil(t, item.Post)
 	})
-}
-
-// TestToFloat64Ptr directly tests the toFloat64Ptr utility function
-func TestToFloat64Ptr(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    any
-		expected *float64
-	}{
-		{name: "int value", input: 42, expected: float64Ptr(42.0)},
-		{name: "int64 value", input: int64(123), expected: float64Ptr(123.0)},
-		{name: "float64 value", input: 3.14, expected: float64Ptr(3.14)},
-		{name: "valid string", input: "99.5", expected: float64Ptr(99.5)},
-		{name: "invalid string", input: "not-a-number", expected: nil},
-		{name: "empty string", input: "", expected: nil},
-		{name: "unsupported type (bool)", input: true, expected: nil},
-		{name: "unsupported type (slice)", input: []int{1, 2, 3}, expected: nil},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := toFloat64Ptr(tt.input)
-
-			if tt.expected == nil {
-				if result != nil {
-					t.Errorf("Expected nil, got %v", *result)
-				}
-			} else {
-				if result == nil {
-					t.Errorf("Expected %v, got nil", *tt.expected)
-				} else if *result != *tt.expected {
-					t.Errorf("Expected %v, got %v", *tt.expected, *result)
-				}
-			}
-		})
-	}
 }
 
 // TestTypeInfoToSchemaSkipsIgnoredFields verifies fields with json:"-" are skipped

@@ -1383,15 +1383,14 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 		if unwrapped.Kind == models.ShapeSlice {
 			prop.Type = typeArray
 			prop.Items = &OpenAPIProperty{Type: field.UnderlyingKind}
-			g.applyConstraints(prop, field)        // minItems/maxItems on the array
-			g.applyElementConstraints(prop, field) // dive rules on items
+			applyValidationConstraints(prop, field) // minItems/maxItems on the array, dive rules on items
 			return prop
 		}
 		// Path 5 — named scalar (Cents). The slice branch is false here, and
 		// prop.Type is set from UnderlyingKind just above, so a `nullable`
 		// emitted here always has a declared type to extend.
 		prop.Type = field.UnderlyingKind
-		g.applyConstraints(prop, field)
+		applyValidationConstraints(prop, field)
 		prop.Nullable = isPointerField(field)
 		return prop
 	}
@@ -1399,10 +1398,10 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 	// Map the Go type shape to OpenAPI type and format
 	g.setTypeAndFormat(prop, field.Shape)
 
-	// Apply collection/scalar constraints (incl. minItems/maxItems for slices),
-	// then element-scope (dive) constraints onto the array's items.
-	g.applyConstraints(prop, field)
-	g.applyElementConstraints(prop, field)
+	// Apply the field's validate-tag constraints: collection/scalar rules onto
+	// prop (incl. minItems/maxItems for slices), element-scope (dive) rules onto
+	// the array's items.
+	applyValidationConstraints(prop, field)
 
 	// Pointer to a scalar / well-known type only. NOT pointer-to-slice
 	// (*[]string) or pointer-to-map (*map[string]int) — out of scope. isPointerField
@@ -1429,7 +1428,9 @@ func (g *OpenAPIGenerator) refProperty(field *models.FieldInfo) *OpenAPIProperty
 		// (dive) rules have nowhere valid to go on a $ref element, so they drop.
 		arr := &OpenAPIProperty{Type: typeArray, Items: ref, Description: field.Description}
 		applyExample(arr, field.Example)
-		g.applyConstraints(arr, field)
+		// Items.Ref is set here, so applyValidationConstraints' own guard skips
+		// the element (dive) path — this is what keeps rules off the $ref item.
+		applyValidationConstraints(arr, field)
 		return arr
 	}
 	if isPointerField(field) {
@@ -1444,31 +1445,6 @@ func (g *OpenAPIGenerator) refProperty(field *models.FieldInfo) *OpenAPIProperty
 		}
 	}
 	return ref
-}
-
-// applyElementConstraints maps a slice field's element-scope (post-`dive`) rules
-// onto prop.Items (e.g. `dive,email` -> items.format:email). No-op for non-slice
-// fields or when there are no element constraints.
-func (g *OpenAPIGenerator) applyElementConstraints(prop *OpenAPIProperty, field *models.FieldInfo) {
-	if len(field.ElementConstraints) == 0 || prop.Items == nil {
-		return
-	}
-	// field.UnderlyingKind is resolved from the slice's element type (the analyzer
-	// strips */[] before classifying), so it is the ELEMENT's kind for a
-	// slice-of-named-scalar (e.g. []Cents -> "integer"), letting element numeric
-	// constraints map. Empty for builtin elements, where the type string suffices.
-	// Element shape: unwrap ONE pointer then ONE slice layer — the exact
-	// discipline of the old sliceElementType ("*[]Address" -> "Address").
-	elem := field.Shape
-	if elem.Kind == models.ShapePointer && elem.Elem != nil {
-		elem = *elem.Elem
-	}
-	if elem.Kind == models.ShapeSlice && elem.Elem != nil {
-		elem = *elem.Elem
-	}
-	for _, c := range mapConstraintToOpenAPI(elem, field.UnderlyingKind, field.ElementConstraints) {
-		g.applyConstraint(prop.Items, c)
-	}
 }
 
 // isPointerField reports whether a field serializes JSON null (a Go pointer),
@@ -1619,159 +1595,6 @@ func setBasicTypeAndFormat(prop *OpenAPIProperty, name string) {
 
 // floatPtr returns a pointer to v, for the *float64 schema constraint fields.
 func floatPtr(v float64) *float64 { return &v }
-
-// applyConstraints applies validation constraints to an OpenAPI property
-func (g *OpenAPIGenerator) applyConstraints(prop *OpenAPIProperty, field *models.FieldInfo) {
-	if len(field.Constraints) == 0 {
-		return
-	}
-
-	// UnderlyingKind lets named scalars (type Cents int64, time.Duration) map
-	// numeric/string constraints.
-	openAPIConstraints := mapConstraintToOpenAPI(field.Shape, field.UnderlyingKind, field.Constraints)
-
-	// Apply each constraint using specialized applicators
-	for _, constraint := range openAPIConstraints {
-		g.applyConstraint(prop, constraint)
-	}
-}
-
-// constraintApplicators maps an openAPIConstraint name to the function that writes
-// it onto a property. Static — defined once rather than per applyConstraint call
-// (applyConstraint runs once per emitted constraint, incl. the per-element loop).
-var constraintApplicators = map[string]func(*OpenAPIProperty, any){
-	constraintFormat:           applyFormatConstraint,
-	constraintMinLength:        applyMinLengthConstraint,
-	constraintMaxLength:        applyMaxLengthConstraint,
-	constraintMinItems:         applyMinItemsConstraint,
-	constraintMaxItems:         applyMaxItemsConstraint,
-	constraintMinProperties:    applyMinPropertiesConstraint,
-	constraintMaxProperties:    applyMaxPropertiesConstraint,
-	constraintMinimum:          applyMinimumConstraint,
-	constraintMaximum:          applyMaximumConstraint,
-	constraintExclusiveMinimum: applyExclusiveMinimumConstraint,
-	constraintExclusiveMaximum: applyExclusiveMaximumConstraint,
-	constraintPattern:          applyPatternConstraint,
-	constraintEnum:             applyEnumConstraint,
-}
-
-// applyConstraint routes a constraint to its specialized applicator.
-func (g *OpenAPIGenerator) applyConstraint(prop *OpenAPIProperty, constraint openAPIConstraint) {
-	if applicator, exists := constraintApplicators[constraint.Name]; exists {
-		applicator(prop, constraint.Value)
-	}
-}
-
-// applyFormatConstraint sets the format field
-func applyFormatConstraint(prop *OpenAPIProperty, value any) {
-	if str, ok := value.(string); ok {
-		prop.Format = str
-	}
-}
-
-// applyMinLengthConstraint sets the minLength field
-func applyMinLengthConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(int); ok {
-		prop.MinLength = &val
-	}
-}
-
-// applyMaxLengthConstraint sets the maxLength field
-func applyMaxLengthConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(int); ok {
-		prop.MaxLength = &val
-	}
-}
-
-// applyMinItemsConstraint sets the minItems field (array cardinality)
-func applyMinItemsConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(int); ok {
-		prop.MinItems = &val
-	}
-}
-
-// applyMaxItemsConstraint sets the maxItems field (array cardinality)
-func applyMaxItemsConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(int); ok {
-		prop.MaxItems = &val
-	}
-}
-
-// applyMinPropertiesConstraint sets the minProperties field (map cardinality)
-func applyMinPropertiesConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(int); ok {
-		prop.MinProperties = &val
-	}
-}
-
-// applyMaxPropertiesConstraint sets the maxProperties field (map cardinality)
-func applyMaxPropertiesConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(int); ok {
-		prop.MaxProperties = &val
-	}
-}
-
-// applyMinimumConstraint sets the minimum field with type conversion
-func applyMinimumConstraint(prop *OpenAPIProperty, value any) {
-	prop.Minimum = toFloat64Ptr(value)
-}
-
-// applyMaximumConstraint sets the maximum field with type conversion
-func applyMaximumConstraint(prop *OpenAPIProperty, value any) {
-	prop.Maximum = toFloat64Ptr(value)
-}
-
-// applyExclusiveMinimumConstraint sets the exclusiveMinimum field
-func applyExclusiveMinimumConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(bool); ok {
-		prop.ExclusiveMinimum = &val
-	}
-}
-
-// applyExclusiveMaximumConstraint sets the exclusiveMaximum field
-func applyExclusiveMaximumConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(bool); ok {
-		prop.ExclusiveMaximum = &val
-	}
-}
-
-// applyPatternConstraint sets the pattern field
-func applyPatternConstraint(prop *OpenAPIProperty, value any) {
-	if str, ok := value.(string); ok {
-		prop.Pattern = str
-	}
-}
-
-// applyEnumConstraint sets the enum field
-func applyEnumConstraint(prop *OpenAPIProperty, value any) {
-	if arr, ok := value.([]any); ok {
-		prop.Enum = arr
-	}
-}
-
-// toFloat64Ptr converts int, int64, float64, or string to *float64
-func toFloat64Ptr(value any) *float64 {
-	switch val := value.(type) {
-	case int:
-		f := float64(val)
-		return &f
-	case int64:
-		f := float64(val)
-		return &f
-	case float64:
-		return &val
-	case string:
-		// NOSONAR: Parse error intentional - non-numeric strings return nil (no default value).
-		// (S8148 is a SonarCloud rule; NOSONAR is the suppressor it reads — a //nolint
-		// directive would name a golangci-lint linter, which S8148 is not.)
-		if v, err := strconv.ParseFloat(val, 64); err == nil {
-			return &v
-		}
-	default:
-		return nil
-	}
-	return nil
-}
 
 // applyExample stamps a coerced `example` onto prop, or omits it entirely.
 //
