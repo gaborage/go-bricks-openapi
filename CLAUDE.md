@@ -89,6 +89,8 @@ Repo-specific gates and settled invariants for `go-bricks-openapi`. This is a st
 - Adding them orphans a component for every params-only request type and trips redocly's `no-unused-components`.
 - Don't "optimize" the `schema == nil` check in `generateSchemasFromTypes` into a zero-properties check — it would drop the component and dangle a `requestBody` `$ref`.
 - The `json_excluded_request` golden locks this invariant.
+- The Constraint set (validate tag → OpenAPI keywords) lives only in `internal/generator/constraints.go`; the analyzer stops at the key→value map on `FieldInfo.Constraints`/`ElementConstraints`. `applyValidationConstraints` is the single entry point (collection rules onto the property, `dive` rules onto `Items`).
+- `applyTo` writes only the keywords the tag set — the uint `minimum: 0` pre-stamp in `setBasicTypeAndFormat` depends on surviving an empty set and being overwritten only by an explicit bound (issue #54 tracks folding that floor in). `applyValidationConstraints` skips element rules when `Items.Ref != ""` — a `$ref` item takes no keywords. Both are test-pinned; neither guard is redundant.
 - `example:` coercion runs in exactly one place: the thin `fieldInfoToProperty` wrapper, which calls `applyExample` after `buildFieldProperty` resolves the property's type.
 - `buildFieldProperty` itself must not stamp examples.
 - An `example:` with no valid representation in its declared type is dropped silently — no warning, no `--strict` failure.
