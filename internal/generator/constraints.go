@@ -10,28 +10,7 @@ import (
 	"github.com/gaborage/go-bricks-openapi/internal/models"
 )
 
-// openAPIConstraint represents a single OpenAPI schema constraint
-type openAPIConstraint struct {
-	Name  string // OpenAPI property name (e.g., "minLength", "minimum", "format")
-	Value any    // Constraint value (string, int, bool, []string for enum)
-}
-
 const (
-	// OpenAPI constraint property names
-	constraintFormat           = "format"
-	constraintMinLength        = "minLength"
-	constraintMaxLength        = "maxLength"
-	constraintMinimum          = "minimum"
-	constraintMaximum          = "maximum"
-	constraintMinItems         = "minItems"
-	constraintMaxItems         = "maxItems"
-	constraintMinProperties    = "minProperties"
-	constraintMaxProperties    = "maxProperties"
-	constraintEnum             = "enum"
-	constraintPattern          = "pattern"
-	constraintExclusiveMinimum = "exclusiveMinimum"
-	constraintExclusiveMaximum = "exclusiveMaximum"
-
 	// Validator tag values
 	validatorOneOf    = "oneof"
 	validatorDatetime = "datetime"
@@ -49,10 +28,156 @@ const (
 	boolTrueString     = "true"
 )
 
-// mapConstraintToOpenAPI converts validation constraints to OpenAPI schema properties
-// Takes the field type and constraints map, returns OpenAPI-compatible constraints
-func mapConstraintToOpenAPI(shape models.TypeShape, underlyingKind string, constraints map[string]string) []openAPIConstraint {
-	var result []openAPIConstraint
+// numericBound is one candidate or resolved numeric bound (minimum/maximum).
+// Integer-valued bounds keep int64 precision so two distinct values above 2^53
+// never collapse when compared; only a fractional bound compares as float64.
+type numericBound struct {
+	intVal    int64
+	floatVal  float64
+	isFloat   bool
+	exclusive bool // the bound came from gt/lt (exclusiveMinimum/Maximum: true)
+}
+
+// boundFromParsed converts a parseNumeric result (int64 or float64) into a bound.
+func boundFromParsed(v any, exclusive bool) numericBound {
+	if f, ok := v.(float64); ok {
+		return numericBound{floatVal: f, isFloat: true, exclusive: exclusive}
+	}
+	return numericBound{intVal: v.(int64), exclusive: exclusive} // parseNumeric only yields int64 or float64
+}
+
+func (b numericBound) float64Value() float64 {
+	if b.isFloat {
+		return b.floatVal
+	}
+	return float64(b.intVal)
+}
+
+// compareNumericBounds orders two bounds: int64 against int64 exactly, anything
+// involving a float as float64. Returns -1/0/1.
+func compareNumericBounds(a, b numericBound) int {
+	if !a.isFloat && !b.isFloat {
+		return cmp.Compare(a.intVal, b.intVal)
+	}
+	return cmp.Compare(a.float64Value(), b.float64Value())
+}
+
+// constraintSet is the typed image of one validate tag in OpenAPI vocabulary
+// (CONTEXT.md: "Constraint set"). Zero value = no constraints. Bounds hold the
+// most-restrictive candidate seen so far; format/pattern/enum hold the last
+// value set (callers set them in sorted validator-key order, so precedence is
+// "last sorted key wins", matching the retired last-writer-wins applicators).
+type constraintSet struct {
+	format                       string
+	pattern                      string
+	enum                         []any
+	minLength, maxLength         *int
+	minItems, maxItems           *int
+	minProperties, maxProperties *int
+	minimum, maximum             *numericBound
+}
+
+func (s *constraintSet) setFormat(v string)  { s.format = v }
+func (s *constraintSet) setPattern(v string) { s.pattern = v }
+func (s *constraintSet) setEnum(v []any)     { s.enum = v }
+
+// keepLarger/keepSmaller implement most-restrictive for integer keywords:
+// validator/v10 enforces ALL rules, so the binding floor is the largest and
+// the binding ceiling the smallest when distinct validator keys collapse onto
+// one OpenAPI keyword (min & gte -> minimum, min/len/gt -> minLength, ...).
+func keepLarger(dst **int, n int) {
+	if *dst == nil || n > **dst {
+		v := n
+		*dst = &v
+	}
+}
+
+func keepSmaller(dst **int, n int) {
+	if *dst == nil || n < **dst {
+		v := n
+		*dst = &v
+	}
+}
+
+func (s *constraintSet) setMinLength(n int)     { keepLarger(&s.minLength, n) }
+func (s *constraintSet) setMaxLength(n int)     { keepSmaller(&s.maxLength, n) }
+func (s *constraintSet) setMinItems(n int)      { keepLarger(&s.minItems, n) }
+func (s *constraintSet) setMaxItems(n int)      { keepSmaller(&s.maxItems, n) }
+func (s *constraintSet) setMinProperties(n int) { keepLarger(&s.minProperties, n) }
+func (s *constraintSet) setMaxProperties(n int) { keepSmaller(&s.maxProperties, n) }
+
+// mergeNumeric folds a candidate into the running winner. lower selects the
+// larger value; !lower the smaller. On EQUAL value, exclusive beats inclusive
+// (strictly more restrictive) — exclusivity is OR-ed, value kept.
+func mergeNumeric(dst **numericBound, cand numericBound, lower bool) {
+	if *dst == nil {
+		c := cand
+		*dst = &c
+		return
+	}
+	ord := compareNumericBounds(cand, **dst)
+	switch {
+	case ord == 0:
+		(*dst).exclusive = (*dst).exclusive || cand.exclusive
+	case (lower && ord > 0) || (!lower && ord < 0):
+		c := cand
+		*dst = &c
+	}
+}
+
+func (s *constraintSet) setMinimum(b numericBound) { mergeNumeric(&s.minimum, b, true) }
+func (s *constraintSet) setMaximum(b numericBound) { mergeNumeric(&s.maximum, b, false) }
+
+// applyTo writes every set keyword onto prop and leaves unset ones alone — so
+// a pre-stamped value (the uint minimum: 0) survives an empty set and is
+// overwritten only by an explicit bound, exactly as the applicator loop did.
+//
+// The pattern != "" guard (as opposed to an unconditional write) is
+// unobservable today because nothing pre-stamps Pattern; if a pre-stamp ever
+// appears, an empty `regexp=` tag would no longer clear it.
+func (s *constraintSet) applyTo(prop *OpenAPIProperty) {
+	if s.format != "" {
+		prop.Format = s.format
+	}
+	if s.pattern != "" {
+		prop.Pattern = s.pattern
+	}
+	if s.enum != nil {
+		prop.Enum = s.enum
+	}
+	copyInt(&prop.MinLength, s.minLength)
+	copyInt(&prop.MaxLength, s.maxLength)
+	copyInt(&prop.MinItems, s.minItems)
+	copyInt(&prop.MaxItems, s.maxItems)
+	copyInt(&prop.MinProperties, s.minProperties)
+	copyInt(&prop.MaxProperties, s.maxProperties)
+	if s.minimum != nil {
+		prop.Minimum = floatPtr(s.minimum.float64Value())
+		if s.minimum.exclusive {
+			prop.ExclusiveMinimum = boolPtr(true)
+		}
+	}
+	if s.maximum != nil {
+		prop.Maximum = floatPtr(s.maximum.float64Value())
+		if s.maximum.exclusive {
+			prop.ExclusiveMaximum = boolPtr(true)
+		}
+	}
+}
+
+func copyInt(dst **int, src *int) {
+	if src != nil {
+		v := *src
+		*dst = &v
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// constraintsFor converts validation constraints to a typed constraintSet.
+// Takes the field type and constraints map, returns the OpenAPI-compatible set.
+func constraintsFor(shape models.TypeShape, underlyingKind string, constraints map[string]string) *constraintSet {
+	var set constraintSet
 
 	// The old string form stripped exactly ONE leading "*" (TrimPrefix) — mirror it.
 	base := shape
@@ -78,198 +203,31 @@ func mapConstraintToOpenAPI(shape models.TypeShape, underlyingKind string, const
 	// Iterate keys in sorted order so the emitted constraints are deterministic.
 	// Go map iteration is randomized, and distinct validator keys can collapse to
 	// the SAME OpenAPI keyword (min & gte -> minimum; max & lt -> maximum; min/len/gt
-	// -> minLength; etc.). The generator's applyConstraint overwrites the scalar prop
-	// field last-writer-wins, so a random range made the emitted minimum/maximum
-	// nondeterministic across runs for fields like `validate:"min=1,gte=10"`. Sorting
-	// fixes a stable precedence (and stable golden output).
+	// -> minLength; etc.). Bound keywords (minimum/maximum/min*Length/*Items/
+	// *Properties) resolve most-restrictive at set time, independent of processing
+	// order. format/pattern/enum instead keep the LAST value constraintSet was
+	// given, so a random map-iteration range would still make the emitted
+	// format/pattern/enum nondeterministic for a field like
+	// `validate:"email=true,uuid4=true"` without a stable key order. Sorting fixes
+	// a stable precedence — "last sorted key wins" — for both cases (and stable
+	// golden output).
 	for _, key := range sortedKeys(constraints) {
 		if key == constraintRequired {
 			continue // handled at schema level
 		}
 		value := constraints[key]
 
-		// Slice fields: only cardinality (min/max/len -> minItems/maxItems) applies
-		// to the array itself; element rules arrive via ElementConstraints + dive.
-		if isSlice {
-			result = append(result, handleSliceCardinality(key, value)...)
-			continue
-		}
-		// Map fields: only entry-count cardinality (min/max/len -> minProperties/
-		// maxProperties) applies to the map itself. A map type never matches isSlice
-		// ("map[" does not start with "[]"), so the two branches are mutually exclusive.
-		if isMap {
-			result = append(result, handleMapCardinality(key, value)...)
-			continue
-		}
-		result = append(result, dispatchScalarConstraint(key, value, effKind)...)
-	}
-
-	return resolveMostRestrictive(result)
-}
-
-// lowerBoundKeywords are OpenAPI floor keywords. When several validator rules
-// collapse to the same one, the MOST-RESTRICTIVE (largest) value binds.
-var lowerBoundKeywords = map[string]bool{
-	constraintMinimum: true, constraintMinLength: true,
-	constraintMinItems: true, constraintMinProperties: true,
-}
-
-// upperBoundKeywords are OpenAPI ceiling keywords. When several validator rules
-// collapse to the same one, the MOST-RESTRICTIVE (smallest) value binds.
-var upperBoundKeywords = map[string]bool{
-	constraintMaximum: true, constraintMaxLength: true,
-	constraintMaxItems: true, constraintMaxProperties: true,
-}
-
-// resolveMostRestrictive collapses duplicate bound keywords to the single
-// most-restrictive entry. validator/v10 enforces ALL rules, so when distinct
-// validator keys map to the same OpenAPI keyword (e.g. min & gte -> minimum), the
-// binding bound is the largest floor / smallest ceiling — not whichever the map
-// iteration emitted last. Non-bound constraints pass through unchanged in input
-// order; each resolved bound is anchored at its first occurrence so the slice
-// stays deterministic and stable.
-func resolveMostRestrictive(in []openAPIConstraint) []openAPIConstraint {
-	winners := map[string]boundState{}
-	var order []string // bound keywords in first-seen order
-	var out []openAPIConstraint
-
-	for i := 0; i < len(in); i++ {
-		c := in[i]
-		if !isBoundKeyword(c.Name) {
-			out = append(out, c) // pass-through (format, pattern, enum, exclusive flags w/o partner…)
-			continue
-		}
-		cand, consumed := readBound(in, i)
-		i += consumed - 1 // advance past a consumed exclusive partner
-		if _, seen := winners[c.Name]; !seen {
-			order = append(order, c.Name)
-			out = append(out, openAPIConstraint{Name: boundPlaceholder, Value: c.Name}) // reserve slot
-		}
-		winners[c.Name] = mergeBound(winners[c.Name], cand, isLowerBound(c.Name))
-	}
-	return materializeBounds(out, winners, order)
-}
-
-// boundState is the running winner for one bound keyword: its (typed) value and
-// whether the binding bound is exclusive (couples exclusiveMinimum/Maximum).
-type boundState struct {
-	value     any
-	exclusive bool
-	set       bool
-}
-
-// boundPlaceholder marks a reserved slot in the pass-through slice that is later
-// replaced by the resolved bound (plus its exclusive flag, if any).
-const boundPlaceholder = "\x00bound"
-
-func isLowerBound(name string) bool   { return lowerBoundKeywords[name] }
-func isUpperBound(name string) bool   { return upperBoundKeywords[name] }
-func isBoundKeyword(name string) bool { return isLowerBound(name) || isUpperBound(name) }
-
-// readBound reads the bound at index i, consuming a trailing exclusiveMinimum/
-// exclusiveMaximum:true partner that handleNumericComparison emits immediately
-// after a minimum/maximum. It returns the candidate bound and the number of input
-// entries it spans (1, or 2 when an exclusive partner is consumed).
-func readBound(in []openAPIConstraint, i int) (cand boundState, spanned int) {
-	cand = boundState{value: in[i].Value, set: true}
-	partner := exclusivePartner(in[i].Name)
-	if partner != "" && i+1 < len(in) && in[i+1].Name == partner {
-		cand.exclusive = true
-		return cand, 2
-	}
-	return cand, 1
-}
-
-// exclusivePartner returns the exclusive-flag keyword coupled to a numeric bound
-// (minimum -> exclusiveMinimum, maximum -> exclusiveMaximum), else "".
-func exclusivePartner(name string) string {
-	switch name {
-	case constraintMinimum:
-		return constraintExclusiveMinimum
-	case constraintMaximum:
-		return constraintExclusiveMaximum
-	}
-	return ""
-}
-
-// mergeBound folds a candidate into the running winner. For a lower bound the
-// larger value wins; for an upper bound the smaller. On EQUAL value, exclusive
-// beats inclusive (exclusive is strictly more restrictive).
-func mergeBound(cur, cand boundState, lower bool) boundState {
-	if !cur.set {
-		return cand
-	}
-	ord := compareBoundValues(cand.value, cur.value)
-	if ord == 0 {
-		cur.exclusive = cur.exclusive || cand.exclusive
-		return cur
-	}
-	if (lower && ord > 0) || (!lower && ord < 0) {
-		return cand
-	}
-	return cur
-}
-
-// compareBoundValues orders two bound values numerically (minimum/maximum carry
-// int64/float64; the length/cardinality keywords carry int). Returns -1/0/1.
-// Integer bounds are compared as int64 so two distinct int64 values above 2^53
-// cannot collapse to one float64 and mis-resolve the most-restrictive winner;
-// only a fractional (float64) bound falls back to float64 comparison.
-func compareBoundValues(a, b any) int {
-	if ai, aok := boundInt64(a); aok {
-		if bi, bok := boundInt64(b); bok {
-			return cmp.Compare(ai, bi)
+		switch {
+		case isSlice:
+			applySliceCardinality(&set, key, value)
+		case isMap:
+			applyMapCardinality(&set, key, value)
+		default:
+			applyScalarConstraint(&set, key, value, effKind)
 		}
 	}
-	return cmp.Compare(boundFloat64(a), boundFloat64(b))
-}
 
-// boundInt64 reports a bound value as an int64 when it is an integer kind (int or
-// int64). A float64 bound returns ok=false so the caller compares as float64.
-func boundInt64(v any) (int64, bool) {
-	switch n := v.(type) {
-	case int:
-		return int64(n), true
-	case int64:
-		return n, true
-	default:
-		return 0, false
-	}
-}
-
-// boundFloat64 converts a bound value (int, int64 or float64) to float64 for
-// comparison only; the original typed value is preserved when re-emitted.
-func boundFloat64(v any) float64 {
-	switch n := v.(type) {
-	case int:
-		return float64(n)
-	case int64:
-		return float64(n)
-	case float64:
-		return n
-	}
-	return 0
-}
-
-// materializeBounds replaces each reserved placeholder with its resolved bound,
-// re-emitting the exclusive flag only when the winning bound is exclusive.
-func materializeBounds(out []openAPIConstraint, winners map[string]boundState, order []string) []openAPIConstraint {
-	idx := 0 // next bound keyword (in first-seen order) to emit
-	final := make([]openAPIConstraint, 0, len(out))
-	for _, c := range out {
-		if c.Name != boundPlaceholder {
-			final = append(final, c)
-			continue
-		}
-		name := order[idx]
-		idx++
-		w := winners[name]
-		final = append(final, openAPIConstraint{Name: name, Value: w.value})
-		if w.exclusive {
-			final = append(final, openAPIConstraint{Name: exclusivePartner(name), Value: true})
-		}
-	}
-	return final
+	return &set
 }
 
 // sortedKeys returns the keys of m in lexicographic order so callers can iterate
@@ -283,27 +241,26 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
-// dispatchScalarConstraint routes a single (non-slice) constraint key to the first
-// matching handler. Order matters: format/pattern tags are tried before the
-// numeric/string handlers so a key is claimed by exactly one handler.
-func dispatchScalarConstraint(key, value, effKind string) []openAPIConstraint {
-	handlers := []func() []openAPIConstraint{
-		func() []openAPIConstraint { return handleFormatConstraint(key, value) },
-		func() []openAPIConstraint { return handlePatternFormatConstraint(key, value) },
-		func() []openAPIConstraint { return handleMinConstraint(key, value, effKind) },
-		func() []openAPIConstraint { return handleMaxConstraint(key, value, effKind) },
-		func() []openAPIConstraint { return handleLenConstraint(key, value, effKind) },
-		func() []openAPIConstraint { return handleNumericComparison(key, value, effKind) },
-		func() []openAPIConstraint { return handleEnumConstraint(key, value, effKind) },
-		func() []openAPIConstraint { return handleEqConstraint(key, value, effKind) },
-		func() []openAPIConstraint { return handlePatternConstraint(key, value) },
+// applyScalarConstraint routes a single (non-slice, non-map) constraint key to
+// the first matching handler. Order matters: format/pattern tags are tried
+// before the numeric/string handlers so a key is claimed by exactly one handler.
+func applyScalarConstraint(s *constraintSet, key, value, effKind string) {
+	handlers := []func() bool{
+		func() bool { return applyFormatConstraint(s, key, value) },
+		func() bool { return applyPatternFormatConstraint(s, key, value) },
+		func() bool { return applyMinConstraint(s, key, value, effKind) },
+		func() bool { return applyMaxConstraint(s, key, value, effKind) },
+		func() bool { return applyLenConstraint(s, key, value, effKind) },
+		func() bool { return applyNumericComparison(s, key, value, effKind) },
+		func() bool { return applyEnumConstraint(s, key, value, effKind) },
+		func() bool { return applyEqConstraint(s, key, value, effKind) },
+		func() bool { return applyPatternConstraint(s, key, value) },
 	}
 	for _, h := range handlers {
-		if c := h(); c != nil {
-			return c
+		if h() {
+			return
 		}
 	}
-	return nil
 }
 
 // effectiveKind resolves the OpenAPI 3-way kind to drive string-vs-numeric
@@ -342,19 +299,22 @@ var formatTagMap = map[string]string{
 	"base64":    formatByte,
 }
 
-// handleFormatConstraint maps boolean format tags to OpenAPI `format`. datetime is
+// applyFormatConstraint maps boolean format tags to OpenAPI `format`. datetime is
 // value-aware: a date-only layout maps to `date`, otherwise `date-time`.
-func handleFormatConstraint(key, value string) []openAPIConstraint {
+func applyFormatConstraint(s *constraintSet, key, value string) bool {
 	if key == validatorDatetime {
 		if value == "" || value == boolTrueString {
-			return []openAPIConstraint{{Name: constraintFormat, Value: formatDateTime}}
+			s.setFormat(formatDateTime)
+		} else {
+			s.setFormat(datetimeFormat(value))
 		}
-		return []openAPIConstraint{{Name: constraintFormat, Value: datetimeFormat(value)}}
+		return true
 	}
 	if format, ok := formatTagMap[key]; ok {
-		return []openAPIConstraint{{Name: constraintFormat, Value: format}}
+		s.setFormat(format)
+		return true
 	}
-	return nil
+	return false
 }
 
 // patternAlpha is pulled out of the map below only because the generator package
@@ -372,127 +332,138 @@ var stringContentPatterns = map[string]string{
 	"e164":     `^\+[1-9]\d{1,14}$`,
 }
 
-// handlePatternFormatConstraint maps string-content tags to a `pattern`. Boolean
+// applyPatternFormatConstraint maps string-content tags to a `pattern`. Boolean
 // tags (alpha/alphanum/numeric/hexcolor/e164) use a fixed anchored regex;
 // value-bearing tags (contains/startswith/endswith) build an (un)anchored pattern
 // from the QuoteMeta-escaped literal. Bare `ip` is intentionally left
 // unconstrained: there is no single OpenAPI format for "IPv4 or IPv6" and a
 // correct combined regex is huge/error-prone, so we document the type as string
 // with no pattern rather than over- or mis-constrain it (covered by a test).
-func handlePatternFormatConstraint(key, value string) []openAPIConstraint {
+func applyPatternFormatConstraint(s *constraintSet, key, value string) bool {
 	if p, ok := stringContentPatterns[key]; ok {
-		return []openAPIConstraint{{Name: constraintPattern, Value: p}}
+		s.setPattern(p)
+		return true
 	}
 	if value == "" {
-		return nil
+		return false
 	}
 	switch key {
 	case "contains":
-		return []openAPIConstraint{{Name: constraintPattern, Value: regexp.QuoteMeta(value)}}
+		s.setPattern(regexp.QuoteMeta(value))
+		return true
 	case "startswith":
-		return []openAPIConstraint{{Name: constraintPattern, Value: "^" + regexp.QuoteMeta(value)}}
+		s.setPattern("^" + regexp.QuoteMeta(value))
+		return true
 	case "endswith":
-		return []openAPIConstraint{{Name: constraintPattern, Value: regexp.QuoteMeta(value) + "$"}}
+		s.setPattern(regexp.QuoteMeta(value) + "$")
+		return true
 	}
-	return nil
+	return false
 }
 
-// handleMinConstraint maps 'min' to minLength (strings) or minimum (numbers).
-func handleMinConstraint(key, value, effKind string) []openAPIConstraint {
+// applyMinConstraint maps 'min' to minLength (strings) or minimum (numbers).
+func applyMinConstraint(s *constraintSet, key, value, effKind string) bool {
 	if key != "min" {
-		return nil
+		return false
 	}
 	if isEffectiveString(effKind) {
 		if length, err := strconv.Atoi(value); err == nil {
-			return []openAPIConstraint{{Name: constraintMinLength, Value: length}}
+			s.setMinLength(length)
+			return true
 		}
 	} else if isEffectiveNumeric(effKind) {
 		//nolint:S8148 // NOSONAR: invalid validation tag values are silently skipped
 		if minVal, err := parseNumeric(value); err == nil {
-			return []openAPIConstraint{{Name: constraintMinimum, Value: minVal}}
+			s.setMinimum(boundFromParsed(minVal, false))
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
-// handleMaxConstraint maps 'max' to maxLength (strings) or maximum (numbers).
-func handleMaxConstraint(key, value, effKind string) []openAPIConstraint {
+// applyMaxConstraint maps 'max' to maxLength (strings) or maximum (numbers).
+func applyMaxConstraint(s *constraintSet, key, value, effKind string) bool {
 	if key != "max" {
-		return nil
+		return false
 	}
 	if isEffectiveString(effKind) {
 		if length, err := strconv.Atoi(value); err == nil {
-			return []openAPIConstraint{{Name: constraintMaxLength, Value: length}}
+			s.setMaxLength(length)
+			return true
 		}
 	} else if isEffectiveNumeric(effKind) {
 		//nolint:S8148 // NOSONAR: invalid validation tag values are silently skipped
 		if maxVal, err := parseNumeric(value); err == nil {
-			return []openAPIConstraint{{Name: constraintMaximum, Value: maxVal}}
+			s.setMaximum(boundFromParsed(maxVal, false))
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
-// handleLenConstraint maps 'len' on a string to an exact length (minLength == maxLength).
-func handleLenConstraint(key, value, effKind string) []openAPIConstraint {
+// applyLenConstraint maps 'len' on a string to an exact length (minLength == maxLength).
+func applyLenConstraint(s *constraintSet, key, value, effKind string) bool {
 	if key != "len" || !isEffectiveString(effKind) {
-		return nil
+		return false
 	}
 	length, err := strconv.Atoi(value)
 	if err != nil {
-		return nil
+		return false
 	}
-	return []openAPIConstraint{
-		{Name: constraintMinLength, Value: length},
-		{Name: constraintMaxLength, Value: length},
-	}
+	s.setMinLength(length)
+	s.setMaxLength(length)
+	return true
 }
 
-// handleNumericComparison maps gt/gte/lt/lte: range constraints for numerics, and
+// applyNumericComparison maps gt/gte/lt/lte: range constraints for numerics, and
 // minLength/maxLength for strings (a string comparison constrains its length).
-func handleNumericComparison(key, value, effKind string) []openAPIConstraint {
+func applyNumericComparison(s *constraintSet, key, value, effKind string) bool {
 	if isEffectiveString(effKind) {
-		return handleStringLengthComparison(key, value)
+		return applyStringLengthComparison(s, key, value)
 	}
 	if !isEffectiveNumeric(effKind) {
-		return nil
+		return false
 	}
 	numVal, err := parseNumeric(value)
 	if err != nil {
-		return nil
+		return false
 	}
 	switch key {
 	case "gt":
-		return []openAPIConstraint{{Name: constraintMinimum, Value: numVal}, {Name: constraintExclusiveMinimum, Value: true}}
+		s.setMinimum(boundFromParsed(numVal, true))
 	case "gte":
-		return []openAPIConstraint{{Name: constraintMinimum, Value: numVal}}
+		s.setMinimum(boundFromParsed(numVal, false))
 	case "lt":
-		return []openAPIConstraint{{Name: constraintMaximum, Value: numVal}, {Name: constraintExclusiveMaximum, Value: true}}
+		s.setMaximum(boundFromParsed(numVal, true))
 	case "lte":
-		return []openAPIConstraint{{Name: constraintMaximum, Value: numVal}}
+		s.setMaximum(boundFromParsed(numVal, false))
+	default:
+		return false
 	}
-	return nil
+	return true
 }
 
-// handleStringLengthComparison maps gt/gte/lt/lte on a string field to
+// applyStringLengthComparison maps gt/gte/lt/lte on a string field to
 // minLength/maxLength (gt=N -> minLength N+1, lt=N -> maxLength N-1), clamped to
 // non-negative so the emitted bound stays valid OpenAPI.
-func handleStringLengthComparison(key, value string) []openAPIConstraint {
+func applyStringLengthComparison(s *constraintSet, key, value string) bool {
 	n, err := strconv.Atoi(value)
 	if err != nil {
-		return nil
+		return false
 	}
 	switch key {
 	case "gt":
-		return []openAPIConstraint{{Name: constraintMinLength, Value: clampNonNeg(n + 1)}}
+		s.setMinLength(clampNonNeg(n + 1))
 	case "gte":
-		return []openAPIConstraint{{Name: constraintMinLength, Value: clampNonNeg(n)}}
+		s.setMinLength(clampNonNeg(n))
 	case "lt":
-		return []openAPIConstraint{{Name: constraintMaxLength, Value: clampNonNeg(n - 1)}}
+		s.setMaxLength(clampNonNeg(n - 1))
 	case "lte":
-		return []openAPIConstraint{{Name: constraintMaxLength, Value: clampNonNeg(n)}}
+		s.setMaxLength(clampNonNeg(n))
+	default:
+		return false
 	}
-	return nil
+	return true
 }
 
 func clampNonNeg(n int) int {
@@ -502,62 +473,64 @@ func clampNonNeg(n int) int {
 	return n
 }
 
-// handleSliceCardinality maps min/max/len on a slice field to minItems/maxItems.
-func handleSliceCardinality(key, value string) []openAPIConstraint {
+// applySliceCardinality maps min/max/len on a slice field to minItems/maxItems.
+func applySliceCardinality(s *constraintSet, key, value string) {
 	n, err := strconv.Atoi(value)
 	if err != nil {
-		return nil
+		return
 	}
 	switch key {
 	case "min":
-		return []openAPIConstraint{{Name: constraintMinItems, Value: n}}
+		s.setMinItems(n)
 	case "max":
-		return []openAPIConstraint{{Name: constraintMaxItems, Value: n}}
+		s.setMaxItems(n)
 	case "len":
-		return []openAPIConstraint{{Name: constraintMinItems, Value: n}, {Name: constraintMaxItems, Value: n}}
+		s.setMinItems(n)
+		s.setMaxItems(n)
 	}
-	return nil
 }
 
-// handleMapCardinality maps min/max/len on a map field to minProperties/
-// maxProperties (entry-count cardinality). Mirrors handleSliceCardinality.
-func handleMapCardinality(key, value string) []openAPIConstraint {
+// applyMapCardinality maps min/max/len on a map field to minProperties/
+// maxProperties (entry-count cardinality). Mirrors applySliceCardinality.
+func applyMapCardinality(s *constraintSet, key, value string) {
 	n, err := strconv.Atoi(value)
 	if err != nil {
-		return nil
+		return
 	}
 	switch key {
 	case "min":
-		return []openAPIConstraint{{Name: constraintMinProperties, Value: n}}
+		s.setMinProperties(n)
 	case "max":
-		return []openAPIConstraint{{Name: constraintMaxProperties, Value: n}}
+		s.setMaxProperties(n)
 	case "len":
-		return []openAPIConstraint{{Name: constraintMinProperties, Value: n}, {Name: constraintMaxProperties, Value: n}}
+		s.setMinProperties(n)
+		s.setMaxProperties(n)
 	}
-	return nil
 }
 
-// handleEnumConstraint maps 'oneof' to an enum array, numeric-coercing values for
+// applyEnumConstraint maps 'oneof' to an enum array, numeric-coercing values for
 // numeric fields. Tokenization is quote-aware so single-quoted multi-word values
 // (oneof='New York' 'Los Angeles') stay intact.
-func handleEnumConstraint(key, value, effKind string) []openAPIConstraint {
+func applyEnumConstraint(s *constraintSet, key, value, effKind string) bool {
 	if key != validatorOneOf {
-		return nil
+		return false
 	}
 	tokens := tokenizeOneOf(value)
 	if len(tokens) == 0 {
-		return nil
+		return false
 	}
-	return []openAPIConstraint{{Name: constraintEnum, Value: coerceEnum(tokens, effKind)}}
+	s.setEnum(coerceEnum(tokens, effKind))
+	return true
 }
 
-// handleEqConstraint maps 'eq=<v>' to a single-element enum (the cleanest OpenAPI
+// applyEqConstraint maps 'eq=<v>' to a single-element enum (the cleanest OpenAPI
 // expression of equality). 'ne' has no clean scalar representation and is dropped.
-func handleEqConstraint(key, value, effKind string) []openAPIConstraint {
+func applyEqConstraint(s *constraintSet, key, value, effKind string) bool {
 	if key != "eq" {
-		return nil
+		return false
 	}
-	return []openAPIConstraint{{Name: constraintEnum, Value: coerceEnum([]string{value}, effKind)}}
+	s.setEnum(coerceEnum([]string{value}, effKind))
+	return true
 }
 
 // coerceEnum converts enum tokens to []any, parsing numerics for numeric fields.
@@ -614,12 +587,13 @@ func datetimeFormat(layout string) string {
 	return formatDate
 }
 
-// handlePatternConstraint maps the 'regexp' tag to an OpenAPI pattern.
-func handlePatternConstraint(key, value string) []openAPIConstraint {
+// applyPatternConstraint maps the 'regexp' tag to an OpenAPI pattern.
+func applyPatternConstraint(s *constraintSet, key, value string) bool {
 	if key != validatorRegexp {
-		return nil
+		return false
 	}
-	return []openAPIConstraint{{Name: constraintPattern, Value: value}}
+	s.setPattern(value)
+	return true
 }
 
 // parseNumeric converts a string to a numeric value (int or float)

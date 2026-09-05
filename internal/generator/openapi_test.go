@@ -1805,10 +1805,6 @@ func float64Ptr(f float64) *float64 {
 	return &f
 }
 
-func boolPtr(b bool) *bool {
-	return &b
-}
-
 // mustMarshalYAML marshals v with the same 2-space indent the generator uses,
 // so tests can assert on the exact serialized form the single yaml.Marshal path
 // produces (replacing the old hand-rolled text-writer assertions).
@@ -2329,42 +2325,6 @@ func TestAssignOperationByMethod(t *testing.T) {
 		assert.Nil(t, item.Get)
 		assert.Nil(t, item.Post)
 	})
-}
-
-// TestToFloat64Ptr directly tests the toFloat64Ptr utility function
-func TestToFloat64Ptr(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    any
-		expected *float64
-	}{
-		{name: "int value", input: 42, expected: float64Ptr(42.0)},
-		{name: "int64 value", input: int64(123), expected: float64Ptr(123.0)},
-		{name: "float64 value", input: 3.14, expected: float64Ptr(3.14)},
-		{name: "valid string", input: "99.5", expected: float64Ptr(99.5)},
-		{name: "invalid string", input: "not-a-number", expected: nil},
-		{name: "empty string", input: "", expected: nil},
-		{name: "unsupported type (bool)", input: true, expected: nil},
-		{name: "unsupported type (slice)", input: []int{1, 2, 3}, expected: nil},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := toFloat64Ptr(tt.input)
-
-			if tt.expected == nil {
-				if result != nil {
-					t.Errorf("Expected nil, got %v", *result)
-				}
-			} else {
-				if result == nil {
-					t.Errorf("Expected %v, got nil", *tt.expected)
-				} else if *result != *tt.expected {
-					t.Errorf("Expected %v, got %v", *tt.expected, *result)
-				}
-			}
-		})
-	}
 }
 
 // TestTypeInfoToSchemaSkipsIgnoredFields verifies fields with json:"-" are skipped

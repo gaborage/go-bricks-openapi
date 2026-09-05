@@ -1466,9 +1466,7 @@ func (g *OpenAPIGenerator) applyElementConstraints(prop *OpenAPIProperty, field 
 	if elem.Kind == models.ShapeSlice && elem.Elem != nil {
 		elem = *elem.Elem
 	}
-	for _, c := range mapConstraintToOpenAPI(elem, field.UnderlyingKind, field.ElementConstraints) {
-		g.applyConstraint(prop.Items, c)
-	}
+	constraintsFor(elem, field.UnderlyingKind, field.ElementConstraints).applyTo(prop.Items)
 }
 
 // isPointerField reports whether a field serializes JSON null (a Go pointer),
@@ -1620,157 +1618,14 @@ func setBasicTypeAndFormat(prop *OpenAPIProperty, name string) {
 // floatPtr returns a pointer to v, for the *float64 schema constraint fields.
 func floatPtr(v float64) *float64 { return &v }
 
-// applyConstraints applies validation constraints to an OpenAPI property
+// applyConstraints applies validation constraints to an OpenAPI property.
+// UnderlyingKind lets named scalars (type Cents int64, time.Duration) map
+// numeric/string constraints.
 func (g *OpenAPIGenerator) applyConstraints(prop *OpenAPIProperty, field *models.FieldInfo) {
 	if len(field.Constraints) == 0 {
 		return
 	}
-
-	// UnderlyingKind lets named scalars (type Cents int64, time.Duration) map
-	// numeric/string constraints.
-	openAPIConstraints := mapConstraintToOpenAPI(field.Shape, field.UnderlyingKind, field.Constraints)
-
-	// Apply each constraint using specialized applicators
-	for _, constraint := range openAPIConstraints {
-		g.applyConstraint(prop, constraint)
-	}
-}
-
-// constraintApplicators maps an openAPIConstraint name to the function that writes
-// it onto a property. Static — defined once rather than per applyConstraint call
-// (applyConstraint runs once per emitted constraint, incl. the per-element loop).
-var constraintApplicators = map[string]func(*OpenAPIProperty, any){
-	constraintFormat:           applyFormatConstraint,
-	constraintMinLength:        applyMinLengthConstraint,
-	constraintMaxLength:        applyMaxLengthConstraint,
-	constraintMinItems:         applyMinItemsConstraint,
-	constraintMaxItems:         applyMaxItemsConstraint,
-	constraintMinProperties:    applyMinPropertiesConstraint,
-	constraintMaxProperties:    applyMaxPropertiesConstraint,
-	constraintMinimum:          applyMinimumConstraint,
-	constraintMaximum:          applyMaximumConstraint,
-	constraintExclusiveMinimum: applyExclusiveMinimumConstraint,
-	constraintExclusiveMaximum: applyExclusiveMaximumConstraint,
-	constraintPattern:          applyPatternConstraint,
-	constraintEnum:             applyEnumConstraint,
-}
-
-// applyConstraint routes a constraint to its specialized applicator.
-func (g *OpenAPIGenerator) applyConstraint(prop *OpenAPIProperty, constraint openAPIConstraint) {
-	if applicator, exists := constraintApplicators[constraint.Name]; exists {
-		applicator(prop, constraint.Value)
-	}
-}
-
-// applyFormatConstraint sets the format field
-func applyFormatConstraint(prop *OpenAPIProperty, value any) {
-	if str, ok := value.(string); ok {
-		prop.Format = str
-	}
-}
-
-// applyMinLengthConstraint sets the minLength field
-func applyMinLengthConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(int); ok {
-		prop.MinLength = &val
-	}
-}
-
-// applyMaxLengthConstraint sets the maxLength field
-func applyMaxLengthConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(int); ok {
-		prop.MaxLength = &val
-	}
-}
-
-// applyMinItemsConstraint sets the minItems field (array cardinality)
-func applyMinItemsConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(int); ok {
-		prop.MinItems = &val
-	}
-}
-
-// applyMaxItemsConstraint sets the maxItems field (array cardinality)
-func applyMaxItemsConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(int); ok {
-		prop.MaxItems = &val
-	}
-}
-
-// applyMinPropertiesConstraint sets the minProperties field (map cardinality)
-func applyMinPropertiesConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(int); ok {
-		prop.MinProperties = &val
-	}
-}
-
-// applyMaxPropertiesConstraint sets the maxProperties field (map cardinality)
-func applyMaxPropertiesConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(int); ok {
-		prop.MaxProperties = &val
-	}
-}
-
-// applyMinimumConstraint sets the minimum field with type conversion
-func applyMinimumConstraint(prop *OpenAPIProperty, value any) {
-	prop.Minimum = toFloat64Ptr(value)
-}
-
-// applyMaximumConstraint sets the maximum field with type conversion
-func applyMaximumConstraint(prop *OpenAPIProperty, value any) {
-	prop.Maximum = toFloat64Ptr(value)
-}
-
-// applyExclusiveMinimumConstraint sets the exclusiveMinimum field
-func applyExclusiveMinimumConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(bool); ok {
-		prop.ExclusiveMinimum = &val
-	}
-}
-
-// applyExclusiveMaximumConstraint sets the exclusiveMaximum field
-func applyExclusiveMaximumConstraint(prop *OpenAPIProperty, value any) {
-	if val, ok := value.(bool); ok {
-		prop.ExclusiveMaximum = &val
-	}
-}
-
-// applyPatternConstraint sets the pattern field
-func applyPatternConstraint(prop *OpenAPIProperty, value any) {
-	if str, ok := value.(string); ok {
-		prop.Pattern = str
-	}
-}
-
-// applyEnumConstraint sets the enum field
-func applyEnumConstraint(prop *OpenAPIProperty, value any) {
-	if arr, ok := value.([]any); ok {
-		prop.Enum = arr
-	}
-}
-
-// toFloat64Ptr converts int, int64, float64, or string to *float64
-func toFloat64Ptr(value any) *float64 {
-	switch val := value.(type) {
-	case int:
-		f := float64(val)
-		return &f
-	case int64:
-		f := float64(val)
-		return &f
-	case float64:
-		return &val
-	case string:
-		// NOSONAR: Parse error intentional - non-numeric strings return nil (no default value).
-		// (S8148 is a SonarCloud rule; NOSONAR is the suppressor it reads — a //nolint
-		// directive would name a golangci-lint linter, which S8148 is not.)
-		if v, err := strconv.ParseFloat(val, 64); err == nil {
-			return &v
-		}
-	default:
-		return nil
-	}
-	return nil
+	constraintsFor(field.Shape, field.UnderlyingKind, field.Constraints).applyTo(prop)
 }
 
 // applyExample stamps a coerced `example` onto prop, or omits it entirely.
