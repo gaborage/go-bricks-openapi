@@ -1530,8 +1530,6 @@ func TestFieldInfoToPropertyMapValueRef(t *testing.T) {
 }
 
 func TestApplyConstraints(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
-
 	tests := []struct {
 		name                  string
 		field                 *models.FieldInfo
@@ -1627,7 +1625,7 @@ func TestApplyConstraints(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			prop := &OpenAPIProperty{}
-			gen.applyConstraints(prop, tt.field)
+			applyValidationConstraints(prop, tt.field)
 
 			assertOptionalString(t, "format", tt.expectedFormat, prop.Format)
 			assertOptionalPtr(t, "MinLength", tt.expectedMinLength, prop.MinLength)
@@ -1642,6 +1640,76 @@ func TestApplyConstraints(t *testing.T) {
 				t.Errorf("Expected %d enum values, got %d", tt.expectedEnumCount, len(prop.Enum))
 			}
 		})
+	}
+}
+
+func TestApplyValidationConstraintsRefItemsTakeNothing(t *testing.T) {
+	// Slice-of-$ref: collection cardinality lands on the array, element (dive)
+	// rules have nowhere valid to go on a $ref and must be dropped — the rule
+	// refProperty used to enforce by simply not calling the element path.
+	arr := &OpenAPIProperty{Type: typeArray, Items: &OpenAPIProperty{Ref: "#/components/schemas/Address"}}
+	field := &models.FieldInfo{
+		Shape:              sliceOf(named("Address")),
+		Constraints:        map[string]string{"min": "1"},
+		ElementConstraints: map[string]string{"email": "true"},
+	}
+	applyValidationConstraints(arr, field)
+	if arr.MinItems == nil || *arr.MinItems != 1 {
+		t.Errorf("minItems not applied: %+v", arr)
+	}
+	if arr.Items.Format != "" || arr.Items.Pattern != "" {
+		t.Errorf("element rules must not be stamped beside a $ref: %+v", arr.Items)
+	}
+}
+
+func TestApplyValidationConstraintsElementPath(t *testing.T) {
+	prop := &OpenAPIProperty{Type: typeArray, Items: &OpenAPIProperty{Type: typeString}}
+	field := &models.FieldInfo{
+		Shape:              sliceOf(prim("string")),
+		Constraints:        map[string]string{"max": "3"},
+		ElementConstraints: map[string]string{"email": "true"},
+	}
+	applyValidationConstraints(prop, field)
+	if prop.MaxItems == nil || *prop.MaxItems != 3 || prop.Items.Format != "email" {
+		t.Errorf("collection and element scopes both apply: %+v / %+v", prop, prop.Items)
+	}
+}
+
+func TestApplyValidationConstraintsElementPathPointerToSlice(t *testing.T) {
+	// *[]string: the pointer-unwrap branch in applyValidationConstraints has no
+	// other package test exercising it directly.
+	prop := &OpenAPIProperty{Type: typeArray, Items: &OpenAPIProperty{Type: typeString}}
+	field := &models.FieldInfo{
+		Shape:              ptrOf(sliceOf(prim("string"))),
+		Constraints:        map[string]string{"max": "3"},
+		ElementConstraints: map[string]string{"email": "true"},
+	}
+	applyValidationConstraints(prop, field)
+	if prop.MaxItems == nil || *prop.MaxItems != 3 || prop.Items.Format != "email" {
+		t.Errorf("collection and element scopes both apply through the pointer unwrap: %+v / %+v", prop, prop.Items)
+	}
+}
+
+func TestApplyValidationConstraintsUintFloorOverwritten(t *testing.T) {
+	// Ordering invariant: setTypeAndFormat pre-stamps minimum: 0 for uints and
+	// relies on constraint application running afterwards to overwrite it.
+	var gen OpenAPIGenerator
+	prop := &OpenAPIProperty{}
+	field := &models.FieldInfo{Shape: prim("uint"), Constraints: map[string]string{"min": "5"}}
+	gen.setTypeAndFormat(prop, field.Shape)
+	if prop.Minimum == nil || *prop.Minimum != 0 {
+		t.Fatalf("precondition: uint pre-stamp missing: %+v", prop)
+	}
+	applyValidationConstraints(prop, field)
+	if *prop.Minimum != 5 {
+		t.Errorf("explicit min must overwrite the uint floor, got %v", *prop.Minimum)
+	}
+	// And with no constraint, the floor survives.
+	bare := &OpenAPIProperty{}
+	gen.setTypeAndFormat(bare, prim("uint"))
+	applyValidationConstraints(bare, &models.FieldInfo{Shape: prim("uint")})
+	if bare.Minimum == nil || *bare.Minimum != 0 {
+		t.Errorf("empty constraints must leave the uint floor: %+v", bare)
 	}
 }
 

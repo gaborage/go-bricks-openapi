@@ -1383,15 +1383,14 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 		if unwrapped.Kind == models.ShapeSlice {
 			prop.Type = typeArray
 			prop.Items = &OpenAPIProperty{Type: field.UnderlyingKind}
-			g.applyConstraints(prop, field)        // minItems/maxItems on the array
-			g.applyElementConstraints(prop, field) // dive rules on items
+			applyValidationConstraints(prop, field) // minItems/maxItems on the array, dive rules on items
 			return prop
 		}
 		// Path 5 — named scalar (Cents). The slice branch is false here, and
 		// prop.Type is set from UnderlyingKind just above, so a `nullable`
 		// emitted here always has a declared type to extend.
 		prop.Type = field.UnderlyingKind
-		g.applyConstraints(prop, field)
+		applyValidationConstraints(prop, field)
 		prop.Nullable = isPointerField(field)
 		return prop
 	}
@@ -1399,10 +1398,10 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 	// Map the Go type shape to OpenAPI type and format
 	g.setTypeAndFormat(prop, field.Shape)
 
-	// Apply collection/scalar constraints (incl. minItems/maxItems for slices),
-	// then element-scope (dive) constraints onto the array's items.
-	g.applyConstraints(prop, field)
-	g.applyElementConstraints(prop, field)
+	// Apply the field's validate-tag constraints: collection/scalar rules onto
+	// prop (incl. minItems/maxItems for slices), element-scope (dive) rules onto
+	// the array's items.
+	applyValidationConstraints(prop, field)
 
 	// Pointer to a scalar / well-known type only. NOT pointer-to-slice
 	// (*[]string) or pointer-to-map (*map[string]int) — out of scope. isPointerField
@@ -1429,7 +1428,9 @@ func (g *OpenAPIGenerator) refProperty(field *models.FieldInfo) *OpenAPIProperty
 		// (dive) rules have nowhere valid to go on a $ref element, so they drop.
 		arr := &OpenAPIProperty{Type: typeArray, Items: ref, Description: field.Description}
 		applyExample(arr, field.Example)
-		g.applyConstraints(arr, field)
+		// Items.Ref is set here, so applyValidationConstraints' own guard skips
+		// the element (dive) path — this is what keeps rules off the $ref item.
+		applyValidationConstraints(arr, field)
 		return arr
 	}
 	if isPointerField(field) {
@@ -1446,19 +1447,23 @@ func (g *OpenAPIGenerator) refProperty(field *models.FieldInfo) *OpenAPIProperty
 	return ref
 }
 
-// applyElementConstraints maps a slice field's element-scope (post-`dive`) rules
-// onto prop.Items (e.g. `dive,email` -> items.format:email). No-op for non-slice
-// fields or when there are no element constraints.
-func (g *OpenAPIGenerator) applyElementConstraints(prop *OpenAPIProperty, field *models.FieldInfo) {
-	if len(field.ElementConstraints) == 0 || prop.Items == nil {
+// applyValidationConstraints fills prop's constraint keywords from the field's
+// validate tag: collection-scope rules onto prop, element-scope (post-dive)
+// rules onto prop.Items. Must run after setTypeAndFormat — the uint minimum: 0
+// pre-stamp relies on an explicit min/gte overwriting it here.
+//
+// Element rules apply only when prop is an array whose items are an inline
+// schema. A $ref must stand alone (OpenAPI 3.0 ignores its siblings), so
+// element rules on a slice-of-struct have nowhere valid to go and drop — the
+// rule refProperty used to enforce by not calling the element path at all.
+func applyValidationConstraints(prop *OpenAPIProperty, field *models.FieldInfo) {
+	if len(field.Constraints) > 0 {
+		constraintsFor(field.Shape, field.UnderlyingKind, field.Constraints).applyTo(prop)
+	}
+	if len(field.ElementConstraints) == 0 || prop.Items == nil || prop.Items.Ref != "" {
 		return
 	}
-	// field.UnderlyingKind is resolved from the slice's element type (the analyzer
-	// strips */[] before classifying), so it is the ELEMENT's kind for a
-	// slice-of-named-scalar (e.g. []Cents -> "integer"), letting element numeric
-	// constraints map. Empty for builtin elements, where the type string suffices.
-	// Element shape: unwrap ONE pointer then ONE slice layer — the exact
-	// discipline of the old sliceElementType ("*[]Address" -> "Address").
+	// Element shape: unwrap ONE pointer then ONE slice layer ("*[]Address" -> "Address").
 	elem := field.Shape
 	if elem.Kind == models.ShapePointer && elem.Elem != nil {
 		elem = *elem.Elem
@@ -1617,16 +1622,6 @@ func setBasicTypeAndFormat(prop *OpenAPIProperty, name string) {
 
 // floatPtr returns a pointer to v, for the *float64 schema constraint fields.
 func floatPtr(v float64) *float64 { return &v }
-
-// applyConstraints applies validation constraints to an OpenAPI property.
-// UnderlyingKind lets named scalars (type Cents int64, time.Duration) map
-// numeric/string constraints.
-func (g *OpenAPIGenerator) applyConstraints(prop *OpenAPIProperty, field *models.FieldInfo) {
-	if len(field.Constraints) == 0 {
-		return
-	}
-	constraintsFor(field.Shape, field.UnderlyingKind, field.Constraints).applyTo(prop)
-}
 
 // applyExample stamps a coerced `example` onto prop, or omits it entirely.
 //
