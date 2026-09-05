@@ -16,6 +16,14 @@ _Avoid_: lookup, ref info
 The typed image of one `validate` tag expressed in OpenAPI schema vocabulary (bounds, format, pattern, enum). One tag produces one constraint set.
 _Avoid_: constraint list, constraint pairs
 
+**Survey**:
+One reading of a project's source that every command consumes: the discovered modules and routes, their counts and typed/untyped classification, every diagnostic the reading raised, the go-bricks dependency status, and whether any of that warned. A Survey is data — it prints nothing and writes nothing.
+_Avoid_: analysis run, pipeline, report, audit
+
+**Pre-flight check**:
+A `doctor`-only check on the environment around the project — Go version, directory layout, `go.mod` presence — made before any Survey and able to stop it. Not part of the Survey.
+_Avoid_: diagnostic (reserved for what a Survey raises), health check
+
 ## Conventions
 
 **Context-first**:
