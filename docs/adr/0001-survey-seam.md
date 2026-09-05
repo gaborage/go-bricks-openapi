@@ -17,7 +17,7 @@ Status flips to accepted when the survey package lands (PR B of the 2026-09-04 s
 
 ## Consequences
 
-- The go-bricks dependency resolver will live in `survey`, not `commands`, because the Survey's warned bit will depend on it. Doctor's pre-flight check will call it there. The Go-version and directory-layout checks will stay in `doctor` — they are Pre-flight checks (see `CONTEXT.md`), not part of any Survey.
+- The go-bricks dependency resolver will live in `survey`, not `commands`, because the Survey's warned bit will depend on it — for exactly the verdicts `generate` warns on today, `verdictMissing` and `verdictBelowFloor`, and no other. Doctor's pre-flight check will call the resolver there. The Go-version and directory-layout checks will stay in `doctor` — they are Pre-flight checks (see `CONTEXT.md`), not part of any Survey.
 - The Survey will carry its diagnostics as separate slots (analyzer warnings, content warnings, untyped routes, go-bricks status) rather than one merged list, because the two commands render them in different orders and with different prefixes. Merging them would be a rendering change, not a refactor.
-- `generate` and `doctor` still disagree on `verdictUnreadable` (generate passes, doctor fails). The refactor will preserve that on purpose; aligning it will be a separate `fix`.
+- `generate` and `doctor` still disagree on `verdictUnreadable` (generate passes, doctor fails). The refactor will preserve that deliberately: `verdictUnreadable` never sets `Warned`, so `generate --strict` keeps writing the spec for an unreadable `go.mod`, and doctor keeps failing it in pre-flight before any Survey runs. Aligning the two will be a separate `fix`.
 - `testutil.CaptureStdout` will no longer be needed by `commands` tests. It will stay for `main_test.go`, which still exercises `main()` against the real `os.Stdout`.
