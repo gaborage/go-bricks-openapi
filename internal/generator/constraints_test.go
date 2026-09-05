@@ -1,7 +1,6 @@
 package generator
 
 import (
-	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -607,6 +606,30 @@ func TestConstraintsFor(t *testing.T) {
 			want:        OpenAPIProperty{},
 			description: "an empty oneof tokenizes to nothing and drops silently",
 		},
+		{
+			name: "string max=abc parse failure", shape: prim("string"),
+			constraints: map[string]string{"max": "abc"},
+			want:        OpenAPIProperty{},
+			description: "unparsable max drops",
+		},
+		{
+			name: "int eq=5 numeric coerce", shape: prim("int"),
+			constraints: map[string]string{"eq": "5"},
+			want:        OpenAPIProperty{Enum: []any{int64(5)}},
+			description: "numeric eq coerces",
+		},
+		{
+			name: "string eq=5 stays string", shape: prim("string"),
+			constraints: map[string]string{"eq": "5"},
+			want:        OpenAPIProperty{Enum: []any{"5"}},
+			description: "string eq stays a string",
+		},
+		{
+			name: "slice eq=3 cardinality only", shape: sliceOf(prim("string")),
+			constraints: map[string]string{"eq": "3"},
+			want:        OpenAPIProperty{},
+			description: "a slice takes cardinality keys only",
+		},
 	}
 
 	for _, tt := range tests {
@@ -633,9 +656,8 @@ func TestConstraintsForRepeatedKeywordLastSortedKeyWins(t *testing.T) {
 		"alphanum": "true", "regexp": "x",
 		"eq": "a", "oneof": "b c",
 	}).applyTo(&got)
-	if got.Format != "uuid" || got.Pattern != "x" || !reflect.DeepEqual(got.Enum, []any{"b", "c"}) {
-		t.Errorf("precedence drift: %+v", got)
-	}
+	want := OpenAPIProperty{Format: "uuid", Pattern: "x", Enum: []any{"b", "c"}}
+	assert.Equal(t, want, got, "precedence drift")
 }
 
 // TestConstraintsForDeterministicOverlap guards emission when two distinct

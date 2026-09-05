@@ -1447,33 +1447,6 @@ func (g *OpenAPIGenerator) refProperty(field *models.FieldInfo) *OpenAPIProperty
 	return ref
 }
 
-// applyValidationConstraints fills prop's constraint keywords from the field's
-// validate tag: collection-scope rules onto prop, element-scope (post-dive)
-// rules onto prop.Items. Must run after setTypeAndFormat — the uint minimum: 0
-// pre-stamp relies on an explicit min/gte overwriting it here.
-//
-// Element rules apply only when prop is an array whose items are an inline
-// schema. A $ref must stand alone (OpenAPI 3.0 ignores its siblings), so
-// element rules on a slice-of-struct have nowhere valid to go and drop — the
-// rule refProperty used to enforce by not calling the element path at all.
-func applyValidationConstraints(prop *OpenAPIProperty, field *models.FieldInfo) {
-	if len(field.Constraints) > 0 {
-		constraintsFor(field.Shape, field.UnderlyingKind, field.Constraints).applyTo(prop)
-	}
-	if len(field.ElementConstraints) == 0 || prop.Items == nil || prop.Items.Ref != "" {
-		return
-	}
-	// Element shape: unwrap ONE pointer then ONE slice layer ("*[]Address" -> "Address").
-	elem := field.Shape
-	if elem.Kind == models.ShapePointer && elem.Elem != nil {
-		elem = *elem.Elem
-	}
-	if elem.Kind == models.ShapeSlice && elem.Elem != nil {
-		elem = *elem.Elem
-	}
-	constraintsFor(elem, field.UnderlyingKind, field.ElementConstraints).applyTo(prop.Items)
-}
-
 // isPointerField reports whether a field serializes JSON null (a Go pointer),
 // which OpenAPI 3.0 models with `nullable: true`.
 //
