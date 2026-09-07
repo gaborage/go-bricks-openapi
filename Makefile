@@ -13,11 +13,13 @@ GOSEC_VERSION := v2.26.1
 # local and CI lint gates silently diverge.
 GOLANGCI_VERSION := v2.12.2
 
-# Directory the pinned golangci-lint is installed into, derived once from
-# GOPATH. Both GOLANGCI and dev-deps' GOBIN come from this single variable so
-# they can never name different directories (deriving GOBIN back out of
-# GOLANGCI via $(dir ...) would re-split a GOPATH containing spaces).
-GOBIN_DIR := $(shell go env GOPATH)/bin
+# Directory the pinned golangci-lint is installed into, resolved once the way
+# `go install` resolves it: GOBIN when set, otherwise the FIRST GOPATH entry
+# plus /bin (GOPATH may be a colon-separated list). The entry is selected in
+# the shell, not with Make's word functions, so a path containing spaces
+# survives. Both GOLANGCI and dev-deps' GOBIN come from this single variable so
+# they can never name different directories.
+GOBIN_DIR := $(or $(shell go env GOBIN),$(shell go env GOPATH | cut -d: -f1)/bin)
 
 # Explicit path to the pinned golangci-lint binary. `lint` and `dev-deps` both
 # resolve the binary through this one variable (dev-deps installs into
