@@ -55,13 +55,13 @@ lint: ## Run the pinned golangci-lint (fails if missing or version-mismatched; s
 		echo "Run 'make dev-deps' to install the pinned version ($(GOLANGCI_VERSION))."; \
 		exit 1; \
 	}
-	@found_version="$$($(GOLANGCI) --version)"; \
+	@found_version="$$("$(GOLANGCI)" --version)"; \
 	echo "$$found_version" | grep -q "version $(patsubst v%,%,$(GOLANGCI_VERSION)) " || { \
 		echo "golangci-lint version mismatch: expected $(GOLANGCI_VERSION), found: $$found_version"; \
 		echo "Run 'make dev-deps' to install the pinned version."; \
 		exit 1; \
 	}
-	$(GOLANGCI) run
+	"$(GOLANGCI)" run
 
 fmt: ## Format Go code
 	go fmt ./...
