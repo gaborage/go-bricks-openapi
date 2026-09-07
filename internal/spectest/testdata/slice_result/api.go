@@ -14,6 +14,11 @@ func (m *Module) Name() string                    { return "catalog" }
 func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
 func (m *Module) Shutdown() error                 { return nil }
 
+// Status is a local named scalar: it resolves to no component, so a
+// []Status payload documents its items as an untyped object and the route is
+// reported as having no resolved type (the analyzer warns).
+type Status string
+
 // Item is the catalog resource.
 type Item struct {
 	ID   int64  `json:"id"`
@@ -27,6 +32,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.GET(hr, r, "/items/archived", m.archivedItems, server.WithTags("catalog"))
 	server.GET(hr, r, "/tags", m.listTags, server.WithTags("catalog"))
 	server.GET(hr, r, "/items/export", m.exportItems, server.WithTags("catalog"))
+	server.GET(hr, r, "/statuses", m.listStatuses, server.WithTags("catalog"))
 }
 
 // listItems returns a slice of a named struct: data is an array of $ref.
@@ -53,4 +59,11 @@ func (m *Module) exportItems(ctx server.HandlerContext) (server.Result[[]byte], 
 // listTags returns a slice of a primitive: items carries the primitive type.
 func (m *Module) listTags(ctx server.HandlerContext) (server.Result[[]string], server.IAPIError) {
 	return server.OK([]string{}), nil
+}
+
+// listStatuses returns a slice of a named scalar, which resolves to no
+// component: items stay an untyped object, exactly as the non-slice
+// server.Result[Status] payload does.
+func (m *Module) listStatuses(ctx server.HandlerContext) (server.Result[[]Status], server.IAPIError) {
+	return server.OK([]Status{}), nil
 }

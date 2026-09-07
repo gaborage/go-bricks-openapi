@@ -535,11 +535,18 @@ func classifyRoute(route *models.Route) routeClassification {
 }
 
 // isTypedPayload reports whether the analyzer resolved a payload the generator
-// documents with a real schema: a named component, or a slice payload, which
-// the generator types even when it names no component (server.Result[[]string]
-// emits an array of strings, server.Result[[]byte] a base64 string). The two
-// conditions mirror responsePayloadSchema's two non-fallback branches exactly,
-// so the gate and the emitted schema move together.
+// documents with a RESOLVED schema — not merely a container around an untyped
+// one. Two cases qualify: a named component ($ref), and a nameless slice whose
+// element is a primitive, which the generator types from the shape alone
+// (server.Result[[]string] -> array of strings, server.Result[[]byte] -> a
+// base64 string).
+//
+// The primitive requirement is the load-bearing part. A local named scalar
+// (`type Status string`) used as server.Result[[]Status] keeps its ShapeSlice
+// but has its Name CLEARED by the analyzer (with a warning), because the name
+// resolves to no component; the generator then emits items: {type: object}.
+// That is the untyped fallback wearing an array wrapper, so the route must be
+// reported untyped — exactly as the non-slice server.Result[Status] already is.
 func isTypedPayload(ti *models.TypeInfo) bool {
 	if ti == nil {
 		return false
@@ -547,7 +554,8 @@ func isTypedPayload(ti *models.TypeInfo) bool {
 	if ti.Name != "" {
 		return true
 	}
-	return ti.Shape != nil && ti.Shape.Kind == models.ShapeSlice
+	return ti.Shape != nil && ti.Shape.Kind == models.ShapeSlice &&
+		ti.Shape.Elem != nil && ti.Shape.Elem.Kind == models.ShapePrimitive
 }
 
 // updateStatsForRoute updates statistics based on route classification

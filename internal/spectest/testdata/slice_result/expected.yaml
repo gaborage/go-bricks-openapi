@@ -166,6 +166,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /statuses:
+    get:
+      operationId: catalogListStatuses
+      summary: GET /statuses
+      tags:
+        - catalog
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /tags:
     get:
       operationId: catalogListTags

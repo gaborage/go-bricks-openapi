@@ -4052,6 +4052,48 @@ func (m *Module) list(ctx server.HandlerContext) (server.Result[UserList], serve
 	assert.NotContains(t, a.typeRegistry, "User", "the element type is dropped along with the cleared response")
 }
 
+// TestNamedScalarSliceElementClearsNameKeepsShape pins the state the doctor's
+// typed-route gate reads for `server.Result[[]Status]` where Status is a local
+// named scalar: the element resolves to no component, so Name is cleared (with
+// the same warning the non-slice server.Result[Status] produces), while the
+// slice Shape survives with a ShapeNamed element. A payload in that state is
+// documented as items: {type: object} — an untyped fallback in an array
+// wrapper — which is why isTypedPayload requires a PRIMITIVE element.
+func TestNamedScalarSliceElementClearsNameKeepsShape(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Status string
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/statuses", m.list)
+}
+func (m *Module) list(ctx server.HandlerContext) (server.Result[[]Status], server.IAPIError) { return server.OK([]Status{}), nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	route := routeForPath(t, routes, "GET /statuses")
+	require.NotNil(t, route.Response)
+	assert.Empty(t, route.Response.Name, "a named scalar element resolves to no component, so the name is cleared")
+	require.NotNil(t, route.Response.Shape, "the slice shape survives the cleared name")
+	assert.Equal(t, models.ShapeSlice, route.Response.Shape.Kind)
+	require.NotNil(t, route.Response.Shape.Elem)
+	assert.Equal(t, models.ShapeNamed, route.Response.Shape.Elem.Kind)
+
+	found := false
+	for _, w := range a.Warnings(t.Context()) {
+		if strings.Contains(w, "Status") {
+			found = true
+		}
+	}
+	assert.True(t, found, "the named non-struct warning must still fire for a slice element")
+	assert.NotContains(t, a.typeRegistry, "Status")
+}
+
 // TestAliasChainDepthCapped verifies a chain of named indirections deeper than
 // the depth cap (8) does not panic and does not resolve — the cap fires before
 // the terminal struct is ever examined, so registerViaTypeSpec returns nil and
