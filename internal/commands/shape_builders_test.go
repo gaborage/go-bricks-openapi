@@ -12,3 +12,6 @@ func named(name string) models.TypeShape {
 func sliceOf(s models.TypeShape) models.TypeShape {
 	return models.TypeShape{Kind: models.ShapeSlice, Elem: &s}
 }
+
+// ptrTo lifts a shape into the *TypeShape a container shape's Elem holds.
+func ptrTo(s models.TypeShape) *models.TypeShape { return &s }

@@ -2730,6 +2730,76 @@ func TestResponsePayloadSchemaFallbacks(t *testing.T) {
 	assert.Equal(t, refPath("Widget"), responsePayloadSchema(&models.TypeInfo{Name: "Widget"}).Ref)
 }
 
+func TestResponsePayloadSchemaSlicePayloads(t *testing.T) {
+	// []Item — items is a $ref to the element's component.
+	named := responsePayloadSchema(&models.TypeInfo{
+		Name:  "Item",
+		Shape: payloadSlice(named("Item")),
+	})
+	assert.Equal(t, typeArray, named.Type)
+	assert.Empty(t, named.Ref, "the array wrapper itself is never a $ref")
+	require.NotNil(t, named.Items)
+	assert.Equal(t, refPath("Item"), named.Items.Ref)
+
+	// []string — items carries the primitive's type (and format where it has one).
+	strs := responsePayloadSchema(&models.TypeInfo{
+		Shape: payloadSlice(prim(goTypeString)),
+	})
+	assert.Equal(t, typeArray, strs.Type)
+	require.NotNil(t, strs.Items)
+	assert.Equal(t, typeString, strs.Items.Type)
+	assert.Empty(t, strs.Items.Ref)
+
+	// []int64 — the format survives.
+	i64 := responsePayloadSchema(&models.TypeInfo{
+		Shape: payloadSlice(prim(formatInt64)),
+	})
+	require.NotNil(t, i64.Items)
+	assert.Equal(t, typeInteger, i64.Items.Type)
+	assert.Equal(t, formatInt64, i64.Items.Format)
+}
+
+func TestResponsePayloadSchemaSliceWithoutElement(t *testing.T) {
+	// Defensive: a slice Shape with no Elem (never stamped by the analyzer)
+	// still yields a valid array rather than an items-less schema.
+	got := responsePayloadSchema(&models.TypeInfo{Shape: &models.TypeShape{Kind: models.ShapeSlice}})
+	assert.Equal(t, typeArray, got.Type)
+	require.NotNil(t, got.Items)
+	assert.Equal(t, typeObject, got.Items.Type)
+}
+
+func TestSuccessEnvelopeSchemaSliceData(t *testing.T) {
+	env := successEnvelopeSchema(&models.TypeInfo{
+		Name:  "Item",
+		Shape: payloadSlice(named("Item")),
+	})
+	data := env.Properties[propNameData]
+	require.NotNil(t, data)
+	assert.Equal(t, typeArray, data.Type)
+	require.NotNil(t, data.Items)
+	assert.Equal(t, refPath("Item"), data.Items.Ref)
+	assert.Empty(t, data.Description, "a typed array is not the untyped 'Response data' fallback")
+
+	// The untyped fallback keeps its annotation.
+	assert.Equal(t, "Response data", successEnvelopeSchema(nil).Properties[propNameData].Description)
+}
+
+func TestBuildResponsesSliceEnvelope(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	resps := gen.buildResponses(&models.Route{
+		Method: "GET",
+		Response: &models.TypeInfo{
+			Name:  "Item",
+			Shape: payloadSlice(named("Item")),
+		},
+	})
+	data := resps["200"].Content[mediaJSON].Schema.Properties[propNameData]
+	require.NotNil(t, data)
+	assert.Equal(t, typeArray, data.Type)
+	require.NotNil(t, data.Items)
+	assert.Equal(t, refPath("Item"), data.Items.Ref)
+}
+
 func TestSuccessPlaintextSchemaFallsBackToSuccessResponse(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 	// A JOSE response with no named type falls back to the generic envelope name.

@@ -818,8 +818,9 @@ func (g *OpenAPIGenerator) successPlaintextSchema(route *models.Route) string {
 // data is a generic object (the handler returned an untyped/empty payload).
 func successEnvelopeSchema(response *models.TypeInfo) *OpenAPIProperty {
 	data := responsePayloadSchema(response)
-	if data.Ref == "" {
-		// Untyped fallback (generic object) — annotate it for readers.
+	if data.Ref == "" && data.Type == typeObject {
+		// Untyped fallback (generic object) — annotate it for readers. A typed
+		// array payload is NOT the fallback and takes no such annotation.
 		data.Description = "Response data"
 	}
 	return &OpenAPIProperty{
@@ -843,13 +844,38 @@ func metaEnvelopeSchema() *OpenAPIProperty {
 	}
 }
 
-// responsePayloadSchema returns the bare schema for a response component: a $ref
-// to the named type, or a generic object when the type is unnamed.
+// responsePayloadSchema returns the bare schema for a response component: an
+// array when the payload is a slice, a $ref to the named type, or a generic
+// object when the type is unnamed.
 func responsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
-	if response == nil || response.Name == "" {
+	if response == nil {
+		return &OpenAPIProperty{Type: typeObject}
+	}
+	if response.Shape != nil && response.Shape.Kind == models.ShapeSlice {
+		return sliceResponsePayloadSchema(response)
+	}
+	if response.Name == "" {
 		return &OpenAPIProperty{Type: typeObject}
 	}
 	return &OpenAPIProperty{Ref: refPath(schemaName(response))}
+}
+
+// sliceResponsePayloadSchema builds `type: array` for a []T payload. Name still
+// carries the ELEMENT type (see models.TypeInfo.Shape), so a named element's
+// items is the $ref to its component — the same component referencedSchemaNames
+// already marks from response.Name, which is why no slice awareness is needed
+// there. A primitive element names no component and is typed from its shape.
+func sliceResponsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
+	items := &OpenAPIProperty{}
+	switch {
+	case response.Name != "":
+		items.Ref = refPath(schemaName(response))
+	case response.Shape.Elem != nil:
+		setBasicTypeAndFormat(items, response.Shape.Elem.Name)
+	default:
+		items.Type = typeObject
+	}
+	return &OpenAPIProperty{Type: typeArray, Items: items}
 }
 
 // getOperationID generates an operation ID for a route

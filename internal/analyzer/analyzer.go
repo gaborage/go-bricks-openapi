@@ -2155,7 +2155,52 @@ func (a *ProjectAnalyzer) handleResultWrapper(x, index ast.Expr, packageName str
 	if !a.isResultWrapper(x, serverAliases) {
 		return nil
 	}
+	if arr, ok := index.(*ast.ArrayType); ok {
+		return a.slicePayloadTypeInfo(arr, packageName, serverAliases)
+	}
 	return a.typeInfoFromExpr(index, packageName, serverAliases)
+}
+
+// slicePayloadTypeInfo resolves a slice type argument (server.Result[[]Item],
+// server.Result[[]string]) to a TypeInfo describing the ELEMENT plus a
+// ShapeSlice marker, so the generator emits `type: array` with typed items
+// instead of the untyped-object fallback an unresolved payload produces.
+//
+// Only a named or primitive element is modelled; a pointer element is shed
+// first, mirroring how a []*T struct field is documented as an array of the
+// value type. Anything else ([][]T, map elements, func/chan) returns nil,
+// keeping the pre-existing untyped-object output rather than guessing.
+//
+// This lives on the wrapper path rather than in typeInfoFromExpr's own switch
+// on purpose: only a Result/ResultWithMeta type argument is a response payload.
+// A handler PARAMETER of slice type must keep resolving to nil, because the
+// request-body path has no array shape to emit and would otherwise $ref the
+// element type as if the body were a single object.
+func (a *ProjectAnalyzer) slicePayloadTypeInfo(
+	arr *ast.ArrayType, packageName string, serverAliases map[string]struct{},
+) *models.TypeInfo {
+	elemExpr := arr.Elt
+	if star, ok := elemExpr.(*ast.StarExpr); ok {
+		elemExpr = star.X
+	}
+	elemShape := a.typeShape(elemExpr)
+	shape := models.TypeShape{Kind: models.ShapeSlice, Elem: &elemShape}
+
+	switch elemShape.Kind {
+	case models.ShapePrimitive:
+		// A builtin element names no component; the generator types the items
+		// from the shape. Leaving Name empty is what keeps a $ref from dangling.
+		return &models.TypeInfo{Package: packageName, Shape: &shape}
+	case models.ShapeNamed:
+		elem := a.typeInfoFromExpr(elemExpr, packageName, serverAliases)
+		if elem == nil {
+			return nil // a framework type ([]server.IAPIError) is not a payload
+		}
+		elem.Shape = &shape
+		return elem
+	default:
+		return nil // nested slices, maps and unmodelled shapes are out of scope
+	}
 }
 
 // isResultWrapper reports whether x is server.Result or server.ResultWithMeta,

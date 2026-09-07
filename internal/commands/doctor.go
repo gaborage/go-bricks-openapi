@@ -512,14 +512,15 @@ type routeClassification struct {
 }
 
 // classifyRoute determines the type information for a route. A route counts as
-// "typed" when the analyzer resolved a *named* request or response type — the
-// same gate the generator uses to emit a component $ref (see
-// responsePayloadSchema). Keying off the name rather than the field count means
-// a named-but-fieldless type (e.g. `type Ack struct{}`) is correctly reported as
-// typed instead of triggering a false "no resolved type" / --strict failure.
+// "typed" when the analyzer resolved enough of the request or response for the
+// generator to document it — the same gate the generator uses (see
+// responsePayloadSchema), which is why the two must move together. Keying off
+// the name rather than the field count means a named-but-fieldless type (e.g.
+// `type Ack struct{}`) is correctly reported as typed instead of triggering a
+// false "no resolved type" / --strict failure.
 func classifyRoute(route *models.Route) routeClassification {
-	hasRequest := route.Request != nil && route.Request.Name != ""
-	hasResponse := route.Response != nil && route.Response.Name != ""
+	hasRequest := isTypedPayload(route.Request)
+	hasResponse := isTypedPayload(route.Response)
 
 	handlerID := route.HandlerName
 	if handlerID == "" {
@@ -531,6 +532,20 @@ func classifyRoute(route *models.Route) routeClassification {
 		hasResponse: hasResponse,
 		handlerID:   handlerID,
 	}
+}
+
+// isTypedPayload reports whether the analyzer resolved a payload the generator
+// documents with a real schema: a named component, or a slice payload, whose
+// element the generator types even when it names no component
+// (server.Result[[]string] emits an array of strings).
+func isTypedPayload(ti *models.TypeInfo) bool {
+	if ti == nil {
+		return false
+	}
+	if ti.Name != "" {
+		return true
+	}
+	return ti.Shape != nil && ti.Shape.Kind == models.ShapeSlice && ti.Shape.Elem != nil
 }
 
 // updateStatsForRoute updates statistics based on route classification

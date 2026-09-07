@@ -1260,6 +1260,33 @@ func TestCalculateProjectStats(t *testing.T) {
 			expectedTyped:      1,
 			expectedUntypedLen: 1,
 		},
+		{
+			// server.Result[[]string]: no component name, but the generator still
+			// documents data as an array of strings — so the route is typed and
+			// must not trip the untyped warning (or --strict).
+			name: "primitive slice response is typed",
+			project: &models.Project{
+				Modules: []models.Module{
+					{
+						Name: "api",
+						Routes: []models.Route{
+							{
+								Method:      "GET",
+								Path:        "/tags",
+								HandlerName: "listTags",
+								Response: &models.TypeInfo{
+									Shape: &models.TypeShape{Kind: models.ShapeSlice, Elem: ptrTo(prim("string"))},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedModules:    1,
+			expectedRoutes:     1,
+			expectedTyped:      1,
+			expectedUntypedLen: 0,
+		},
 	}
 
 	for _, tt := range tests {

@@ -31,8 +31,9 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
                   meta:
                     type: object
                     properties:
