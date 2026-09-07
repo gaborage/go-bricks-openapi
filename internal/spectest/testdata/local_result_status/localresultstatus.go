@@ -41,6 +41,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.DELETE(hr, r, "/no-content", m.noContent, server.WithTags("shapes"))
 	server.POST(hr, r, "/literal-status-write", m.literalStatusWrite, server.WithTags("shapes"))
 	server.POST(hr, r, "/ambiguous", m.ambiguous, server.WithTags("shapes"))
+	server.POST(hr, r, "/conditional-status", m.conditionalStatus, server.WithTags("shapes"))
 }
 
 // direct returns the constructor call directly -> 202.
@@ -85,6 +86,17 @@ func (m *Module) ambiguous(req ItemReq, ctx server.HandlerContext) (server.Resul
 	res := server.Created(toResponse(req))
 	if req.Name == "" {
 		res = server.Accepted(toResponse(req))
+	}
+	return res, nil
+}
+
+// conditionalStatus writes Status inside a branch, so the write may or may not
+// happen. The analyzer refuses to document a status it cannot prove and the
+// generator falls back to 200 — the same conservative rule as a double binding.
+func (m *Module) conditionalStatus(req ItemReq, ctx server.HandlerContext) (server.Result[ItemResponse], server.IAPIError) {
+	res := server.Accepted(toResponse(req))
+	if req.Name == "" {
+		res.Status = http.StatusCreated
 	}
 	return res, nil
 }

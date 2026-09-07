@@ -190,8 +190,21 @@ func TestExtractSuccessStatusCompositeLiteral(t *testing.T) {
 			0,
 		},
 		{
-			"non_generic_server_literal",
+			// NoContentResult has no Status field; it is 204 by construction, the
+			// same as server.NoContent().
+			"no_content_result_literal",
 			"\tres := server.NoContentResult{}\n\treturn res, nil",
+			204,
+		},
+		{
+			"non_server_no_content_literal",
+			"\tres := NoContentResult{}\n\treturn res, nil",
+			0,
+		},
+		{
+			// A doubly-qualified type is not a package-level server reference.
+			"nested_selector_no_content_literal",
+			"\tres := pkg.server.NoContentResult{}\n\treturn res, nil",
 			0,
 		},
 	}
@@ -244,6 +257,70 @@ func TestExtractSuccessStatusFieldWrite(t *testing.T) {
 			"write_through_nested_selector_ignored",
 			"\tres := server.Created(req)\n\tm.res.Status = 202\n\treturn res, nil",
 			201,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, statusForHandlerBody(t, tt.body))
+		})
+	}
+}
+
+// TestExtractSuccessStatusControlFlowDependent pins the conservative fallback
+// for control-flow-dependent bindings and writes: only assignments that are
+// statements of the handler body's own statement list are honoured. A write or
+// binding nested in an if/for/switch body may or may not execute, so documenting
+// its status would be a guess — the binding is invalidated instead.
+func TestExtractSuccessStatusControlFlowDependent(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{
+			"conditional_status_write",
+			"\tres := server.Accepted(req)\n\tif req.Name == \"\" {\n\t\tres.Status = http.StatusCreated\n\t}\n\treturn res, nil",
+			0,
+		},
+		{
+			"conditional_binding",
+			"\tif req.Name == \"\" {\n\t\tres := server.Created(req)\n\t\t_ = res\n\t}\n\tres := server.Accepted(req)\n\treturn res, nil",
+			0,
+		},
+		{
+			"status_write_inside_loop",
+			"\tres := server.Accepted(req)\n\tfor range req.Items {\n\t\tres.Status = 201\n\t}\n\treturn res, nil",
+			0,
+		},
+		{
+			"status_write_inside_switch_case",
+			"\tres := server.Accepted(req)\n\tswitch req.Name {\n\tcase \"\":\n\t\tres.Status = 201\n\t}\n\treturn res, nil",
+			0,
+		},
+		{
+			"multi_value_reassignment_invalidates",
+			"\tres := server.Accepted(req)\n\tres, err = build(req)\n\treturn res, err",
+			0,
+		},
+		{
+			// Top-level binding plus top-level write still resolves — the guard must
+			// not swallow the unconditional shape this feature exists for.
+			"top_level_binding_and_write",
+			"\tres := server.Accepted(req)\n\tres.Status = http.StatusCreated\n\treturn res, nil",
+			201,
+		},
+		{
+			// A nested const declaration is not a binding and must not invalidate.
+			"nested_const_decl_survives",
+			"\tres := server.Accepted(req)\n\tif req.Name == \"\" {\n\t\tconst c = 1\n\t\t_ = c\n\t}\n\treturn res, nil",
+			202,
+		},
+		{
+			// A conditional write to a field other than Status cannot change the
+			// status, so the binding survives.
+			"conditional_header_write_survives",
+			"\tres := server.Accepted(req)\n\tif req.Name == \"\" {\n\t\tres.Headers = http.Header{}\n\t}\n\treturn res, nil",
+			202,
 		},
 	}
 	for _, tt := range tests {

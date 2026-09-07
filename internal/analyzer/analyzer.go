@@ -2398,40 +2398,67 @@ type resultBinding struct {
 	ambiguous bool
 }
 
-// collectResultBindings pre-walks a handler body, in source order, recording
-// every single-identifier `:=` / `=` assignment and `var x = ...` declaration
-// along with any later `<ident>.Status = ...` write. Nested closures are skipped
-// for the same reason extractSuccessStatus skips them: their locals are not the
-// handler's.
+// bindingCollector accumulates the identifier bindings of one handler body.
+// accepted holds the statement nodes the first pass understood, so the second
+// pass can tell an unconditional, recognized binding apart from every other
+// assignment to the same name.
+type bindingCollector struct {
+	analyzer      *ProjectAnalyzer
+	serverAliases map[string]struct{}
+	bindings      map[string]*resultBinding
+	accepted      map[ast.Node]struct{}
+}
+
+// collectResultBindings resolves the local result bindings of a handler body in
+// two passes.
+//
+// Pass 1 walks the body's own statement list — and only that list — recording
+// every single-identifier `:=` / `=` assignment, `var x = ...` declaration and
+// `<ident>.Status = ...` write, in source order.
+//
+// Pass 2 marks ambiguous every binding whose name is assigned anywhere else: in
+// a branch (`if` / `for` / `switch` / `select` body), or by a top-level
+// statement shape pass 1 did not understand (a multi-value assignment, say).
+// Such a write is control-flow dependent — `if cond { res.Status = 202 }` does
+// not mean the handler answers 202 — and the conservative 0 ("use the default")
+// is the documented answer, exactly as for a double binding. No per-return-point
+// flow analysis is attempted.
+//
+// Nested closures are skipped in both passes for the same reason
+// extractSuccessStatus skips them: their locals are not the handler's.
 func (a *ProjectAnalyzer) collectResultBindings(
 	body *ast.BlockStmt,
 	serverAliases map[string]struct{},
 ) map[string]*resultBinding {
-	bindings := make(map[string]*resultBinding)
-	ast.Inspect(body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		switch stmt := n.(type) {
-		case *ast.AssignStmt:
-			a.recordAssign(bindings, stmt, serverAliases)
-		case *ast.DeclStmt:
-			a.recordVarDecl(bindings, stmt, serverAliases)
-		}
-		return true
-	})
-	return bindings
+	c := &bindingCollector{
+		analyzer:      a,
+		serverAliases: serverAliases,
+		bindings:      make(map[string]*resultBinding),
+		accepted:      make(map[ast.Node]struct{}),
+	}
+	for _, stmt := range body.List {
+		c.recordTopLevel(stmt)
+	}
+	c.markConditionalWritesAmbiguous(body)
+	return c.bindings
+}
+
+// recordTopLevel records one statement of the handler body's own statement list.
+func (c *bindingCollector) recordTopLevel(stmt ast.Stmt) {
+	switch s := stmt.(type) {
+	case *ast.AssignStmt:
+		c.recordAssign(s)
+	case *ast.DeclStmt:
+		c.recordVarDecl(s)
+	}
 }
 
 // recordAssign handles the two assignment shapes that matter: binding a single
 // identifier (`res := ...` / `res = ...`) and writing the status field of an
 // already-bound one (`res.Status = ...`). Multi-value assignments are ignored —
-// the result of a helper call is not a shape this analyzer models.
-func (a *ProjectAnalyzer) recordAssign(
-	bindings map[string]*resultBinding,
-	stmt *ast.AssignStmt,
-	serverAliases map[string]struct{},
-) {
+// the result of a helper call is not a shape this analyzer models — and left
+// unaccepted, so pass 2 treats them as ambiguity.
+func (c *bindingCollector) recordAssign(stmt *ast.AssignStmt) {
 	if len(stmt.Lhs) != 1 || len(stmt.Rhs) != 1 {
 		return
 	}
@@ -2440,20 +2467,19 @@ func (a *ProjectAnalyzer) recordAssign(
 	}
 	switch lhs := stmt.Lhs[0].(type) {
 	case *ast.Ident:
-		a.bindResult(bindings, lhs.Name, stmt.Rhs[0], serverAliases)
+		c.bindResult(lhs.Name, stmt.Rhs[0])
+		c.accepted[stmt] = struct{}{}
 	case *ast.SelectorExpr:
-		recordStatusWrite(bindings, lhs, stmt.Rhs[0])
+		if c.recordStatusWrite(lhs, stmt.Rhs[0]) {
+			c.accepted[stmt] = struct{}{}
+		}
 	}
 }
 
 // recordVarDecl handles `var res = <expr>` declarations, the long form of the
 // `:=` binding. Specs with a type but no value, or with multiple names, carry no
 // resolvable status.
-func (a *ProjectAnalyzer) recordVarDecl(
-	bindings map[string]*resultBinding,
-	stmt *ast.DeclStmt,
-	serverAliases map[string]struct{},
-) {
+func (c *bindingCollector) recordVarDecl(stmt *ast.DeclStmt) {
 	decl, ok := stmt.Decl.(*ast.GenDecl)
 	if !ok || decl.Tok != token.VAR {
 		return
@@ -2463,46 +2489,115 @@ func (a *ProjectAnalyzer) recordVarDecl(
 		if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
 			continue
 		}
-		a.bindResult(bindings, vs.Names[0].Name, vs.Values[0], serverAliases)
+		c.bindResult(vs.Names[0].Name, vs.Values[0])
+		c.accepted[stmt] = struct{}{}
 	}
 }
 
 // bindResult records a first binding of name, or marks an existing one ambiguous.
 // The blank identifier binds nothing.
-func (a *ProjectAnalyzer) bindResult(
-	bindings map[string]*resultBinding,
-	name string,
-	rhs ast.Expr,
-	serverAliases map[string]struct{},
-) {
+func (c *bindingCollector) bindResult(name string, rhs ast.Expr) {
 	if name == "_" {
 		return
 	}
-	if existing, ok := bindings[name]; ok {
+	if existing, ok := c.bindings[name]; ok {
 		existing.ambiguous = true
 		return
 	}
-	bindings[name] = &resultBinding{status: a.statusFromBoundExpr(rhs, serverAliases)}
+	c.bindings[name] = &resultBinding{status: c.analyzer.statusFromBoundExpr(rhs, c.serverAliases)}
 }
 
-// recordStatusWrite applies a `<ident>.Status = <expr>` write to an existing
-// binding; the last write in source order wins. A write whose value cannot be
-// resolved (a variable, a computed expression) clears the status rather than
-// leaving the stale bound one in place — the handler demonstrably overrides it
-// with something this analyzer cannot read.
-func recordStatusWrite(bindings map[string]*resultBinding, lhs *ast.SelectorExpr, rhs ast.Expr) {
+// recordStatusWrite applies an unconditional `<ident>.Status = <expr>` write to
+// an existing binding; the last write in source order wins. A write whose value
+// cannot be resolved (a variable, a computed expression) clears the status rather
+// than leaving the stale bound one in place — the handler demonstrably overrides
+// it with something this analyzer cannot read. Reports whether the write applied
+// to a known binding, which is what makes it an accepted statement.
+func (c *bindingCollector) recordStatusWrite(lhs *ast.SelectorExpr, rhs ast.Expr) bool {
 	if lhs.Sel.Name != resultStatusFieldName {
-		return
+		return false
 	}
 	ident, ok := lhs.X.(*ast.Ident)
 	if !ok {
-		return
+		return false
 	}
-	binding, ok := bindings[ident.Name]
-	if !ok || binding.ambiguous {
-		return
+	binding, ok := c.bindings[ident.Name]
+	if !ok {
+		return false
 	}
-	binding.status = statusFromArg(rhs)
+	if !binding.ambiguous {
+		binding.status = statusFromArg(rhs)
+	}
+	return true
+}
+
+// markConditionalWritesAmbiguous is pass 2: every assignment in the body that
+// pass 1 did not accept — because it sits inside a branch, or has a shape pass 1
+// does not model — invalidates the binding it targets.
+func (c *bindingCollector) markConditionalWritesAmbiguous(body *ast.BlockStmt) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if _, ok := c.accepted[n]; ok {
+			return true
+		}
+		for _, name := range assignmentTargets(n) {
+			if binding, ok := c.bindings[name]; ok {
+				binding.ambiguous = true
+			}
+		}
+		return true
+	})
+}
+
+// assignmentTargets returns the identifier names a node assigns to, counting
+// both a whole-identifier binding (`res = ...`, `var res = ...`) and a status
+// write (`res.Status = ...`). A write to any other field (`res.Headers = ...`)
+// cannot change the status, so it is not a target.
+func assignmentTargets(n ast.Node) []string {
+	switch s := n.(type) {
+	case *ast.AssignStmt:
+		return lhsTargetNames(s.Lhs)
+	case *ast.DeclStmt:
+		return varDeclNames(s)
+	}
+	return nil
+}
+
+// lhsTargetNames maps assignment left-hand sides to the binding names they touch.
+func lhsTargetNames(lhs []ast.Expr) []string {
+	names := make([]string, 0, len(lhs))
+	for _, expr := range lhs {
+		switch target := expr.(type) {
+		case *ast.Ident:
+			names = append(names, target.Name)
+		case *ast.SelectorExpr:
+			if ident, ok := target.X.(*ast.Ident); ok && target.Sel.Name == resultStatusFieldName {
+				names = append(names, ident.Name)
+			}
+		}
+	}
+	return names
+}
+
+// varDeclNames returns every name declared by a `var` declaration statement.
+func varDeclNames(stmt *ast.DeclStmt) []string {
+	decl, ok := stmt.Decl.(*ast.GenDecl)
+	if !ok || decl.Tok != token.VAR {
+		return nil
+	}
+	var names []string
+	for _, spec := range decl.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+		for _, ident := range vs.Names {
+			names = append(names, ident.Name)
+		}
+	}
+	return names
 }
 
 // statusFromBoundExpr resolves the status implied by the expression an
@@ -2533,13 +2628,19 @@ func (a *ProjectAnalyzer) statusFromServerCall(call *ast.CallExpr, serverAliases
 	return statusForConstructor(sel.Sel.Name, call.Args)
 }
 
-// statusFromResultLiteral resolves a hand-built server.Result[T]{...} /
-// server.ResultWithMeta[T]{...} literal. An explicit Status: key wins; without
+// statusFromResultLiteral resolves a hand-built server.NoContentResult{} /
+// server.Result[T]{...} / server.ResultWithMeta[T]{...} literal. A
+// NoContentResult carries no status field and is always 204, matching
+// server.NoContent(). Otherwise an explicit Status: key wins; without
 // one the framework serves the zero value as 200, so 200 is returned explicitly
 // (the same wire code as the 0 default, but a resolved answer rather than a
 // fallback). A Status: key this analyzer cannot read yields 0.
 func (a *ProjectAnalyzer) statusFromResultLiteral(lit *ast.CompositeLit, serverAliases map[string]struct{}) int {
-	if !a.isResultWrapper(unwrapGenericType(lit.Type), serverAliases) {
+	typ := unwrapGenericType(lit.Type)
+	if a.isNoContentResultType(typ, serverAliases) {
+		return 204
+	}
+	if !a.isResultWrapper(typ, serverAliases) {
 		return 0
 	}
 	for _, elt := range lit.Elts {
@@ -2552,6 +2653,20 @@ func (a *ProjectAnalyzer) statusFromResultLiteral(lit *ast.CompositeLit, serverA
 		}
 	}
 	return defaultSuccessStatus
+}
+
+// isNoContentResultType reports whether x is server.NoContentResult, honouring
+// the local alias(es) the server package is imported under.
+func (a *ProjectAnalyzer) isNoContentResultType(x ast.Expr, serverAliases map[string]struct{}) bool {
+	sel, ok := x.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok || !a.aliasContains(serverAliases, pkg.Name, frameworkPkgServer) {
+		return false
+	}
+	return sel.Sel.Name == noContentResultTypeName
 }
 
 // unwrapGenericType strips the type arguments off a generic type expression
