@@ -37,6 +37,13 @@ const (
 	resultWithMetaTypeName  = "ResultWithMeta"
 	noContentResultTypeName = "NoContentResult"
 
+	// resultStatusFieldName is the Result field carrying the HTTP status, read
+	// both from a composite-literal key and from a later `res.Status = ...` write.
+	resultStatusFieldName = "Status"
+	// defaultSuccessStatus is the status a Result carries when its Status field is
+	// left at its zero value — the framework serves that as 200.
+	defaultSuccessStatus = 200
+
 	// Module interface method names
 	moduleMethodName           = "Name"
 	moduleMethodInit           = "Init"
@@ -2328,10 +2335,16 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 // Nested *ast.FuncLit bodies are NOT descended into: a server constructor
 // returned from an inner closure (e.g. a goroutine or callback defined inside the
 // handler) is not the handler's terminal return and must not override it.
+//
+// A return whose first result is a plain identifier is resolved through the
+// bindings collected by collectResultBindings, so the common
+// `res := server.Accepted(x); res.Headers = ...; return res, nil` shape is
+// documented with its real status instead of the 200 default.
 func (a *ProjectAnalyzer) extractSuccessStatus(funcDecl *ast.FuncDecl, serverAliases map[string]struct{}) int {
 	if funcDecl.Body == nil {
 		return 0
 	}
+	bindings := a.collectResultBindings(funcDecl.Body, serverAliases)
 	status := 0
 	ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
 		// Do not descend into nested closures: their returns belong to the closure,
@@ -2341,27 +2354,216 @@ func (a *ProjectAnalyzer) extractSuccessStatus(funcDecl *ast.FuncDecl, serverAli
 			return false
 		}
 		ret, ok := n.(*ast.ReturnStmt)
-		if !ok || len(ret.Results) == 0 {
-			return true
-		}
-		call, ok := ret.Results[0].(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		pkg, ok := sel.X.(*ast.Ident)
-		if !ok || !a.aliasContains(serverAliases, pkg.Name, frameworkPkgServer) {
-			return true
-		}
-		if s := statusForConstructor(sel.Sel.Name, call.Args); s != 0 {
+		if s := a.statusFromReturn(ret, bindings, serverAliases); s != 0 {
 			status = s // last-wins: keep scanning, terminal return is authoritative
 		}
 		return true
 	})
 	return status
+}
+
+// statusFromReturn resolves the success status a single return statement
+// documents: a direct server-constructor call, or an identifier previously bound
+// to one (or to a Result composite literal). An ambiguously bound identifier —
+// one assigned more than once anywhere in the body — resolves to 0 so the
+// generator keeps its 200 default rather than guessing a branch.
+func (a *ProjectAnalyzer) statusFromReturn(
+	ret *ast.ReturnStmt,
+	bindings map[string]*resultBinding,
+	serverAliases map[string]struct{},
+) int {
+	if len(ret.Results) == 0 {
+		return 0
+	}
+	switch res := ret.Results[0].(type) {
+	case *ast.CallExpr:
+		return a.statusFromServerCall(res, serverAliases)
+	case *ast.Ident:
+		if b, ok := bindings[res.Name]; ok && !b.ambiguous {
+			return b.status
+		}
+	}
+	return 0
+}
+
+// resultBinding records what a local identifier was bound to inside a handler
+// body. status is the HTTP status the binding (plus any later `<ident>.Status =`
+// write) implies, 0 meaning "not resolvable". ambiguous marks an identifier bound
+// more than once: no flow analysis is attempted, so such a binding is unusable.
+type resultBinding struct {
+	status    int
+	ambiguous bool
+}
+
+// collectResultBindings pre-walks a handler body, in source order, recording
+// every single-identifier `:=` / `=` assignment and `var x = ...` declaration
+// along with any later `<ident>.Status = ...` write. Nested closures are skipped
+// for the same reason extractSuccessStatus skips them: their locals are not the
+// handler's.
+func (a *ProjectAnalyzer) collectResultBindings(
+	body *ast.BlockStmt,
+	serverAliases map[string]struct{},
+) map[string]*resultBinding {
+	bindings := make(map[string]*resultBinding)
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		switch stmt := n.(type) {
+		case *ast.AssignStmt:
+			a.recordAssign(bindings, stmt, serverAliases)
+		case *ast.DeclStmt:
+			a.recordVarDecl(bindings, stmt, serverAliases)
+		}
+		return true
+	})
+	return bindings
+}
+
+// recordAssign handles the two assignment shapes that matter: binding a single
+// identifier (`res := ...` / `res = ...`) and writing the status field of an
+// already-bound one (`res.Status = ...`). Multi-value assignments are ignored —
+// the result of a helper call is not a shape this analyzer models.
+func (a *ProjectAnalyzer) recordAssign(
+	bindings map[string]*resultBinding,
+	stmt *ast.AssignStmt,
+	serverAliases map[string]struct{},
+) {
+	if len(stmt.Lhs) != 1 || len(stmt.Rhs) != 1 {
+		return
+	}
+	if stmt.Tok != token.DEFINE && stmt.Tok != token.ASSIGN {
+		return
+	}
+	switch lhs := stmt.Lhs[0].(type) {
+	case *ast.Ident:
+		a.bindResult(bindings, lhs.Name, stmt.Rhs[0], serverAliases)
+	case *ast.SelectorExpr:
+		recordStatusWrite(bindings, lhs, stmt.Rhs[0])
+	}
+}
+
+// recordVarDecl handles `var res = <expr>` declarations, the long form of the
+// `:=` binding. Specs with a type but no value, or with multiple names, carry no
+// resolvable status.
+func (a *ProjectAnalyzer) recordVarDecl(
+	bindings map[string]*resultBinding,
+	stmt *ast.DeclStmt,
+	serverAliases map[string]struct{},
+) {
+	decl, ok := stmt.Decl.(*ast.GenDecl)
+	if !ok || decl.Tok != token.VAR {
+		return
+	}
+	for _, spec := range decl.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
+			continue
+		}
+		a.bindResult(bindings, vs.Names[0].Name, vs.Values[0], serverAliases)
+	}
+}
+
+// bindResult records a first binding of name, or marks an existing one ambiguous.
+// The blank identifier binds nothing.
+func (a *ProjectAnalyzer) bindResult(
+	bindings map[string]*resultBinding,
+	name string,
+	rhs ast.Expr,
+	serverAliases map[string]struct{},
+) {
+	if name == "_" {
+		return
+	}
+	if existing, ok := bindings[name]; ok {
+		existing.ambiguous = true
+		return
+	}
+	bindings[name] = &resultBinding{status: a.statusFromBoundExpr(rhs, serverAliases)}
+}
+
+// recordStatusWrite applies a `<ident>.Status = <expr>` write to an existing
+// binding; the last write in source order wins. A write whose value cannot be
+// resolved (a variable, a computed expression) clears the status rather than
+// leaving the stale bound one in place — the handler demonstrably overrides it
+// with something this analyzer cannot read.
+func recordStatusWrite(bindings map[string]*resultBinding, lhs *ast.SelectorExpr, rhs ast.Expr) {
+	if lhs.Sel.Name != resultStatusFieldName {
+		return
+	}
+	ident, ok := lhs.X.(*ast.Ident)
+	if !ok {
+		return
+	}
+	binding, ok := bindings[ident.Name]
+	if !ok || binding.ambiguous {
+		return
+	}
+	binding.status = statusFromArg(rhs)
+}
+
+// statusFromBoundExpr resolves the status implied by the expression an
+// identifier is bound to: a server constructor call, or a server.Result /
+// server.ResultWithMeta composite literal. Anything else yields 0.
+func (a *ProjectAnalyzer) statusFromBoundExpr(expr ast.Expr, serverAliases map[string]struct{}) int {
+	switch e := expr.(type) {
+	case *ast.CallExpr:
+		return a.statusFromServerCall(e, serverAliases)
+	case *ast.CompositeLit:
+		return a.statusFromResultLiteral(e, serverAliases)
+	}
+	return 0
+}
+
+// statusFromServerCall maps a call expression to a status when it is a
+// server-qualified result constructor, honouring local import aliases. Returns 0
+// for any other call.
+func (a *ProjectAnalyzer) statusFromServerCall(call *ast.CallExpr, serverAliases map[string]struct{}) int {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return 0
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok || !a.aliasContains(serverAliases, pkg.Name, frameworkPkgServer) {
+		return 0
+	}
+	return statusForConstructor(sel.Sel.Name, call.Args)
+}
+
+// statusFromResultLiteral resolves a hand-built server.Result[T]{...} /
+// server.ResultWithMeta[T]{...} literal. An explicit Status: key wins; without
+// one the framework serves the zero value as 200, so 200 is returned explicitly
+// (the same wire code as the 0 default, but a resolved answer rather than a
+// fallback). A Status: key this analyzer cannot read yields 0.
+func (a *ProjectAnalyzer) statusFromResultLiteral(lit *ast.CompositeLit, serverAliases map[string]struct{}) int {
+	if !a.isResultWrapper(unwrapGenericType(lit.Type), serverAliases) {
+		return 0
+	}
+	for _, elt := range lit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		if key, ok := kv.Key.(*ast.Ident); ok && key.Name == resultStatusFieldName {
+			return statusFromArg(kv.Value)
+		}
+	}
+	return defaultSuccessStatus
+}
+
+// unwrapGenericType strips the type arguments off a generic type expression
+// (server.Result[T] -> server.Result), leaving any other expression untouched.
+func unwrapGenericType(expr ast.Expr) ast.Expr {
+	switch t := expr.(type) {
+	case *ast.IndexExpr:
+		return t.X
+	case *ast.IndexListExpr:
+		return t.X
+	}
+	return expr
 }
 
 // statusForConstructor maps a server result-constructor name to its HTTP status.
