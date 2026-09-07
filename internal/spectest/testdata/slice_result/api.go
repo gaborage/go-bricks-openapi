@@ -26,6 +26,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.GET(hr, r, "/items/featured", m.featuredItems, server.WithTags("catalog"))
 	server.GET(hr, r, "/items/archived", m.archivedItems, server.WithTags("catalog"))
 	server.GET(hr, r, "/tags", m.listTags, server.WithTags("catalog"))
+	server.GET(hr, r, "/items/export", m.exportItems, server.WithTags("catalog"))
 }
 
 // listItems returns a slice of a named struct: data is an array of $ref.
@@ -41,6 +42,12 @@ func (m *Module) featuredItems(ctx server.HandlerContext) (server.ResultWithMeta
 // archivedItems returns a slice of pointers, documented like a slice of values.
 func (m *Module) archivedItems(ctx server.HandlerContext) (server.Result[[]*Item], server.IAPIError) {
 	return server.OK([]*Item{}), nil
+}
+
+// exportItems returns a byte slice: a well-known shape documented as a base64
+// string, exactly as a []byte struct field is — not as an array.
+func (m *Module) exportItems(ctx server.HandlerContext) (server.Result[[]byte], server.IAPIError) {
+	return server.OK([]byte{}), nil
 }
 
 // listTags returns a slice of a primitive: items carries the primitive type.

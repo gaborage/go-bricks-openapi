@@ -535,9 +535,11 @@ func classifyRoute(route *models.Route) routeClassification {
 }
 
 // isTypedPayload reports whether the analyzer resolved a payload the generator
-// documents with a real schema: a named component, or a slice payload, whose
-// element the generator types even when it names no component
-// (server.Result[[]string] emits an array of strings).
+// documents with a real schema: a named component, or a slice payload, which
+// the generator types even when it names no component (server.Result[[]string]
+// emits an array of strings, server.Result[[]byte] a base64 string). The two
+// conditions mirror responsePayloadSchema's two non-fallback branches exactly,
+// so the gate and the emitted schema move together.
 func isTypedPayload(ti *models.TypeInfo) bool {
 	if ti == nil {
 		return false
@@ -545,7 +547,7 @@ func isTypedPayload(ti *models.TypeInfo) bool {
 	if ti.Name != "" {
 		return true
 	}
-	return ti.Shape != nil && ti.Shape.Kind == models.ShapeSlice && ti.Shape.Elem != nil
+	return ti.Shape != nil && ti.Shape.Kind == models.ShapeSlice
 }
 
 // updateStatsForRoute updates statistics based on route classification

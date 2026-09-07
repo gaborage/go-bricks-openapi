@@ -860,12 +860,24 @@ func responsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
 	return &OpenAPIProperty{Ref: refPath(schemaName(response))}
 }
 
-// sliceResponsePayloadSchema builds `type: array` for a []T payload. Name still
+// sliceResponsePayloadSchema builds the schema for a []T payload — `type: array`
+// unless the slice itself is a well-known shape. Name still
 // carries the ELEMENT type (see models.TypeInfo.Shape), so a named element's
 // items is the $ref to its component — the same component referencedSchemaNames
 // already marks from response.Name, which is why no slice awareness is needed
 // there. A primitive element names no component and is typed from its shape.
 func sliceResponsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
+	// A well-known slice shape ([]byte / []uint8) is a base64 string, NOT an
+	// array. Consult the same resolver setTypeAndFormat uses so a payload gets
+	// the schema its struct-field counterpart would get.
+	if wk, ok := wellKnownShape(*response.Shape); ok {
+		prop := &OpenAPIProperty{Type: wk.typ}
+		if wk.format != "" {
+			prop.Format = wk.format
+		}
+		return prop
+	}
+
 	items := &OpenAPIProperty{}
 	switch {
 	case response.Name != "":

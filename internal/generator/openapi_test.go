@@ -2759,6 +2759,22 @@ func TestResponsePayloadSchemaSlicePayloads(t *testing.T) {
 	assert.Equal(t, formatInt64, i64.Items.Format)
 }
 
+func TestResponsePayloadSchemaWellKnownSlice(t *testing.T) {
+	// []byte / []uint8 is a base64 string on the field path (see the well_known
+	// golden); a payload must get the identical schema, not an array of objects.
+	for _, elem := range []string{goTypeByte, goTypeUint8} {
+		got := responsePayloadSchema(&models.TypeInfo{Shape: payloadSlice(prim(elem))})
+		assert.Equal(t, typeString, got.Type, elem)
+		assert.Equal(t, formatBinary, got.Format, elem)
+		assert.Nil(t, got.Items, "a base64 string payload is not an array")
+	}
+
+	// The envelope must not annotate it as the untyped fallback either.
+	data := successEnvelopeSchema(&models.TypeInfo{Shape: payloadSlice(prim(goTypeByte))}).Properties[propNameData]
+	assert.Equal(t, typeString, data.Type)
+	assert.Empty(t, data.Description)
+}
+
 func TestResponsePayloadSchemaSliceWithoutElement(t *testing.T) {
 	// Defensive: a slice Shape with no Elem (never stamped by the analyzer)
 	// still yields a valid array rather than an items-less schema.
