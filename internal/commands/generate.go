@@ -134,13 +134,24 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
 
+	// One count over every diagnostic the run printed to stderr — the version
+	// warning, the analyzer's, and the content check's — so the summary line and
+	// the strict gate can never disagree about whether the run warned.
+	warningCount := len(analyzerWarnings) + emitContentWarnings(project)
+	if versionWarning != "" {
+		warningCount++
+	}
+	// Machine-checkable summary line, printed on every run (including a run that
+	// warned zero times and a --strict run about to fail): a CI gate can assert
+	// "Warnings: 0" on stdout instead of scraping stderr for a text pattern.
+	fmt.Printf("Warnings: %d\n", warningCount)
+
 	// Strict gate: every diagnostic printed above and by emitContentWarnings
-	// feeds one flag, so a surfaced warning can never slip past --strict.
+	// feeds one count, so a surfaced warning can never slip past --strict.
 	// Evaluated BEFORE the spec is rendered or persisted: a failed strict run
 	// does no wasted rendering, never prints a success line, and leaves no
 	// consumable artifact (see failStrict).
-	warned := emitContentWarnings(project) || len(analyzerWarnings) > 0 || versionWarning != ""
-	if shouldFailStrict(opts.Strict, warned) {
+	if shouldFailStrict(opts.Strict, warningCount > 0) {
 		return failStrict(opts)
 	}
 
@@ -447,18 +458,20 @@ func contentWarnings(stats ProjectStats) []string {
 }
 
 // emitContentWarnings prints stderr warnings for a content-free or partially-typed
-// spec and reports whether any were emitted (so --strict can fail the run).
-func emitContentWarnings(project *models.Project) bool {
+// spec and returns how many it emitted — one per printed line, so the caller's
+// summary count matches what a reader sees on stderr. A non-zero return also
+// means the run warned, which is what --strict fails on.
+func emitContentWarnings(project *models.Project) int {
 	stats := calculateProjectStats(project)
-	warned := false
+	count := 0
 	for _, w := range contentWarnings(stats) {
 		fmt.Fprintln(os.Stderr, "warning: "+w)
-		warned = true
+		count++
 	}
 	if n := len(stats.UntypedRoutes); n > 0 {
 		fmt.Fprintf(os.Stderr, "warning: %d route(s) have no resolved request/response type: %s\n",
 			n, strings.Join(stats.UntypedRoutes, ", "))
-		warned = true
+		count++
 	}
-	return warned
+	return count
 }
