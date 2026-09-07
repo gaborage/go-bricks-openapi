@@ -1376,8 +1376,27 @@ func warningSummaryGoMod() string {
 	return "module github.com/example/svc\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks " + minGoBricksVer + "\n"
 }
 
+// lastVerboseSummaryLine returns the byte offset of the last verbose
+// route-summary line ("Discovered N modules" and the per-module lines beneath
+// it), or -1 when the run was not verbose and printed none.
+func lastVerboseSummaryLine(out string) int {
+	last := -1
+	pos := 0
+	for _, line := range strings.SplitAfter(out, "\n") {
+		if strings.HasPrefix(line, "Discovered ") || strings.HasPrefix(line, "  Module: ") {
+			last = pos
+		}
+		pos += len(line)
+	}
+	return last
+}
+
 // assertWarningLinePosition pins the summary line's position: after the header
-// lines that name the project and output file, and before the success line.
+// lines that name the project and output file, after the whole verbose
+// route-summary block when the run printed one, and before the success line.
+// Anchoring on the LAST verbose line matters — a check against only the header
+// would still pass if the count were printed above the module summary, which is
+// the one position acceptance criterion 3 forbids.
 func assertWarningLinePosition(t *testing.T, out, want string) {
 	t.Helper()
 	idxWarn := strings.Index(out, want)
@@ -1385,6 +1404,10 @@ func assertWarningLinePosition(t *testing.T, out, want string) {
 	idxHeader := strings.Index(out, "Output file:")
 	require.GreaterOrEqual(t, idxHeader, 0, "stdout must contain the output-file header, got:\n%s", out)
 	assert.Greater(t, idxWarn, idxHeader, "the warning count must follow the run header")
+	if idxVerbose := lastVerboseSummaryLine(out); idxVerbose >= 0 {
+		assert.Greater(t, idxWarn, idxVerbose,
+			"the warning count must follow the whole verbose route summary, got:\n%s", out)
+	}
 	if idxSuccess := strings.Index(out, "✓ OpenAPI specification generated"); idxSuccess >= 0 {
 		assert.Less(t, idxWarn, idxSuccess, "the warning count must precede the success line")
 	}
