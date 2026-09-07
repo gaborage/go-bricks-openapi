@@ -116,7 +116,7 @@ sec: ## Run gosec security scanner (excludes testdata fixture modules, like CI)
 
 # Development helpers
 dev-deps: ## Install development dependencies
-	GOBIN=$(patsubst %/,%,$(dir $(GOLANGCI))) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
+	GOBIN="$(patsubst %/,%,$(dir $(GOLANGCI)))" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 # Release helpers
 release: ## Cut a signed release tag (usage: make release VERSION=v0.2.0). Run AFTER merging the release-please PR.
