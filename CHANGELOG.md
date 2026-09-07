@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.1](https://github.com/gaborage/go-bricks-openapi/compare/v0.3.0...v0.3.1) (2026-09-05)
+
+
+### Changed
+
+* **analyzer:** decode type shape once, retire string parsing ([#55](https://github.com/gaborage/go-bricks-openapi/issues/55)) ([faaa718](https://github.com/gaborage/go-bricks-openapi/commit/faaa718208f059cc7c89b615cd0519a04b76558e))
+* **generator:** move constraint mapping out of the analyzer ([#58](https://github.com/gaborage/go-bricks-openapi/issues/58)) ([1043d43](https://github.com/gaborage/go-bricks-openapi/commit/1043d43f4a5b38f7af8402e4da9937412a3713ab))
+* **generator:** typed constraint set replaces pair-list applicators ([#61](https://github.com/gaborage/go-bricks-openapi/issues/61)) ([96c3ddb](https://github.com/gaborage/go-bricks-openapi/commit/96c3ddb1df9c05e0f2987db02189fdac9c1782ea))
+
 ## [0.3.0](https://github.com/gaborage/go-bricks-openapi/compare/v0.2.0...v0.3.0) (2026-07-26)
 
 
