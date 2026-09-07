@@ -85,6 +85,23 @@ go-bricks-openapi version
 | `--validate`            | Validate the generated spec (OpenAPI 3.0) before writing; fails if invalid |
 | `--verbose, -v`         | Verbose output                                           |
 
+### `generate` output
+
+`generate` writes the spec to `--output` and prints a short summary on stdout;
+analyzer diagnostics go to stderr:
+
+```text
+Generating OpenAPI spec for project: .
+Output file: docs/openapi.yaml
+Warnings: 0
+✓ OpenAPI specification generated: docs/openapi.yaml
+```
+
+`Warnings: N` counts every `warning:` line the run printed to stderr (go-bricks
+version floor, analyzer diagnostics, and content checks). It is printed on every
+run — including a run with no warnings and a `--strict` run that then fails — so
+a CI gate can assert `Warnings: 0` instead of scraping stderr.
+
 ### Marking a route as public
 
 By default every operation carries the tenant security scheme. A route that

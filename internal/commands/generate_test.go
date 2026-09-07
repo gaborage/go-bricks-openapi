@@ -15,6 +15,7 @@ import (
 
 	"github.com/gaborage/go-bricks-openapi/internal/models"
 	"github.com/gaborage/go-bricks-openapi/internal/specvalidate"
+	"github.com/gaborage/go-bricks-openapi/internal/testutil"
 )
 
 const (
@@ -862,17 +863,17 @@ func TestToJSON(t *testing.T) {
 
 // TestEmitContentWarnings covers the empty/untyped warning detection.
 func TestEmitContentWarnings(t *testing.T) {
-	if !emitContentWarnings(&models.Project{}) {
-		t.Error("empty project (no modules) should warn")
+	if emitContentWarnings(&models.Project{}) != 1 {
+		t.Error("empty project (no modules) should warn once")
 	}
 	withRoutes := &models.Project{Modules: []models.Module{{Name: "m"}}}
-	if !emitContentWarnings(withRoutes) {
-		t.Error("module with no routes should warn")
+	if emitContentWarnings(withRoutes) != 1 {
+		t.Error("module with no routes should warn once")
 	}
 	typed := &models.Project{Modules: []models.Module{{Name: "m", Routes: []models.Route{
 		{Method: "GET", Path: "/x", HandlerName: "h", Response: &models.TypeInfo{Name: "R", Fields: []models.FieldInfo{{Name: "ID", JSONName: "id", Shape: prim("string")}}}},
 	}}}}
-	if emitContentWarnings(typed) {
+	if emitContentWarnings(typed) != 0 {
 		t.Error("a typed route should not warn")
 	}
 
@@ -882,8 +883,18 @@ func TestEmitContentWarnings(t *testing.T) {
 	namedEmpty := &models.Project{Modules: []models.Module{{Name: "m", Routes: []models.Route{
 		{Method: "POST", Path: "/ack", HandlerName: "ack", Response: &models.TypeInfo{Name: "Ack"}},
 	}}}}
-	if emitContentWarnings(namedEmpty) {
+	if emitContentWarnings(namedEmpty) != 0 {
 		t.Error("a named-but-fieldless response is resolved (gets a $ref) and should not warn")
+	}
+
+	// Untyped routes are reported as one line (and so count once) however many
+	// routes are listed on it.
+	untyped := &models.Project{Modules: []models.Module{{Name: "m", Routes: []models.Route{
+		{Method: "GET", Path: "/a", HandlerName: "a"},
+		{Method: "GET", Path: "/b", HandlerName: "b"},
+	}}}}
+	if got := emitContentWarnings(untyped); got != 1 {
+		t.Errorf("untyped routes are one warning line, got count %d", got)
 	}
 }
 
@@ -1300,4 +1311,186 @@ func (m *Module) ping(ctx server.HandlerContext) (server.Result[Ping], server.IA
 			t.Errorf("non-strict run must write the spec: %v", statErr)
 		}
 	})
+}
+
+// warningSummaryModSrc is a clean single-route module: one literal path, a typed
+// response, nothing for the analyzer or the content check to complain about.
+const warningSummaryModSrc = `package svc
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "svc" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+type Ping struct {
+	OK bool ` + "`json:\"ok\"`" + `
+}
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/ping", m.ping, server.WithTags("svc"))
+}
+
+func (m *Module) ping(ctx server.HandlerContext) (server.Result[Ping], server.IAPIError) {
+	return server.NewResult(200, Ping{}), nil
+}
+`
+
+// warningSummaryDynamicModSrc adds a second route whose path is a variable, which
+// the analyzer cannot resolve: it warns and drops the route. Exactly one warning.
+const warningSummaryDynamicModSrc = `package svc
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "svc" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+type Ping struct {
+	OK bool ` + "`json:\"ok\"`" + `
+}
+
+var dynamicPath = "/dynamic"
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/ping", m.ping, server.WithTags("svc"))
+	server.GET(hr, r, dynamicPath, m.ping, server.WithTags("svc"))
+}
+
+func (m *Module) ping(ctx server.HandlerContext) (server.Result[Ping], server.IAPIError) {
+	return server.NewResult(200, Ping{}), nil
+}
+`
+
+func warningSummaryGoMod() string {
+	return "module github.com/example/svc\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks " + minGoBricksVer + "\n"
+}
+
+// lastVerboseSummaryLine returns the byte offset of the last verbose
+// route-summary line ("Discovered N modules" and the per-module lines beneath
+// it), or -1 when the run was not verbose and printed none.
+func lastVerboseSummaryLine(out string) int {
+	last := -1
+	pos := 0
+	for _, line := range strings.SplitAfter(out, "\n") {
+		if strings.HasPrefix(line, "Discovered ") || strings.HasPrefix(line, "  Module: ") {
+			last = pos
+		}
+		pos += len(line)
+	}
+	return last
+}
+
+// assertWarningLinePosition pins the summary line's position: after the header
+// lines that name the project and output file, after the whole verbose
+// route-summary block when the run printed one, and before the success line.
+// Anchoring on the LAST verbose line matters — a check against only the header
+// would still pass if the count were printed above the module summary, which is
+// the one position acceptance criterion 3 forbids.
+func assertWarningLinePosition(t *testing.T, out, want string) {
+	t.Helper()
+	idxWarn := strings.Index(out, want)
+	require.GreaterOrEqual(t, idxWarn, 0, "stdout must contain %q, got:\n%s", want, out)
+	idxHeader := strings.Index(out, "Output file:")
+	require.GreaterOrEqual(t, idxHeader, 0, "stdout must contain the output-file header, got:\n%s", out)
+	assert.Greater(t, idxWarn, idxHeader, "the warning count must follow the run header")
+	if idxVerbose := lastVerboseSummaryLine(out); idxVerbose >= 0 {
+		assert.Greater(t, idxWarn, idxVerbose,
+			"the warning count must follow the whole verbose route summary, got:\n%s", out)
+	}
+	if idxSuccess := strings.Index(out, "✓ OpenAPI specification generated"); idxSuccess >= 0 {
+		assert.Less(t, idxWarn, idxSuccess, "the warning count must precede the success line")
+	}
+}
+
+// TestRunGenerateWarningSummaryZero locks the machine-checkable summary line for
+// a clean project: `Warnings: 0` is printed on stdout even though nothing warned,
+// in both verbose and non-verbose modes, and the run still succeeds.
+func TestRunGenerateWarningSummaryZero(t *testing.T) {
+	for _, verbose := range []bool{false, true} {
+		t.Run(map[bool]string{false: "non-verbose", true: "verbose"}[verbose], func(t *testing.T) {
+			dir := writeProject(t, warningSummaryGoMod(), warningSummaryModSrc)
+			out := filepath.Join(t.TempDir(), outputFileName)
+
+			var runErr error
+			stdout := testutil.CaptureStdout(t, func() {
+				runErr = runGenerate(context.Background(), &GenerateOptions{
+					ProjectRoot: dir, OutputFile: out, Verbose: verbose,
+				})
+			})
+
+			require.NoError(t, runErr, "a clean project must generate without error")
+			assert.Contains(t, stdout, "Warnings: 0\n")
+			assertWarningLinePosition(t, stdout, "Warnings: 0\n")
+		})
+	}
+}
+
+// TestRunGenerateWarningSummaryNonZero locks the count on a project that warns:
+// the line reports the number of warnings, is printed in both verbose and
+// non-verbose modes, and is printed even when --strict then fails the run (so a
+// CI gate can read the count off a failing run too).
+func TestRunGenerateWarningSummaryNonZero(t *testing.T) {
+	const want = "Warnings: 1\n"
+
+	for _, verbose := range []bool{false, true} {
+		t.Run(map[bool]string{false: "non-verbose", true: "verbose"}[verbose], func(t *testing.T) {
+			dir := writeProject(t, warningSummaryGoMod(), warningSummaryDynamicModSrc)
+			out := filepath.Join(t.TempDir(), outputFileName)
+
+			var runErr error
+			stdout := testutil.CaptureStdout(t, func() {
+				runErr = runGenerate(context.Background(), &GenerateOptions{
+					ProjectRoot: dir, OutputFile: out, Verbose: verbose,
+				})
+			})
+
+			require.NoError(t, runErr, "a non-strict run must still succeed")
+			assert.Contains(t, stdout, want)
+			assertWarningLinePosition(t, stdout, want)
+		})
+	}
+
+	t.Run("strict still prints the count and still fails", func(t *testing.T) {
+		dir := writeProject(t, warningSummaryGoMod(), warningSummaryDynamicModSrc)
+		out := filepath.Join(t.TempDir(), outputFileName)
+
+		var runErr error
+		stdout := testutil.CaptureStdout(t, func() {
+			runErr = runGenerate(context.Background(), &GenerateOptions{
+				ProjectRoot: dir, OutputFile: out, Strict: true,
+			})
+		})
+
+		require.Error(t, runErr, "--strict must still fail on a warning")
+		assert.Contains(t, stdout, want)
+		assertWarningLinePosition(t, stdout, want)
+	})
+}
+
+// TestRunGenerateWarningSummaryCountsEveryDiagnostic proves the count is the
+// number of `warning:` lines the run emits, not just the analyzer's: a project
+// with no routes warns from the content check, and a below-floor go-bricks
+// version warns on top of it.
+func TestRunGenerateWarningSummaryCountsEveryDiagnostic(t *testing.T) {
+	dir := writeProject(t, "module github.com/example/svc\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.1.0\n", stubModuleSrc)
+	out := filepath.Join(t.TempDir(), outputFileName)
+
+	var runErr error
+	stdout := testutil.CaptureStdout(t, func() {
+		runErr = runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out})
+	})
+
+	require.NoError(t, runErr)
+	assert.Contains(t, stdout, "Warnings: 2\n", "below-floor version warning + no-routes content warning")
 }
