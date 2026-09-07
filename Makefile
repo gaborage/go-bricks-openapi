@@ -13,11 +13,17 @@ GOSEC_VERSION := v2.26.1
 # local and CI lint gates silently diverge.
 GOLANGCI_VERSION := v2.12.2
 
+# Directory the pinned golangci-lint is installed into, derived once from
+# GOPATH. Both GOLANGCI and dev-deps' GOBIN come from this single variable so
+# they can never name different directories (deriving GOBIN back out of
+# GOLANGCI via $(dir ...) would re-split a GOPATH containing spaces).
+GOBIN_DIR := $(shell go env GOPATH)/bin
+
 # Explicit path to the pinned golangci-lint binary. `lint` and `dev-deps` both
-# resolve the binary through this one variable (dev-deps installs into its
-# directory via GOBIN), so a differently-versioned golangci-lint earlier on
-# PATH — e.g. a Homebrew install — can no longer shadow the pin silently.
-GOLANGCI := $(shell go env GOPATH)/bin/golangci-lint
+# resolve the binary through this one variable (dev-deps installs into
+# GOBIN_DIR), so a differently-versioned golangci-lint earlier on PATH — e.g. a
+# Homebrew install — can no longer shadow the pin silently.
+GOLANGCI := $(GOBIN_DIR)/golangci-lint
 
 # Pinned redocly CLI version for the structural-validation gate. Pinned (not
 # @latest) so an upstream release cannot silently change the gate or break CI.
@@ -116,7 +122,7 @@ sec: ## Run gosec security scanner (excludes testdata fixture modules, like CI)
 
 # Development helpers
 dev-deps: ## Install development dependencies
-	GOBIN="$(patsubst %/,%,$(dir $(GOLANGCI)))" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
+	GOBIN="$(GOBIN_DIR)" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 # Release helpers
 release: ## Cut a signed release tag (usage: make release VERSION=v0.2.0). Run AFTER merging the release-please PR.
