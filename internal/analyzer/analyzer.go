@@ -2224,9 +2224,8 @@ func (a *ProjectAnalyzer) handleIdentType(t *ast.Ident, packageName string) *mod
 		return nil
 	}
 	return &models.TypeInfo{
-		Name:      t.Name,
-		Package:   packageName,
-		IsPointer: false,
+		Name:    t.Name,
+		Package: packageName,
 	}
 }
 
@@ -2241,9 +2240,8 @@ func (a *ProjectAnalyzer) handleStarExprType(t *ast.StarExpr, packageName string
 			return nil
 		}
 		return &models.TypeInfo{
-			Name:      ident.Name,
-			Package:   packageName,
-			IsPointer: true,
+			Name:    ident.Name,
+			Package: packageName,
 		}
 	}
 
@@ -2254,9 +2252,8 @@ func (a *ProjectAnalyzer) handleStarExprType(t *ast.StarExpr, packageName string
 				return nil
 			}
 			return &models.TypeInfo{
-				Name:      selExpr.Sel.Name,
-				Package:   pkg.Name,
-				IsPointer: true,
+				Name:    selExpr.Sel.Name,
+				Package: pkg.Name,
 			}
 		}
 	}
@@ -2284,9 +2281,8 @@ func (a *ProjectAnalyzer) handleSelectorExprType(t *ast.SelectorExpr, serverAlia
 	}
 
 	return &models.TypeInfo{
-		Name:      t.Sel.Name,
-		Package:   pkg.Name,
-		IsPointer: false,
+		Name:    t.Sel.Name,
+		Package: pkg.Name,
 	}
 }
 

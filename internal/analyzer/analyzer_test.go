@@ -2468,25 +2468,25 @@ func TestTypeInfoFromExpr(t *testing.T) {
 		{
 			name:        "simple identifier",
 			typeExpr:    "CreateUserReq",
-			expected:    &models.TypeInfo{Name: "CreateUserReq", Package: "test", IsPointer: false},
+			expected:    &models.TypeInfo{Name: "CreateUserReq", Package: "test"},
 			description: "should extract simple type name",
 		},
 		{
 			name:        "pointer type",
 			typeExpr:    "*CreateUserReq",
-			expected:    &models.TypeInfo{Name: "CreateUserReq", Package: "test", IsPointer: true},
+			expected:    &models.TypeInfo{Name: "CreateUserReq", Package: "test"},
 			description: "should extract pointer type",
 		},
 		{
 			name:        "qualified type",
 			typeExpr:    "models.CreateUserReq",
-			expected:    &models.TypeInfo{Name: "CreateUserReq", Package: "models", IsPointer: false},
+			expected:    &models.TypeInfo{Name: "CreateUserReq", Package: "models"},
 			description: "should extract qualified type with package",
 		},
 		{
 			name:        "qualified pointer type",
 			typeExpr:    "*models.CreateUserReq",
-			expected:    &models.TypeInfo{Name: "CreateUserReq", Package: "models", IsPointer: true},
+			expected:    &models.TypeInfo{Name: "CreateUserReq", Package: "models"},
 			description: "should extract qualified pointer type",
 		},
 		{
@@ -2558,7 +2558,6 @@ func assertTypeInfo(t *testing.T, description string, expected, actual *models.T
 	require.NotNil(t, actual, "%s: expected non-nil", description)
 	assert.Equal(t, expected.Name, actual.Name, "%s: Name", description)
 	assert.Equal(t, expected.Package, actual.Package, "%s: Package", description)
-	assert.Equal(t, expected.IsPointer, actual.IsPointer, "%s: IsPointer", description)
 }
 
 // TestExtractHandlerSignature tests handler signature extraction
@@ -2594,8 +2593,8 @@ type UserResp struct {
 func (h *Handler) createUser(req CreateUserReq, ctx server.HandlerContext) (UserResp, server.IAPIError) {
 	return UserResp{}, nil
 }`,
-			expectedRequest:   &models.TypeInfo{Name: "CreateUserReq", Package: "test", IsPointer: false},
-			expectedResponse:  &models.TypeInfo{Name: "UserResp", Package: "test", IsPointer: false},
+			expectedRequest:   &models.TypeInfo{Name: "CreateUserReq", Package: "test"},
+			expectedResponse:  &models.TypeInfo{Name: "UserResp", Package: "test"},
 			shouldFindHandler: true,
 			description:       "should extract request and response types from standard handler",
 		},
@@ -2620,8 +2619,8 @@ type UserResp struct {
 func (h *Handler) updateUser(req *UpdateUserReq, ctx server.HandlerContext) (*UserResp, server.IAPIError) {
 	return nil, nil
 }`,
-			expectedRequest:   &models.TypeInfo{Name: "UpdateUserReq", Package: "test", IsPointer: true},
-			expectedResponse:  &models.TypeInfo{Name: "UserResp", Package: "test", IsPointer: true},
+			expectedRequest:   &models.TypeInfo{Name: "UpdateUserReq", Package: "test"},
+			expectedResponse:  &models.TypeInfo{Name: "UserResp", Package: "test"},
 			shouldFindHandler: true,
 			description:       "should extract pointer types correctly",
 		},
@@ -2643,7 +2642,7 @@ func (h *Handler) listUsers(ctx server.HandlerContext) (UserListResp, server.IAP
 	return UserListResp{}, nil
 }`,
 			expectedRequest:   nil,
-			expectedResponse:  &models.TypeInfo{Name: "UserListResp", Package: "test", IsPointer: false},
+			expectedResponse:  &models.TypeInfo{Name: "UserListResp", Package: "test"},
 			shouldFindHandler: true,
 			description:       "should handle handler with only HandlerContext parameter",
 		},
@@ -2664,7 +2663,7 @@ type DeleteUserReq struct {
 func (h *Handler) deleteUser(req DeleteUserReq, ctx server.HandlerContext) error {
 	return nil
 }`,
-			expectedRequest:   &models.TypeInfo{Name: "DeleteUserReq", Package: "test", IsPointer: false},
+			expectedRequest:   &models.TypeInfo{Name: "DeleteUserReq", Package: "test"},
 			expectedResponse:  nil,
 			shouldFindHandler: true,
 			description:       "should handle handler with error-only return",
@@ -2728,7 +2727,7 @@ import "github.com/gaborage/go-bricks/server"
 type Handler struct{}
 type CreateReq struct{}
 func (h *Handler) create(req CreateReq, ctx server.HandlerContext) {}`,
-			expectedReq: &models.TypeInfo{Name: "CreateReq", Package: "test", IsPointer: false},
+			expectedReq: &models.TypeInfo{Name: "CreateReq", Package: "test"},
 			description: "should extract request from first parameter",
 		},
 		{
@@ -2738,7 +2737,7 @@ import "github.com/gaborage/go-bricks/server"
 type Handler struct{}
 type CreateReq struct{}
 func (h *Handler) create(ctx server.HandlerContext, req CreateReq) {}`,
-			expectedReq: &models.TypeInfo{Name: "CreateReq", Package: "test", IsPointer: false},
+			expectedReq: &models.TypeInfo{Name: "CreateReq", Package: "test"},
 			description: "should extract request from second parameter (ctx-first signature)",
 		},
 		{
@@ -2748,7 +2747,7 @@ import "github.com/gaborage/go-bricks/server"
 type Handler struct{}
 type UpdateReq struct{}
 func (h *Handler) update(ctx server.HandlerContext, req *UpdateReq) {}`,
-			expectedReq: &models.TypeInfo{Name: "UpdateReq", Package: "test", IsPointer: true},
+			expectedReq: &models.TypeInfo{Name: "UpdateReq", Package: "test"},
 			description: "should handle pointer request type with ctx-first",
 		},
 		{
@@ -3551,7 +3550,6 @@ func TestTypeInfoFromExprResultWrappers(t *testing.T) {
 		ti := parseResult(t, "server.Result[*User]")
 		require.NotNil(t, ti)
 		assert.Equal(t, "User", ti.Name)
-		assert.True(t, ti.IsPointer)
 	})
 	t.Run("result_slice_of_named_carries_element_and_shape", func(t *testing.T) {
 		ti := parseResult(t, "server.Result[[]User]")

@@ -59,10 +59,9 @@ type Route struct {
 
 // TypeInfo represents type metadata for requests and responses
 type TypeInfo struct {
-	Name      string
-	Package   string
-	IsPointer bool
-	Fields    []FieldInfo
+	Name    string
+	Package string
+	Fields  []FieldInfo
 	// JOSE is true when the struct carries a `jose:"..."` tag on any field — typically
 	// a sentinel `_ struct{}` field. Routes whose request or response type is JOSE-tagged
 	// emit Content-Type: application/jose in the OpenAPI spec while keeping the documented
