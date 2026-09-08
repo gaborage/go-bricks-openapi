@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.0](https://github.com/gaborage/go-bricks-openapi/compare/v0.3.1...v0.4.0) (2026-09-08)
+
+
+### Added
+
+* **generate:** print warning count in the run summary ([#73](https://github.com/gaborage/go-bricks-openapi/issues/73)) ([d788968](https://github.com/gaborage/go-bricks-openapi/commit/d78896847b9afb81caa0efcf0ff1c98374a3821b))
+
+
+### Fixed
+
+* **analyzer:** resolve success status through local result bindings ([#74](https://github.com/gaborage/go-bricks-openapi/issues/74)) ([e1fedc1](https://github.com/gaborage/go-bricks-openapi/commit/e1fedc18c9cd9b4f58faee3672125a2e1a93fb1e))
+* **generator:** render slice result payloads as typed arrays ([#76](https://github.com/gaborage/go-bricks-openapi/issues/76)) ([eb25d58](https://github.com/gaborage/go-bricks-openapi/commit/eb25d582c2ff24856de8650631f989ed4cd88d93))
+
+
+### Changed
+
+* **analyzer:** drop unread TypeInfo.IsPointer ([#72](https://github.com/gaborage/go-bricks-openapi/issues/72)) ([cfa67ed](https://github.com/gaborage/go-bricks-openapi/commit/cfa67ed36eb641cdf4bc56d52c07d978948d8deb))
+
 ## [0.3.1](https://github.com/gaborage/go-bricks-openapi/compare/v0.3.0...v0.3.1) (2026-09-05)
 
 
