@@ -21,3 +21,9 @@ func mapOf(k, v models.TypeShape) models.TypeShape {
 	return models.TypeShape{Kind: models.ShapeMap, Key: &k, Elem: &v}
 }
 func unknownShape() models.TypeShape { return models.TypeShape{Kind: models.ShapeUnknown} }
+
+// payloadSlice is the *TypeShape a response TypeInfo carries for a []T payload.
+func payloadSlice(s models.TypeShape) *models.TypeShape {
+	sh := sliceOf(s)
+	return &sh
+}

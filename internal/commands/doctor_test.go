@@ -1260,6 +1260,62 @@ func TestCalculateProjectStats(t *testing.T) {
 			expectedTyped:      1,
 			expectedUntypedLen: 1,
 		},
+		{
+			// server.Result[[]string]: no component name, but the generator still
+			// documents data as an array of strings — so the route is typed and
+			// must not trip the untyped warning (or --strict).
+			name: "primitive slice response is typed",
+			project: &models.Project{
+				Modules: []models.Module{
+					{
+						Name: "api",
+						Routes: []models.Route{
+							{
+								Method:      "GET",
+								Path:        "/tags",
+								HandlerName: "listTags",
+								Response: &models.TypeInfo{
+									Shape: &models.TypeShape{Kind: models.ShapeSlice, Elem: ptrTo(prim("string"))},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedModules:    1,
+			expectedRoutes:     1,
+			expectedTyped:      1,
+			expectedUntypedLen: 0,
+		},
+		{
+			// server.Result[[]Status] where `type Status string` is a local named
+			// scalar: the analyzer clears the Name (no component resolves) but keeps
+			// the slice Shape, and the generator emits items: {type: object}. That is
+			// the untyped fallback in an array wrapper, so the route must still be
+			// reported untyped — same as the non-slice server.Result[Status].
+			name: "named-scalar slice element is untyped",
+			project: &models.Project{
+				Modules: []models.Module{
+					{
+						Name: "api",
+						Routes: []models.Route{
+							{
+								Method:      "GET",
+								Path:        "/statuses",
+								HandlerName: "listStatuses",
+								Response: &models.TypeInfo{
+									Shape: &models.TypeShape{Kind: models.ShapeSlice, Elem: ptrTo(named("Status"))},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedModules:    1,
+			expectedRoutes:     1,
+			expectedTyped:      0,
+			expectedUntypedLen: 1,
+		},
 	}
 
 	for _, tt := range tests {

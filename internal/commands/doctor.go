@@ -512,14 +512,15 @@ type routeClassification struct {
 }
 
 // classifyRoute determines the type information for a route. A route counts as
-// "typed" when the analyzer resolved a *named* request or response type — the
-// same gate the generator uses to emit a component $ref (see
-// responsePayloadSchema). Keying off the name rather than the field count means
-// a named-but-fieldless type (e.g. `type Ack struct{}`) is correctly reported as
-// typed instead of triggering a false "no resolved type" / --strict failure.
+// "typed" when the analyzer resolved enough of the request or response for the
+// generator to document it — the same gate the generator uses (see
+// responsePayloadSchema), which is why the two must move together. Keying off
+// the name rather than the field count means a named-but-fieldless type (e.g.
+// `type Ack struct{}`) is correctly reported as typed instead of triggering a
+// false "no resolved type" / --strict failure.
 func classifyRoute(route *models.Route) routeClassification {
-	hasRequest := route.Request != nil && route.Request.Name != ""
-	hasResponse := route.Response != nil && route.Response.Name != ""
+	hasRequest := isTypedPayload(route.Request)
+	hasResponse := isTypedPayload(route.Response)
 
 	handlerID := route.HandlerName
 	if handlerID == "" {
@@ -531,6 +532,30 @@ func classifyRoute(route *models.Route) routeClassification {
 		hasResponse: hasResponse,
 		handlerID:   handlerID,
 	}
+}
+
+// isTypedPayload reports whether the analyzer resolved a payload the generator
+// documents with a RESOLVED schema — not merely a container around an untyped
+// one. Two cases qualify: a named component ($ref), and a nameless slice whose
+// element is a primitive, which the generator types from the shape alone
+// (server.Result[[]string] -> array of strings, server.Result[[]byte] -> a
+// base64 string).
+//
+// The primitive requirement is the load-bearing part. A local named scalar
+// (`type Status string`) used as server.Result[[]Status] keeps its ShapeSlice
+// but has its Name CLEARED by the analyzer (with a warning), because the name
+// resolves to no component; the generator then emits items: {type: object}.
+// That is the untyped fallback wearing an array wrapper, so the route must be
+// reported untyped — exactly as the non-slice server.Result[Status] already is.
+func isTypedPayload(ti *models.TypeInfo) bool {
+	if ti == nil {
+		return false
+	}
+	if ti.Name != "" {
+		return true
+	}
+	return ti.Shape != nil && ti.Shape.Kind == models.ShapeSlice &&
+		ti.Shape.Elem != nil && ti.Shape.Elem.Kind == models.ShapePrimitive
 }
 
 // updateStatsForRoute updates statistics based on route classification

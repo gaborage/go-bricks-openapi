@@ -3551,6 +3551,64 @@ func TestTypeInfoFromExprResultWrappers(t *testing.T) {
 		require.NotNil(t, ti)
 		assert.Equal(t, "User", ti.Name)
 	})
+	t.Run("result_slice_of_named_carries_element_and_shape", func(t *testing.T) {
+		ti := parseResult(t, "server.Result[[]User]")
+		require.NotNil(t, ti)
+		assert.Equal(t, "User", ti.Name, "Name stays the ELEMENT so the component still registers and is $ref'd")
+		assert.Equal(t, "test", ti.Package)
+		require.NotNil(t, ti.Shape)
+		assert.Equal(t, models.ShapeSlice, ti.Shape.Kind)
+		require.NotNil(t, ti.Shape.Elem)
+		assert.Equal(t, models.ShapeNamed, ti.Shape.Elem.Kind)
+		assert.Equal(t, "User", ti.Shape.Elem.Name)
+	})
+	t.Run("result_with_meta_slice_behaves_identically", func(t *testing.T) {
+		ti := parseResult(t, "server.ResultWithMeta[[]User]")
+		require.NotNil(t, ti)
+		assert.Equal(t, "User", ti.Name)
+		require.NotNil(t, ti.Shape)
+		assert.Equal(t, models.ShapeSlice, ti.Shape.Kind)
+	})
+	t.Run("result_slice_of_primitive_has_no_component_name", func(t *testing.T) {
+		ti := parseResult(t, "server.Result[[]string]")
+		require.NotNil(t, ti)
+		assert.Empty(t, ti.Name, "a primitive element names no component — a $ref would dangle")
+		require.NotNil(t, ti.Shape)
+		require.NotNil(t, ti.Shape.Elem)
+		assert.Equal(t, models.ShapePrimitive, ti.Shape.Elem.Kind)
+		assert.Equal(t, "string", ti.Shape.Elem.Name)
+	})
+	t.Run("result_slice_of_pointer_is_treated_as_slice_of_value", func(t *testing.T) {
+		ti := parseResult(t, "server.Result[[]*User]")
+		require.NotNil(t, ti)
+		assert.Equal(t, "User", ti.Name)
+		require.NotNil(t, ti.Shape)
+		require.NotNil(t, ti.Shape.Elem)
+		assert.Equal(t, models.ShapeNamed, ti.Shape.Elem.Kind, "the element pointer is shed, mirroring []*T struct fields")
+		assert.Equal(t, "User", ti.Shape.Elem.Name)
+	})
+	t.Run("result_slice_of_qualified_named", func(t *testing.T) {
+		ti := parseResult(t, "server.Result[[]types.Item]")
+		require.NotNil(t, ti)
+		assert.Equal(t, "Item", ti.Name)
+		assert.Equal(t, "types", ti.Package)
+		require.NotNil(t, ti.Shape)
+		assert.Equal(t, models.ShapeSlice, ti.Shape.Kind)
+	})
+	t.Run("result_slice_of_framework_type_is_nil", func(t *testing.T) {
+		assert.Nil(t, parseResult(t, "server.Result[[]server.IAPIError]"), "a framework element is not a payload")
+	})
+	t.Run("result_nested_slice_is_nil", func(t *testing.T) {
+		assert.Nil(t, parseResult(t, "server.Result[[][]User]"), "nested slices are out of scope")
+	})
+	t.Run("result_map_is_nil", func(t *testing.T) {
+		assert.Nil(t, parseResult(t, "server.Result[map[string]User]"), "maps are out of scope")
+	})
+	t.Run("non_slice_result_carries_no_shape", func(t *testing.T) {
+		ti := parseResult(t, "server.Result[User]")
+		require.NotNil(t, ti)
+		assert.Nil(t, ti.Shape, "a scalar payload must stay shapeless so the $ref path is unchanged")
+	})
 	t.Run("no_content_result_marks_no_body", func(t *testing.T) {
 		ti := parseResult(t, "server.NoContentResult")
 		require.NotNil(t, ti)
@@ -3990,6 +4048,48 @@ func (m *Module) list(ctx server.HandlerContext) (server.Result[UserList], serve
 
 	assert.NotContains(t, a.typeRegistry, "UserList", "the named slice itself must not be registered")
 	assert.NotContains(t, a.typeRegistry, "User", "the element type is dropped along with the cleared response")
+}
+
+// TestNamedScalarSliceElementClearsNameKeepsShape pins the state the doctor's
+// typed-route gate reads for `server.Result[[]Status]` where Status is a local
+// named scalar: the element resolves to no component, so Name is cleared (with
+// the same warning the non-slice server.Result[Status] produces), while the
+// slice Shape survives with a ShapeNamed element. A payload in that state is
+// documented as items: {type: object} — an untyped fallback in an array
+// wrapper — which is why isTypedPayload requires a PRIMITIVE element.
+func TestNamedScalarSliceElementClearsNameKeepsShape(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Status string
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/statuses", m.list)
+}
+func (m *Module) list(ctx server.HandlerContext) (server.Result[[]Status], server.IAPIError) { return server.OK([]Status{}), nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	route := routeForPath(t, routes, "GET /statuses")
+	require.NotNil(t, route.Response)
+	assert.Empty(t, route.Response.Name, "a named scalar element resolves to no component, so the name is cleared")
+	require.NotNil(t, route.Response.Shape, "the slice shape survives the cleared name")
+	assert.Equal(t, models.ShapeSlice, route.Response.Shape.Kind)
+	require.NotNil(t, route.Response.Shape.Elem)
+	assert.Equal(t, models.ShapeNamed, route.Response.Shape.Elem.Kind)
+
+	found := false
+	for _, w := range a.Warnings(t.Context()) {
+		if strings.Contains(w, "Status") {
+			found = true
+		}
+	}
+	assert.True(t, found, "the named non-struct warning must still fire for a slice element")
+	assert.NotContains(t, a.typeRegistry, "Status")
 }
 
 // TestAliasChainDepthCapped verifies a chain of named indirections deeper than

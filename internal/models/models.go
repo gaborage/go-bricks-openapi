@@ -73,6 +73,18 @@ type TypeInfo struct {
 	// no component schema is generated; later passes use this flag to emit a 204
 	// response instead of a 200 with a body.
 	NoContent bool
+	// Shape is set only when the payload is a CONTAINER around the type this
+	// TypeInfo otherwise describes — today just a slice, from a slice type
+	// argument to server.Result[T] / server.ResultWithMeta[T] ([]Item, []string).
+	// Kind is then ShapeSlice and Elem is the element's shape, using the same
+	// vocabulary FieldInfo.Shape uses for struct fields.
+	//
+	// Name keeps describing the ELEMENT (empty for a primitive element), so type
+	// registration, schemaName and referencedSchemaNames need no slice awareness:
+	// the component emitted for []Item is Item, and the payload schema wraps a
+	// $ref to it in an array. Nil for every non-container payload, which is what
+	// keeps the plain $ref path unchanged.
+	Shape *TypeShape
 }
 
 // FieldInfo represents a struct field with validation metadata
