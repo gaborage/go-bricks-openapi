@@ -9,9 +9,26 @@ GOVULNCHECK_VERSION := v1.1.4
 GOSEC_VERSION := v2.26.1
 
 # Pinned golangci-lint version — must stay in lockstep with ci.yml's
-# golangci-lint-action `version:` (.github/workflows/ci.yml:219). Bumping one
-# without the other lets the local and CI lint gates silently diverge.
+# golangci-lint-action `version:` key. Bumping one without the other lets the
+# local and CI lint gates silently diverge.
 GOLANGCI_VERSION := v2.12.2
+
+# Directory the pinned golangci-lint is installed into, resolved once the way
+# `go install` resolves it: GOBIN when set, otherwise the first NON-EMPTY
+# GOPATH entry plus /bin (GOPATH may be a colon-separated list, and Go skips
+# empty entries). The entry is selected in the shell, not with Make's word
+# functions, so a path containing spaces survives. Both GOLANGCI and dev-deps'
+# GOBIN come from this single variable so they can never name different
+# directories. Unix-only: the ':' separator and the shell recipes below assume
+# a POSIX environment; CI lints Windows through golangci-lint-action directly
+# and never invokes `make lint`.
+GOBIN_DIR := $(or $(shell go env GOBIN),$(shell go env GOPATH | awk -F: '{ for (i = 1; i <= NF; i++) if ($$i != "") { print $$i; exit } }')/bin)
+
+# Explicit path to the pinned golangci-lint binary. `lint` and `dev-deps` both
+# resolve the binary through this one variable (dev-deps installs into
+# GOBIN_DIR), so a differently-versioned golangci-lint earlier on PATH — e.g. a
+# Homebrew install — can no longer shadow the pin silently.
+GOLANGCI := $(GOBIN_DIR)/golangci-lint
 
 # Pinned redocly CLI version for the structural-validation gate. Pinned (not
 # @latest) so an upstream release cannot silently change the gate or break CI.
@@ -43,8 +60,19 @@ test-coverage: ## Run tests with coverage
 	go test -race -coverprofile=coverage.out $(TEST_PACKAGES)
 	go tool cover -html=coverage.out -o coverage.html
 
-lint: ## Run golangci-lint
-	golangci-lint run
+lint: ## Run the pinned golangci-lint (fails if missing or version-mismatched; see GOLANGCI_VERSION)
+	@test -x "$(GOLANGCI)" || { \
+		echo "golangci-lint not found at $(GOLANGCI)."; \
+		echo "Run 'make dev-deps' to install the pinned version ($(GOLANGCI_VERSION))."; \
+		exit 1; \
+	}
+	@found_version="$$("$(GOLANGCI)" --version)"; \
+	echo "$$found_version" | grep -q "version $(patsubst v%,%,$(GOLANGCI_VERSION)) " || { \
+		echo "golangci-lint version mismatch: expected $(GOLANGCI_VERSION), found: $$found_version"; \
+		echo "Run 'make dev-deps' to install the pinned version."; \
+		exit 1; \
+	}
+	"$(GOLANGCI)" run
 
 fmt: ## Format Go code
 	go fmt ./...
@@ -99,7 +127,7 @@ sec: ## Run gosec security scanner (excludes testdata fixture modules, like CI)
 
 # Development helpers
 dev-deps: ## Install development dependencies
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
+	GOBIN="$(GOBIN_DIR)" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 # Release helpers
 release: ## Cut a signed release tag (usage: make release VERSION=v0.2.0). Run AFTER merging the release-please PR.
