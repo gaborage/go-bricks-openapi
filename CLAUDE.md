@@ -53,7 +53,7 @@ Token rules:
 - `fmt` (`go fmt ./...`) runs first, so the gate itself rewrites tracked `.go` files.
 - There is no formatting gate in CI — formatting is enforced only by running `make fmt` yourself.
 - `make check` needs `golangci-lint` already installed via `make dev-deps` (version pinned by `GOLANGCI_VERSION`).
-- On a fresh clone `make check` fails at the lint step with "command not found," not a lint finding.
+- > **SUPERSEDED (2026-09-06).** On a fresh clone `make check` used to fail at the lint step with "command not found," not a lint finding — `lint` ran a bare `golangci-lint`. `lint` now guards explicitly: with no binary at `$(GOLANGCI)` it fails with "golangci-lint not found at `<path>`. Run 'make dev-deps' to install the pinned version (`GOLANGCI_VERSION`)." before golangci-lint would ever run.
 - `gofmt -l ./cmd ./internal` has a permanent, unfixable hit at `internal/spectest/testdata/raw_add/api.go` (Go tooling skips `testdata/`).
 - Don't use `gofmt -l` as the formatting check because of that permanent hit.
 - `make validate-cli` depends on `build` and leaves a `go-bricks-openapi` binary in the repo root (gitignored).
@@ -128,8 +128,8 @@ Token rules:
 - `lll` is at 215, not the 120 default.
 - Test files are linted, but `gocyclo`, `gosec`, `goconst`, `dupl`, `errcheck`, and `govet` are excluded on `_test.go`.
 - The golangci-lint pin lives in two places that must move together: the `GOLANGCI_VERSION` variable in `Makefile`, and the `golangci-lint-action` `version:` key in `ci.yml`.
-- A newer local golangci-lint can pass where the pinned one fails: PR #55 was clean under a local v2.13.2 while CI's pinned v2.12.2 flagged `goconst` (its occurrence counting differs and includes `_test.go` files). Lint with the pinned version — `make dev-deps` installs it — before trusting a local `make lint`.
-- The mechanism: `make dev-deps` installs the pin into `$(go env GOPATH)/bin`, but `make lint` runs bare `golangci-lint`, so a Homebrew install earlier on `PATH` shadows it silently. Run `PATH="$HOME/go/bin:$PATH" make lint` (or check `golangci-lint --version` first).
+- A newer local golangci-lint can pass where the pinned one fails: PR #55 was clean under a local v2.13.2 while CI's pinned v2.12.2 flagged `goconst` (its occurrence counting differs and includes `_test.go` files) — the incident that motivated the guard below.
+- > **SUPERSEDED (2026-09-06).** `make lint` used to run bare `golangci-lint`, so a Homebrew install earlier on `PATH` shadowed the `make dev-deps` pin silently, and the workaround was `PATH="$HOME/go/bin:$PATH" make lint`. `lint` and `dev-deps` now both resolve the binary through the `GOLANGCI` Makefile variable, which lives under `GOBIN_DIR`: `go env GOBIN` when set, otherwise the first non-empty `GOPATH` entry plus `/bin`, the same rule `go install` uses (`dev-deps` installs there via `GOBIN`; both targets are Unix-only, CI lints Windows through the action directly), and `lint` fails loudly before running golangci-lint if the binary is missing, or if its `--version` output doesn't contain `version <N>` followed by a space (where `<N>` is `GOLANGCI_VERSION` with its leading `v` stripped) — naming `make dev-deps` and, on a mismatch, both the expected and found versions. PATH shadowing can no longer affect `make lint`; the old workaround is unnecessary.
 - `goconst` counts occurrences across the whole package including `_test.go` files (it only suppresses *findings* there), so moving a file into a package can push existing literals over the threshold with no new code — PR #58 hit 18 such findings from a pure relocation.
 
 ## Commits & releases
