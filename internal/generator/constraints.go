@@ -647,10 +647,13 @@ func isStringType(typeName string) bool {
 }
 
 // isIntegerType reports whether the Go type name is a signed/unsigned integer.
+// byte and rune are Go's predeclared aliases for uint8 and int32 and belong to
+// the same family; uintptr does not (a machine address is not an API value).
 func isIntegerType(typeName string) bool {
 	switch typeName {
 	case goTypeInt, goTypeInt8, goTypeInt16, goTypeInt32, goTypeInt64,
-		goTypeUint, goTypeUint8, goTypeUint16, goTypeUint32, goTypeUint64:
+		goTypeUint, goTypeUint8, goTypeUint16, goTypeUint32, goTypeUint64,
+		goTypeByte, goTypeRune:
 		return true
 	}
 	return false

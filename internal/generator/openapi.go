@@ -85,9 +85,13 @@ const (
 	goTypeTimeTime     = "time.Time"
 	goTypeTimeDuration = "time.Duration"
 	goTypeByte         = "byte"
+	goTypeRune         = "rune"
 	goTypeUint8        = "uint8"
-	goTypeUUID         = "uuid.UUID"
-	goTypeRawMessage   = "json.RawMessage"
+	// goTypeUintptr names a machine address: it has no API contract, so it
+	// stays the object fallback and the analyzer diagnoses the field instead.
+	goTypeUintptr    = "uintptr"
+	goTypeUUID       = "uuid.UUID"
+	goTypeRawMessage = "json.RawMessage"
 )
 
 // Response/parameter description text reused across operations.
@@ -871,23 +875,60 @@ func sliceResponsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
 	// array. Consult the same resolver setTypeAndFormat uses so a payload gets
 	// the schema its struct-field counterpart would get.
 	if wk, ok := wellKnownShape(*response.Shape); ok {
-		prop := &OpenAPIProperty{Type: wk.typ}
-		if wk.format != "" {
-			prop.Format = wk.format
-		}
+		prop := &OpenAPIProperty{}
+		setWellKnown(prop, wk)
 		return prop
 	}
 
 	items := &OpenAPIProperty{}
+	elem := response.Shape.Elem
 	switch {
+	case elem != nil && isWellKnownElem(*elem):
+		// A well-known element (time.Time, uuid.UUID, json.RawMessage) is a
+		// scalar schema, never a component: the $ref branch below would dangle,
+		// because generateSchemasFromTypes emits no component for it.
+		setElemTypeAndFormat(items, *elem)
 	case response.Name != "":
 		items.Ref = refPath(schemaName(response))
-	case response.Shape.Elem != nil:
-		setBasicTypeAndFormat(items, response.Shape.Elem.Name)
+	case elem != nil:
+		setElemTypeAndFormat(items, *elem)
 	default:
 		items.Type = typeObject
 	}
 	return &OpenAPIProperty{Type: typeArray, Items: items}
+}
+
+// isWellKnownElem reports whether a slice element resolves to a well-known
+// schema, so the items path can prefer that over an element $ref. One pointer
+// level is shed first, exactly as the struct-field path does: a *time.Time item
+// is the same date-time string as a time.Time item.
+func isWellKnownElem(elem models.TypeShape) bool {
+	_, ok := wellKnownShape(shapeAfterPointer(elem))
+	return ok
+}
+
+// setElemTypeAndFormat types a slice ELEMENT for an items schema. It consults
+// the well-known resolver first, exactly as the struct-field path does, so a
+// [][]byte payload's items are base64 strings rather than the object fallback
+// the bare leaf-name mapping would pick for a nameless container shape. One
+// pointer level is shed first (see isWellKnownElem): a *T item documents as T,
+// since JSON has no pointer.
+func setElemTypeAndFormat(prop *OpenAPIProperty, elem models.TypeShape) {
+	s := shapeAfterPointer(elem)
+	if wk, ok := wellKnownShape(s); ok {
+		setWellKnown(prop, wk)
+		return
+	}
+	setBasicTypeAndFormat(prop, s.Name)
+}
+
+// setWellKnown stamps a resolved well-known type onto prop. The format is
+// written only when the entry has one (json.RawMessage is a bare object).
+func setWellKnown(prop *OpenAPIProperty, wk wellKnownType) {
+	prop.Type = wk.typ
+	if wk.format != "" {
+		prop.Format = wk.format
+	}
 }
 
 // getOperationID generates an operation ID for a route
@@ -1558,10 +1599,7 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, shape models.
 	// Well-known types first: []byte must win over the generic []T array branch,
 	// and time.Time/uuid.UUID over the qualified-type object fallback.
 	if wk, ok := wellKnownShape(s); ok {
-		prop.Type = wk.typ
-		if wk.format != "" {
-			prop.Format = wk.format
-		}
+		setWellKnown(prop, wk)
 		return
 	}
 
@@ -1598,10 +1636,13 @@ func setBasicTypeAndFormat(prop *OpenAPIProperty, name string) {
 	switch name {
 	case goTypeString:
 		prop.Type = typeString
-	case goTypeInt, goTypeInt8, goTypeInt16, goTypeInt32:
+	// rune is Go's predeclared alias for int32.
+	case goTypeInt, goTypeInt8, goTypeInt16, goTypeInt32, goTypeRune:
 		prop.Type = typeInteger
 		prop.Format = formatInt32
-	case goTypeUint, goTypeUint8, goTypeUint16, goTypeUint32:
+	// byte is Go's predeclared alias for uint8. A bare byte reaches here; a
+	// []byte is intercepted upstream by wellKnownShape as a base64 string.
+	case goTypeUint, goTypeUint8, goTypeUint16, goTypeUint32, goTypeByte:
 		prop.Type = typeInteger
 		prop.Format = formatInt32
 		prop.Minimum = floatPtr(0) // unsigned: never negative

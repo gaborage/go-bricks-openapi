@@ -782,3 +782,12 @@ func TestParseNumeric(t *testing.T) {
 		})
 	}
 }
+
+// TestIsIntegerTypePredeclaredAliases locks the constraint module's copy of the
+// integer set on Go's predeclared aliases (byte = uint8, rune = int32). The copy
+// is deliberate — see CLAUDE.md; both copies must accept the same names.
+func TestIsIntegerTypePredeclaredAliases(t *testing.T) {
+	assert.True(t, isIntegerType(goTypeByte), "byte is uint8")
+	assert.True(t, isIntegerType(goTypeRune), "rune is int32")
+	assert.False(t, isIntegerType(goTypeUintptr), "uintptr is a machine address, not an API value")
+}

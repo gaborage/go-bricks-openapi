@@ -55,3 +55,31 @@ func TestIsNumericType(t *testing.T) {
 		})
 	}
 }
+
+// TestIsIntegerTypePredeclaredAliases locks Go's predeclared integer aliases
+// into the integer set: byte is uint8 and rune is int32, so a named type over
+// either must classify as `integer` rather than falling through to `object`.
+// uintptr stays out — a machine address is not an API value (see the diagnostic).
+func TestIsIntegerTypePredeclaredAliases(t *testing.T) {
+	tests := []struct {
+		typeName string
+		expected bool
+	}{
+		{"byte", true},
+		{"rune", true},
+		{"uintptr", false},
+		{"complex64", false},
+		{"error", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.typeName, func(t *testing.T) {
+			if got := isIntegerType(tt.typeName); got != tt.expected {
+				t.Errorf("isIntegerType(%q): expected %v, got %v", tt.typeName, tt.expected, got)
+			}
+			if got := isNumericType(tt.typeName); got != tt.expected {
+				t.Errorf("isNumericType(%q): expected %v, got %v", tt.typeName, tt.expected, got)
+			}
+		})
+	}
+}
