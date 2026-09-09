@@ -717,6 +717,7 @@ func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, str
 			rootRegistrar: rootRegistrar,
 			moduleName:    moduleName,
 			serverAliases: serverAliases,
+			signature:     funcDecl.Type,
 		})...)
 	}
 
@@ -735,6 +736,7 @@ func (a *ProjectAnalyzer) extractRoutesFromFuncBody(body *ast.BlockStmt) []model
 // grouped so the walk entry point keeps a sane arity (Sonar S107).
 type walkSetup struct {
 	astFile       *ast.File
+	signature     *ast.FuncType
 	filePath      string
 	structName    string
 	recvVar       string
@@ -756,15 +758,16 @@ func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(body *ast.BlockSt
 		recvVar:       setup.recvVar,
 		moduleName:    setup.moduleName,
 		serverAliases: setup.serverAliases,
+		signature:     setup.signature,
 		// Seed the recursion stack with the entry method so a helper that calls
 		// back into RegisterRoutes cannot re-walk it (cycle guard for the root).
 		stack: map[string]bool{walkStackKey(setup.filePath, setup.structName, moduleMethodRegisterRoutes): true},
 	}
 	// The method's own registrar param is a known registrar with no prefix;
 	// presence in the prefix map is what fail-loud delegation checks key on.
-	seed := map[string]string{}
+	seed := prefixMap{}
 	if setup.rootRegistrar != "" {
-		seed[setup.rootRegistrar] = ""
+		seed[setup.rootRegistrar] = registrarPrefix{resolved: true}
 	}
 	w.walkBody(body, seed)
 	return w.routes
@@ -788,7 +791,11 @@ type routeWalker struct {
 	recvVar       string // receiver var name of the walked method; "" if none
 	moduleName    string // owning go-bricks module name, stamped on routes at build time
 	serverAliases map[string]struct{}
-	stack         map[string]bool // "<struct>.<method>" keys currently on the walk stack (cycle guard)
+	// signature is the walked method's own function type; its parameters and
+	// named results bind names for the whole body and so must shadow
+	// package-level constants of the same name.
+	signature *ast.FuncType
+	stack     map[string]bool // "<struct>.<method>" keys currently on the walk stack (cycle guard)
 	// delegates memoizes per-field delegate resolution for this walk: the
 	// struct/package/alias lookup would otherwise rerun on every matching
 	// call node (nil entry = resolution failed).
@@ -805,11 +812,12 @@ type routeWalker struct {
 // r.Group(prefix) prefixes applied) and recurses into same-receiver helpers.
 // seed carries registrar->prefix bindings inherited from a caller (so a helper
 // invoked with a grouped registrar inherits that group's prefix).
-func (w *routeWalker) walkBody(body *ast.BlockStmt, seed map[string]string) {
+func (w *routeWalker) walkBody(body *ast.BlockStmt, seed prefixMap) {
 	if body == nil {
 		return
 	}
-	prefixes := w.collectGroupPrefixes(body)
+	outer := funcTypeBindings(w.signature, w.recvVar, body.Pos())
+	prefixes := w.collectGroupPrefixes(body, outer)
 	for reg, prefix := range seed {
 		if _, ok := prefixes[reg]; !ok {
 			prefixes[reg] = prefix
@@ -821,63 +829,108 @@ func (w *routeWalker) walkBody(body *ast.BlockStmt, seed map[string]string) {
 	for name := range collectLocalNames(body) {
 		w.localNames[name] = true
 	}
-	ast.Inspect(body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+	walkScoped(body, outer, func(n ast.Node, scopes constScopes) {
+		if call, ok := n.(*ast.CallExpr); ok {
+			w.visitCall(call, prefixes, scopes)
 		}
-		if route := w.routeFromCall(call, prefixes); route != nil {
-			w.routes = append(w.routes, *route)
-			return true
-		}
-		if route := w.routeFromAddCall(call, prefixes); route != nil {
-			w.routes = append(w.routes, *route)
-			return true
-		}
-		w.maybeRecurseHelper(call, prefixes)
-		return true
 	})
 }
 
+// visitCall dispatches one call node to the route builders, falling through to
+// helper recursion when the call is not itself a route registration.
+func (w *routeWalker) visitCall(call *ast.CallExpr, prefixes prefixMap, scopes constScopes) {
+	if route := w.routeFromCall(call, prefixes, scopes); route != nil {
+		w.routes = append(w.routes, *route)
+		return
+	}
+	if route := w.routeFromAddCall(call, prefixes, scopes); route != nil {
+		w.routes = append(w.routes, *route)
+		return
+	}
+	w.maybeRecurseHelper(call, prefixes)
+}
+
+// registrarPrefix is a route registrar's accumulated group path prefix.
+// resolved is false when the registrar is a group whose own prefix argument (or
+// that of an ancestor group) could not be reduced to a string: routes
+// registered on it are Unresolved routes, because emitting them without the
+// prefix would put a silently wrong path in the document.
+type registrarPrefix struct {
+	path     string
+	resolved bool
+}
+
+// prefixMap binds each known registrar variable name to its group prefix.
+// Membership is the registrar discriminator throughout the walk.
+type prefixMap map[string]registrarPrefix
+
 // collectGroupPrefixes maps each registrar variable assigned from <reg>.Group(p)
 // to its accumulated path prefix. Nested groups resolve because Go requires the
-// parent registrar to be declared (and thus visited) before the child.
+// parent registrar to be declared (and thus visited) before the child. The
+// prefix argument is resolved through the same lexical constant chain as a
+// route path, so a group opened on a function-local constant keeps its prefix.
 //
 // Limitation: the map is keyed by identifier name across the whole body, so it
 // is not scope-aware. A registrar var name shadowed in different branches with
 // DIFFERENT prefixes (e.g. an `if` and `else` both doing `api := r.Group(...)`
 // with distinct paths) collapses to the last assignment. The idiomatic pattern
 // declares each group once at body scope, which resolves correctly; a fully
-// scope-aware walk is deferred until a real case requires it.
-func (w *routeWalker) collectGroupPrefixes(body *ast.BlockStmt) map[string]string {
-	prefixes := map[string]string{}
-	ast.Inspect(body, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
-			return true
+// scope-aware registrar walk is deferred until a real case requires it.
+func (w *routeWalker) collectGroupPrefixes(body *ast.BlockStmt, outer map[string]binding) prefixMap {
+	prefixes := prefixMap{}
+	walkScoped(body, outer, func(n ast.Node, scopes constScopes) {
+		if assign, ok := n.(*ast.AssignStmt); ok {
+			w.recordGroupPrefix(assign, prefixes, scopes)
 		}
-		lhs, ok := assign.Lhs[0].(*ast.Ident)
-		if !ok {
-			return true
-		}
-		call, ok := assign.Rhs[0].(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != groupMethodName || len(call.Args) < 1 {
-			return true
-		}
-		parent, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		if prefix, pok := w.a.extractPathFromArg(call.Args[0]); pok {
-			prefixes[lhs.Name] = prefixes[parent.Name] + prefix
-		}
-		return true
 	})
 	return prefixes
+}
+
+// recordGroupPrefix binds the registrar a `<lhs> = <parent>.Group(arg)`
+// assignment declares to its accumulated prefix. An unresolvable arg (or an
+// unresolved parent) still records the registrar — with resolved=false, so the
+// routes registered on it fail loudly instead of losing their prefix.
+func (w *routeWalker) recordGroupPrefix(assign *ast.AssignStmt, prefixes prefixMap, scopes constScopes) {
+	lhs, parent, arg, ok := groupCall(assign)
+	if !ok {
+		return
+	}
+	// An unknown parent is the method's own registrar param, whose prefix is
+	// empty and resolved (the seed carries it, but only after this pass).
+	inherited := registrarPrefix{resolved: true}
+	if known, exists := prefixes[parent]; exists {
+		inherited = known
+	}
+	value, resolved := w.a.resolvePathExpr(arg, scopes)
+	prefixes[lhs] = registrarPrefix{
+		path:     inherited.path + value,
+		resolved: inherited.resolved && resolved,
+	}
+}
+
+// groupCall narrows an assignment to `<lhs> = <parent>.Group(arg)`, returning
+// the registrar names it relates and the unresolved prefix argument.
+func groupCall(assign *ast.AssignStmt) (lhs, parent string, arg ast.Expr, ok bool) {
+	if len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+		return "", "", nil, false
+	}
+	lhsIdent, ok := assign.Lhs[0].(*ast.Ident)
+	if !ok {
+		return "", "", nil, false
+	}
+	call, ok := assign.Rhs[0].(*ast.CallExpr)
+	if !ok {
+		return "", "", nil, false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != groupMethodName || len(call.Args) < 1 {
+		return "", "", nil, false
+	}
+	parentIdent, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return "", "", nil, false
+	}
+	return lhsIdent.Name, parentIdent.Name, call.Args[0], true
 }
 
 // collectLocalNames returns the set of names locally declared anywhere in
@@ -940,22 +993,23 @@ func addVarNames(names map[string]bool, stmt *ast.GenDecl) {
 
 // routeFromCall builds a route from a server.METHOD(...) call, or nil if the call
 // is not a route registration. Unresolvable paths drop the route with a warning.
-func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes map[string]string) *models.Route {
+func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes prefixMap, scopes constScopes) *models.Route {
 	shape, ok := w.a.validateServerCall(call, w.serverAliases)
 	if !ok {
 		return nil
 	}
 
-	rawPath, resolved := w.a.extractPathFromArg(call.Args[shape.pathIdx])
+	rawPath, resolved := w.a.resolvePathExpr(call.Args[shape.pathIdx], scopes)
 	if !resolved {
-		w.a.addWarningf("skipping a server.%s route: its path argument could not be resolved to a literal string", shape.method)
+		w.a.addWarningf(unresolvedRoutePathWarning, "server."+shape.method)
 		return nil
 	}
 
 	// Prepend the group prefix bound to the registrar argument (Args[1]).
-	prefix := ""
-	if reg, ok := call.Args[1].(*ast.Ident); ok {
-		prefix = prefixes[reg.Name]
+	prefix, recv, prefixOK := registrarPrefixFor(call.Args[1], prefixes)
+	if !prefixOK {
+		w.a.addWarningf(unresolvedGroupPrefixWarning, "server."+shape.method, recv)
+		return nil
 	}
 
 	route := &models.Route{
@@ -986,20 +1040,37 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes map[string]stri
 // both a prefix-less root registrar and an unrelated .Add on a map/slice/other
 // var, so only membership tells them apart). recv is the receiver var name, used
 // for warning text on a recognized-but-malformed registrar route.
-func addCallPrefix(call *ast.CallExpr, prefixes map[string]string) (prefix, recv string, ok bool) {
+func addCallPrefix(call *ast.CallExpr, prefixes prefixMap) (prefix registrarPrefix, recv string, ok bool) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || sel.Sel.Name != addMethodName {
-		return "", "", false
+		return registrarPrefix{}, "", false
 	}
 	ident, ok := sel.X.(*ast.Ident)
 	if !ok {
-		return "", "", false
+		return registrarPrefix{}, "", false
 	}
 	prefix, ok = prefixes[ident.Name]
 	if !ok {
-		return "", "", false
+		return registrarPrefix{}, "", false
 	}
 	return prefix, ident.Name, true
+}
+
+// registrarPrefixFor resolves a route registration's registrar argument to the
+// group prefix to prepend. ok is false when the argument names a group whose
+// own prefix is unresolved: the route must be dropped as an Unresolved route
+// rather than emitted at a prefix-less path. A non-identifier argument carries
+// no prefix and is not a failure.
+func registrarPrefixFor(arg ast.Expr, prefixes prefixMap) (prefix, recv string, ok bool) {
+	ident, isIdent := arg.(*ast.Ident)
+	if !isIdent {
+		return "", "", true
+	}
+	known, exists := prefixes[ident.Name]
+	if !exists {
+		return "", ident.Name, true
+	}
+	return known.path, ident.Name, known.resolved
 }
 
 // routeFromAddCall builds a bare route from a <registrar>.Add(method, path,
@@ -1008,8 +1079,8 @@ func addCallPrefix(call *ast.CallExpr, prefixes map[string]string) (prefix, recv
 // request/response models (its variadic is ...MiddlewareFunc, not RouteOption),
 // so the emitted route has nil Request/Response — a bare route, matching what
 // the framework records in its RouteDescriptor at runtime.
-func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, prefixes map[string]string) *models.Route {
-	prefix, recv, ok := addCallPrefix(call, prefixes)
+func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, prefixes prefixMap, scopes constScopes) *models.Route {
+	group, recv, ok := addCallPrefix(call, prefixes)
 	if !ok {
 		return nil
 	}
@@ -1023,16 +1094,20 @@ func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, prefixes map[string]s
 		w.a.addWarningf("skipping a %s.Add route: its method argument is not a static HTTP method (string literal or http.MethodX constant)", recv)
 		return nil
 	}
-	rawPath, resolved := w.a.extractPathFromArg(call.Args[1])
+	rawPath, resolved := w.a.resolvePathExpr(call.Args[1], scopes)
 	if !resolved {
-		w.a.addWarningf("skipping a %s.Add route: its path argument could not be resolved to a literal string", recv)
+		w.a.addWarningf(unresolvedRoutePathWarning, recv+"."+addMethodName)
+		return nil
+	}
+	if !group.resolved {
+		w.a.addWarningf(unresolvedGroupPrefixWarning, recv+"."+addMethodName, recv)
 		return nil
 	}
 
 	route := &models.Route{
 		Method: strings.ToUpper(m),
 		Tags:   []string{},
-		Path:   normalizePath(prefix + rawPath),
+		Path:   normalizePath(group.path + rawPath),
 		Module: w.moduleName,
 	}
 	// Raw Add routes are schema-free: the framework records them with zero-valued
@@ -1054,7 +1129,7 @@ func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, prefixes map[string]s
 // sibling package). The RouteRegistrar-parameter requirement excludes
 // non-registration methods so their internal server.* calls are not mistaken
 // for routes. The struct-qualified stack guards against infinite recursion.
-func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes map[string]string) {
+func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes prefixMap) {
 	if w.astFile == nil {
 		return
 	}
@@ -1137,7 +1212,7 @@ func (w *routeWalker) delegateFor(fieldName string) (delegateContext, bool) {
 // (its routes are being dropped), others are ordinary method calls and stay
 // silent. A child walker carries the target's own file/struct/alias context so
 // handler signatures resolve against the right struct.
-func (w *routeWalker) recurseInto(call *ast.CallExpr, target delegateContext, fieldName, method string, prefixes map[string]string) {
+func (w *routeWalker) recurseInto(call *ast.CallExpr, target delegateContext, fieldName, method string, prefixes prefixMap) {
 	key := walkStackKey(target.filePath, target.structName, method)
 	if w.stack[key] {
 		return
@@ -1156,7 +1231,7 @@ func (w *routeWalker) recurseInto(call *ast.CallExpr, target delegateContext, fi
 	if _, ok := seed[paramName]; !ok && paramName != "" {
 		// The param is typed server.RouteRegistrar: it is a known registrar in
 		// the callee body even when the caller's argument carried no prefix.
-		seed[paramName] = ""
+		seed[paramName] = registrarPrefix{resolved: true}
 	}
 	dw := &routeWalker{
 		a:             w.a,
@@ -1166,6 +1241,7 @@ func (w *routeWalker) recurseInto(call *ast.CallExpr, target delegateContext, fi
 		recvVar:       receiverVarName(decl.Recv),
 		moduleName:    w.moduleName,
 		serverAliases: target.serverAliases,
+		signature:     decl.Type,
 		stack:         w.stack, // shared: cycles across delegation chains must terminate
 	}
 	w.stack[key] = true
@@ -1180,7 +1256,7 @@ func (w *routeWalker) recurseInto(call *ast.CallExpr, target delegateContext, fi
 // known registrar but cannot be followed is warned about (its registrations
 // are being dropped). Go builtins (len, append, panic) resolve to no
 // declaration and never receive a registrar, so they stay silent.
-func (w *routeWalker) recurseIntoPackageFunc(funcName string, call *ast.CallExpr, prefixes map[string]string) {
+func (w *routeWalker) recurseIntoPackageFunc(funcName string, call *ast.CallExpr, prefixes prefixMap) {
 	decl, declFile, declPath := w.a.findPackageFuncDecl(w.astFile, w.filePath, funcName)
 	if decl == nil {
 		w.warnIfRegistrarPassed(call, funcName, prefixes)
@@ -1205,7 +1281,7 @@ func (w *routeWalker) recurseIntoPackageFunc(funcName string, call *ast.CallExpr
 	if _, ok := seed[paramName]; !ok && paramName != "" {
 		// The param is typed server.RouteRegistrar: it is a known registrar in
 		// the callee body even when the caller's argument carried no prefix.
-		seed[paramName] = ""
+		seed[paramName] = registrarPrefix{resolved: true}
 	}
 	dw := &routeWalker{
 		a:             w.a,
@@ -1215,6 +1291,7 @@ func (w *routeWalker) recurseIntoPackageFunc(funcName string, call *ast.CallExpr
 		recvVar:       "",
 		moduleName:    w.moduleName,
 		serverAliases: calleeAliases, // callee's own file aliases, not the caller's
+		signature:     decl.Type,
 		stack:         w.stack,
 	}
 	w.stack[key] = true
@@ -1226,8 +1303,8 @@ func (w *routeWalker) recurseIntoPackageFunc(funcName string, call *ast.CallExpr
 // seedFromCall threads the group prefix bound to the call's registrar argument
 // into the callee's registrar parameter name (presence with an empty prefix
 // still counts — it marks the param as a known registrar in the callee).
-func (w *routeWalker) seedFromCall(call *ast.CallExpr, idx int, paramName string, prefixes map[string]string) map[string]string {
-	seed := map[string]string{}
+func (w *routeWalker) seedFromCall(call *ast.CallExpr, idx int, paramName string, prefixes prefixMap) prefixMap {
+	seed := prefixMap{}
 	if paramName != "" && idx < len(call.Args) {
 		if argIdent, ok := call.Args[idx].(*ast.Ident); ok {
 			if prefix, known := prefixes[argIdent.Name]; known {
@@ -1244,7 +1321,7 @@ func (w *routeWalker) seedFromCall(call *ast.CallExpr, idx int, paramName string
 // registrations are being dropped. target is the human-readable call
 // description, e.g. "m.handler.RegisterRoutes" or a bare "registerUserRoutes".
 // Calls without a registrar stay silent.
-func (w *routeWalker) warnIfRegistrarPassed(call *ast.CallExpr, target string, prefixes map[string]string) {
+func (w *routeWalker) warnIfRegistrarPassed(call *ast.CallExpr, target string, prefixes prefixMap) {
 	for _, arg := range call.Args {
 		ident, ok := arg.(*ast.Ident)
 		if !ok {
@@ -1713,34 +1790,67 @@ func (a *ProjectAnalyzer) extractCommentDescription(commentGroup *ast.CommentGro
 	return strings.Join(lines, " ")
 }
 
-// extractPathFromArg resolves a route path argument to a literal string. It
-// handles string literals, same-package string constants, and "+" concatenation
-// of resolvable operands. The bool result is false when the path could not be
-// fully resolved (an unknown identifier, a non-string expression, fmt.Sprintf,
-// etc.); the caller then drops the route rather than emitting a garbage path key.
+// unresolvedRoutePathWarning is the shared diagnostic for an Unresolved route:
+// a registration the walk found but whose path expression it could not reduce
+// to a string. The verb is the registration form ("server.GET", "r.Add").
+const unresolvedRoutePathWarning = "unresolved route: skipping the %s registration, whose path argument is not a string literal or a resolvable constant"
+
+// unresolvedGroupPrefixWarning is the diagnostic for a route registered on a
+// group whose own prefix could not be resolved. The route is dropped rather
+// than emitted at a prefix-less — and therefore wrong — path. The verbs are the
+// registration form and the group registrar's variable name.
+const unresolvedGroupPrefixWarning = "unresolved route: skipping the %s registration on registrar %q, whose group prefix is not a string literal or a resolvable constant"
+
+// extractPathFromArg resolves a route path argument with no enclosing lexical
+// scope, i.e. against package-level constants only. Callers inside a walked
+// function body use resolvePathExpr with the scope chain in effect.
 func (a *ProjectAnalyzer) extractPathFromArg(arg ast.Expr) (string, bool) {
+	return a.resolvePathExpr(arg, nil)
+}
+
+// resolvePathExpr resolves a route path expression to a string. It handles
+// string literals, string constants (looked up through the lexical scope chain
+// innermost-first, then the package-level constant map), parenthesized
+// expressions, and "+" concatenation folded recursively. The bool result is
+// false when any leaf fails to resolve (a `var`, a `:=` local, a qualified
+// pkg.Const, a call such as fmt.Sprintf); the caller then drops the route with
+// the unresolved-route warning rather than emitting a garbage path key.
+func (a *ProjectAnalyzer) resolvePathExpr(arg ast.Expr, scopes constScopes) (string, bool) {
 	switch expr := arg.(type) {
 	case *ast.BasicLit:
 		// Direct string literal.
 		if expr.Kind == token.STRING {
 			return unquoteLiteral(expr.Value), true
 		}
+	case *ast.ParenExpr:
+		return a.resolvePathExpr(expr.X, scopes)
 	case *ast.Ident:
-		// Same-package string constant.
-		if value, exists := a.constants[expr.Name]; exists {
-			return value, true
-		}
+		return a.lookupConst(expr.Name, scopes, expr.Pos())
 	case *ast.BinaryExpr:
 		// String concatenation: fold only when both operands resolve.
 		if expr.Op == token.ADD {
-			left, lok := a.extractPathFromArg(expr.X)
-			right, rok := a.extractPathFromArg(expr.Y)
+			left, lok := a.resolvePathExpr(expr.X, scopes)
+			right, rok := a.resolvePathExpr(expr.Y, scopes)
 			if lok && rok {
 				return left + right, true
 			}
 		}
 	}
 	return "", false
+}
+
+// lookupConst resolves a bare identifier used at position at to a string
+// constant. The innermost lexical binding visible at that position wins, and
+// the package-level map is consulted only when no local binding is visible: a
+// local declaration shadows a package-level constant of the same name even when
+// it carries no resolvable value (`const n = 42`, `var p = compute()`), so the
+// path is reported unresolved rather than silently taking the outer value.
+func (a *ProjectAnalyzer) lookupConst(name string, scopes constScopes, at token.Pos) (string, bool) {
+	if local, found := scopes.resolve(name, at); found {
+		return local.value, local.ok
+	}
+	value, ok := a.constants[name]
+	return value, ok
 }
 
 // normalizePath converts an Echo-style route path into OpenAPI 3.0 path
@@ -1791,29 +1901,15 @@ func (a *ProjectAnalyzer) extractConstants(astFile *ast.File) {
 	}
 }
 
-// processConstSpec processes a constant spec to extract constant values
+// processConstSpec processes a constant spec to extract constant values into
+// the package-level map, the outermost scope of route path resolution.
 func (a *ProjectAnalyzer) processConstSpec(spec ast.Spec) {
-	valueSpec, ok := spec.(*ast.ValueSpec)
-	if !ok {
-		return
-	}
-
-	// Extract const name and value
-	for i, name := range valueSpec.Names {
-		if i < len(valueSpec.Values) {
-			if value := a.extractStringFromExpr(valueSpec.Values[i]); value != "" {
-				a.constants[name.Name] = value
-			}
-		}
-	}
+	collectConstStrings(spec, a.constants)
 }
 
 // extractStringFromExpr extracts string value from an expression
 func (a *ProjectAnalyzer) extractStringFromExpr(expr ast.Expr) string {
-	if lit, ok := expr.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-		return unquoteLiteral(lit.Value)
-	}
-	return ""
+	return stringLiteralValue(expr)
 }
 
 // extractPackageDescription extracts description from package-level comments

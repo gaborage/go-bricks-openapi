@@ -20,6 +20,14 @@ _Avoid_: constraint list, constraint pairs
 One reading of a project's source that every command consumes: the discovered modules and routes, their counts and typed/untyped classification, every diagnostic the reading raised, the go-bricks dependency status, and whether any of that warned. A Survey is data — it prints nothing and writes nothing.
 _Avoid_: analysis run, pipeline, report, audit
 
+**Unresolved route**:
+A route whose registration the Survey found but whose path expression it could not reduce to a string — a function-local or concatenated constant, a qualified constant from another package, a call result. Distinct from an Untyped route, which has a path but no typed handler. An Unresolved route is a diagnostic and is counted on its own, never folded into the typed/untyped ratio.
+_Avoid_: dropped route, skipped route, missing route
+
+**Directive**:
+An `//openapi:<name>` comment attached to a route registration that overrides or supplements what the Survey infers for that route — e.g. marking it public, naming its error statuses. One parser, one namespace; every directive shares the same placement rule.
+_Avoid_: annotation, pragma, marker comment
+
 **Pre-flight check**:
 A `doctor`-only check on the environment around the project — Go version, directory layout, `go.mod` presence — made before any Survey and able to stop it. Not part of the Survey.
 _Avoid_: diagnostic (reserved for what a Survey raises), health check
