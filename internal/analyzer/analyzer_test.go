@@ -6327,3 +6327,122 @@ func (m *Module) get(ctx server.HandlerContext) (server.Result[widgets.Widget], 
 	_, ok := project.Types["Widget"]
 	assert.True(t, ok, "a normal in-module subpackage type must resolve into the registry")
 }
+
+// TestResolveUnderlyingKindPredeclaredAliases covers named scalars over Go's
+// predeclared aliases: `type Flag byte` and `type Code rune` resolve to integer
+// instead of falling through to the object fallback. `type Ptr uintptr` stays
+// unclassified — a uintptr is a machine address, not an API value.
+func TestResolveUnderlyingKindPredeclaredAliases(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Flag byte
+type Code rune
+type Ptr uintptr
+type Packet struct {
+	Flag Flag ` + "`json:\"flag\"`" + `
+	Code Code ` + "`json:\"code\"`" + `
+	Ptr  Ptr  ` + "`json:\"ptr\"`" + `
+}
+func (m *Module) g(ctx server.HandlerContext) (server.Result[Packet], server.IAPIError) { return server.Created(Packet{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/m", m.g)
+}
+`
+	a, _ := analyzeSingleModule(t, src)
+	packet := a.typeRegistry["Packet"]
+	require.NotNil(t, packet)
+	kind := map[string]string{}
+	for i := range packet.Fields {
+		kind[packet.Fields[i].JSONName] = packet.Fields[i].UnderlyingKind
+	}
+	assert.Equal(t, "integer", kind["flag"], "type Flag byte -> integer")
+	assert.Equal(t, "integer", kind["code"], "type Code rune -> integer")
+	assert.Equal(t, "", kind["ptr"], "type Ptr uintptr stays unclassified")
+}
+
+// TestUintptrFieldWarns locks the uintptr diagnostic: the field is documented as
+// an object because a machine address carries no API contract, and the Survey reports
+// it once per source position so --strict surfaces it.
+func TestUintptrFieldWarns(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Packet struct {
+	Addr  uintptr   ` + "`json:\"addr\"`" + `
+	Addrs []uintptr ` + "`json:\"addrs\"`" + `
+	Size  int       ` + "`json:\"size\"`" + `
+}
+func (m *Module) g(ctx server.HandlerContext) (server.Result[Packet], server.IAPIError) { return server.Created(Packet{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/m", m.g)
+}
+`
+	a, _ := analyzeSingleModule(t, src)
+	var hits []string
+	for _, w := range a.Warnings(t.Context()) {
+		if strings.Contains(w, "uintptr") {
+			hits = append(hits, w)
+		}
+	}
+	require.Len(t, hits, 2, "one diagnostic per uintptr field: %v", a.Warnings(t.Context()))
+	assert.Contains(t, hits[0], "Addr")
+	assert.Contains(t, hits[1], "Addrs")
+	for _, w := range hits {
+		assert.Contains(t, w, "no meaningful API contract")
+	}
+}
+
+// TestUintptrFieldExcludedFromJSONDoesNotWarn locks the escape hatch README
+// documents: a uintptr field tagged json:"-" never reaches the spec, so it must
+// not fail --strict. The warning therefore has to be raised AFTER tag parsing.
+func TestUintptrFieldExcludedFromJSONDoesNotWarn(t *testing.T) {
+	srcFor := func(tag string) string {
+		return `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Packet struct {
+	Addr uintptr ` + "`" + tag + "`" + `
+}
+func (m *Module) g(ctx server.HandlerContext) (server.Result[Packet], server.IAPIError) { return server.Created(Packet{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/m", m.g)
+}
+`
+	}
+
+	countUintptrWarnings := func(t *testing.T, src string) int {
+		t.Helper()
+		a, _ := analyzeSingleModule(t, src)
+		n := 0
+		for _, w := range a.Warnings(t.Context()) {
+			if strings.Contains(w, "uintptr") {
+				n++
+			}
+		}
+		return n
+	}
+
+	assert.Equal(t, 1, countUintptrWarnings(t, srcFor(`json:"addr"`)), "an emitted uintptr field warns")
+	assert.Equal(t, 0, countUintptrWarnings(t, srcFor(`json:"-"`)), `json:"-" silences the diagnostic`)
+	// json:"-" with a param tag still reaches the spec as a parameter, so it warns.
+	assert.Equal(t, 1, countUintptrWarnings(t, srcFor(`json:"-" param:"addr"`)), "a param-carried field still warns")
+}

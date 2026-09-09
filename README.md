@@ -144,6 +144,14 @@ tool's own annotation — it has no runtime effect.
   carry no spec semantics.
 - Tenant enforcement is not derived from runtime config; the security scheme
   reflects static analysis of route registration only.
+- A `uintptr` field is deliberately not typed: `encoding/json` does marshal it
+  as a number, but a machine address carries no meaningful API contract. It is
+  documented as an untyped object and reported as a warning (so `--strict`
+  fails on it). Use a sized integer type, or exclude the field with `json:"-"`,
+  which also silences the warning. The diagnostic only covers fields whose type
+  bottoms out in the builtin `uintptr` (including `[]uintptr`); a named wrapper
+  (`type Addr uintptr`) or a map value (`map[string]uintptr`) still emits
+  `object` silently.
 
 ## Development
 
