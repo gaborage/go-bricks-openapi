@@ -5989,7 +5989,7 @@ func TestRawAddUnresolvedPathSkipped(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, project.Modules, 1)
 	assert.Empty(t, project.Modules[0].Routes)
-	require.True(t, containsRawAddSubstr(a.Warnings(t.Context()), "r.Add route: its path argument could not be resolved"),
+	require.True(t, containsRawAddSubstr(a.Warnings(t.Context()), "unresolved route: skipping the r.Add registration"),
 		"expected an unresolved-path warning, got: %v", a.Warnings(t.Context()))
 }
 

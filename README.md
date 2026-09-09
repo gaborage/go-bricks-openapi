@@ -144,6 +144,18 @@ tool's own annotation — it has no runtime effect.
   carry no spec semantics.
 - Tenant enforcement is not derived from runtime config; the security scheme
   reflects static analysis of route registration only.
+- A route path built from a `var` (including a `:=` local) is an Unresolved
+  route: only `const` declarations resolve. The route is dropped from the spec
+  with a warning.
+- A route path built from a qualified constant in another package
+  (`paths.Widgets`) is likewise an Unresolved route — only same-package
+  constants, at package level or in any enclosing lexical block, resolve.
+- A constant is read only from a string literal: one whose own value is a `+`
+  expression, or an implicit repetition inside a `const (...)` group, does not
+  resolve, and a route path using it is an Unresolved route.
+- A route registered on a `Group(...)` whose prefix argument is itself
+  unresolvable is an Unresolved route too — it is dropped rather than emitted
+  at a path missing its prefix.
 
 ## Development
 
