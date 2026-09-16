@@ -12,8 +12,13 @@ const (
 	// Go primitive type names referenced for type discrimination
 	goTypeInt64 = "int64"
 	goTypeByte  = "byte"
+	goTypeRune  = "rune"
 	goTypeUint8 = "uint8"
 	goTypeBool  = "bool"
+	// goTypeUintptr is deliberately NOT an integer: encoding/json marshals it as
+	// a number, but it names a machine address with no meaningful API contract,
+	// so a field of this type is documented as an object and diagnosed instead.
+	goTypeUintptr = "uintptr"
 	// unknownTypeName is the name the retired type-string renderer produced for
 	// an AST node it did not model; embeddedFields still reports it in warnings.
 	unknownTypeName = "unknown"
@@ -29,10 +34,15 @@ func isStringType(typeName string) bool {
 }
 
 // isIntegerType reports whether the Go type name is a signed/unsigned integer.
+// byte and rune are Go's predeclared aliases for uint8 and int32; they belong
+// here so a named type over either (type Flag byte) classifies as an integer
+// rather than falling through to the object fallback. uintptr is excluded on
+// purpose (see goTypeUintptr).
 func isIntegerType(typeName string) bool {
 	switch typeName {
 	case "int", "int8", "int16", "int32", goTypeInt64,
-		"uint", goTypeUint8, "uint16", "uint32", "uint64":
+		"uint", goTypeUint8, "uint16", "uint32", "uint64",
+		goTypeByte, goTypeRune:
 		return true
 	}
 	return false

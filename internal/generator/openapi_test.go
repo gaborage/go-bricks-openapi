@@ -3377,3 +3377,124 @@ func TestApplyExample(t *testing.T) {
 		assert.Nil(t, prop.Example)
 	})
 }
+
+// TestSetTypeAndFormatPredeclaredAliases locks Go's predeclared integer aliases:
+// byte is uint8 (integer/int32 with the unsigned minimum:0 pre-stamp and no
+// maximum) and rune is int32 (integer/int32, signed, so no minimum). uintptr has
+// no meaningful API contract and stays the object fallback.
+func TestSetTypeAndFormatPredeclaredAliases(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	byteProp := &OpenAPIProperty{}
+	gen.setTypeAndFormat(byteProp, prim(goTypeByte))
+	assert.Equal(t, typeInteger, byteProp.Type)
+	assert.Equal(t, formatInt32, byteProp.Format)
+	if assert.NotNil(t, byteProp.Minimum, "byte is unsigned: minimum:0") {
+		assert.Equal(t, 0.0, *byteProp.Minimum)
+	}
+	assert.Nil(t, byteProp.Maximum, "no unsigned type emits a maximum")
+
+	runeProp := &OpenAPIProperty{}
+	gen.setTypeAndFormat(runeProp, prim(goTypeRune))
+	assert.Equal(t, typeInteger, runeProp.Type)
+	assert.Equal(t, formatInt32, runeProp.Format)
+	assert.Nil(t, runeProp.Minimum, "rune is signed (int32)")
+
+	// []rune is an array of int32 — NOT a base64 string (only []byte is).
+	runes := &OpenAPIProperty{}
+	gen.setTypeAndFormat(runes, sliceOf(prim(goTypeRune)))
+	assert.Equal(t, typeArray, runes.Type)
+	require.NotNil(t, runes.Items)
+	assert.Equal(t, typeInteger, runes.Items.Type)
+	assert.Equal(t, formatInt32, runes.Items.Format)
+
+	ptr := &OpenAPIProperty{}
+	gen.setTypeAndFormat(ptr, prim(goTypeUintptr))
+	assert.Equal(t, typeObject, ptr.Type, "uintptr is a machine address, not an API value")
+	assert.Empty(t, ptr.Format)
+}
+
+// TestResponsePayloadSchemaNestedByteSliceItems locks the items path through the
+// well-known resolver: a [][]byte payload's items are base64 strings, the same
+// schema the top-level []byte field path produces.
+func TestResponsePayloadSchemaNestedByteSliceItems(t *testing.T) {
+	got := responsePayloadSchema(&models.TypeInfo{Shape: payloadSlice(sliceOf(prim(goTypeByte)))})
+	assert.Equal(t, typeArray, got.Type)
+	require.NotNil(t, got.Items)
+	assert.Equal(t, typeString, got.Items.Type)
+	assert.Equal(t, formatBinary, got.Items.Format)
+}
+
+// TestSetTypeAndFormatNestedByteSlice locks the field-path counterpart of the
+// payload case above: [][]byte is an array of base64 strings.
+func TestSetTypeAndFormatNestedByteSlice(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	prop := &OpenAPIProperty{}
+	gen.setTypeAndFormat(prop, sliceOf(sliceOf(prim(goTypeByte))))
+	assert.Equal(t, typeArray, prop.Type)
+	require.NotNil(t, prop.Items)
+	assert.Equal(t, typeString, prop.Items.Type)
+	assert.Equal(t, formatBinary, prop.Items.Format)
+}
+
+// TestResponsePayloadSchemaWellKnownElement locks the items path for a NAMED
+// well-known element: []time.Time / []uuid.UUID payloads are arrays of the
+// well-known scalar. The element $ref branch must not win here — no component
+// is emitted for a well-known type, so the reference would dangle and the
+// document would fail validation.
+func TestResponsePayloadSchemaWellKnownElement(t *testing.T) {
+	for _, tc := range []struct {
+		elem, wantType, wantFormat string
+	}{
+		{goTypeTimeTime, typeString, formatDateTime},
+		{goTypeUUID, typeString, formatUUID},
+		{goTypeRawMessage, typeObject, ""},
+	} {
+		got := responsePayloadSchema(&models.TypeInfo{
+			Name:  "Time", // the analyzer stamps the element's type name
+			Shape: payloadSlice(named(tc.elem)),
+		})
+		assert.Equal(t, typeArray, got.Type, tc.elem)
+		require.NotNil(t, got.Items, tc.elem)
+		assert.Empty(t, got.Items.Ref, "a well-known element is a scalar, not a $ref")
+		assert.Equal(t, tc.wantType, got.Items.Type, tc.elem)
+		assert.Equal(t, tc.wantFormat, got.Items.Format, tc.elem)
+	}
+}
+
+// TestResponsePayloadSchemaWellKnownPointerElement is the pointer arm of the
+// test above. slicePayloadTypeInfo already sheds a pointer element before
+// stamping the Shape, so this shape does not arise from the analyzer today; the
+// items path normalizes one pointer level anyway, exactly as the struct-field
+// path does, so a *T element can never fall through to a dangling $ref.
+func TestResponsePayloadSchemaWellKnownPointerElement(t *testing.T) {
+	for _, tc := range []struct {
+		elem, wantType, wantFormat string
+	}{
+		{goTypeTimeTime, typeString, formatDateTime},
+		{goTypeUUID, typeString, formatUUID},
+		{goTypeRawMessage, typeObject, ""},
+	} {
+		got := responsePayloadSchema(&models.TypeInfo{
+			Name:  "Time", // the analyzer stamps the element's type name
+			Shape: payloadSlice(ptrOf(named(tc.elem))),
+		})
+		assert.Equal(t, typeArray, got.Type, tc.elem)
+		require.NotNil(t, got.Items, tc.elem)
+		assert.Empty(t, got.Items.Ref, "a well-known element is a scalar, not a $ref")
+		assert.Equal(t, tc.wantType, got.Items.Type, tc.elem)
+		assert.Equal(t, tc.wantFormat, got.Items.Format, tc.elem)
+	}
+
+	// *[]byte sheds the pointer to the well-known slice shape, and a plain
+	// pointer-to-primitive element keeps its scalar mapping.
+	blob := responsePayloadSchema(&models.TypeInfo{Shape: payloadSlice(ptrOf(sliceOf(prim(goTypeByte))))})
+	require.NotNil(t, blob.Items)
+	assert.Equal(t, typeString, blob.Items.Type)
+	assert.Equal(t, formatBinary, blob.Items.Format)
+
+	nums := responsePayloadSchema(&models.TypeInfo{Shape: payloadSlice(ptrOf(prim(formatInt64)))})
+	require.NotNil(t, nums.Items)
+	assert.Equal(t, typeInteger, nums.Items.Type)
+	assert.Equal(t, formatInt64, nums.Items.Format)
+}

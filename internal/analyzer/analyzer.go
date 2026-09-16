@@ -129,6 +129,7 @@ type ProjectAnalyzer struct {
 	publicDirectives map[string]map[int]struct{}     // filename -> lines where a directive comment group ends
 	depthWarned      bool                            // once-latch: registration-depth cap already warned this run
 	tagWarned        map[string]struct{}             // dedupes malformed-struct-tag warnings by "file:line:col"
+	uintptrWarned    map[string]struct{}             // dedupes uintptr-field warnings by "file:line:col"
 }
 
 // New creates a new project analyzer
@@ -218,6 +219,7 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	a.usedNames = make(map[string]struct{})
 	a.depthWarned = false
 	a.tagWarned = nil
+	a.uintptrWarned = nil
 
 	// Discover project metadata from go.mod
 	a.discoverProjectMetadata(project)
@@ -3248,7 +3250,7 @@ func exportedPkgName(pkg string) string {
 // current registration depth, passed on to registerTypeAt so the field-ref cycle
 // (Cycle A) stays bounded.
 func (a *ProjectAnalyzer) registerFieldRefAt(f *models.FieldInfo, pkg string, astFile *ast.File, filePath string, depth int) {
-	if f.JSONName == jsonSkipValue && f.ParamType == "" {
+	if isJSONExcluded(f) {
 		return
 	}
 	if vName, isMap := shapeMapValueBase(f.Shape); isMap {
@@ -3263,6 +3265,12 @@ func (a *ProjectAnalyzer) registerFieldRefAt(f *models.FieldInfo, pkg string, as
 	}
 	// Not a struct: classify a named, non-struct scalar (Cents -> integer, etc.).
 	f.UnderlyingKind = a.resolveUnderlyingKind(shapeBaseName(f.Shape), astFile, filePath)
+}
+
+// isJSONExcluded reports whether a field never reaches the emitted document:
+// json:"-" with no param/query/header tag to carry it in as a parameter.
+func isJSONExcluded(f *models.FieldInfo) bool {
+	return f.JSONName == jsonSkipValue && f.ParamType == ""
 }
 
 // knownUnderlyingKinds maps qualified stdlib/library types with a non-struct
@@ -3708,7 +3716,37 @@ func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field) models.F
 		a.parseFieldTags(&fieldInfo, field.Tag)
 	}
 
+	// After tag parsing, so json:"-" (the documented escape hatch) silences it.
+	a.warnUintptrField(&fieldInfo, field)
+
 	return fieldInfo
+}
+
+// warnUintptrField reports a field whose type bottoms out in uintptr. Unlike
+// every other Go integer, uintptr names a machine address: it carries no API
+// contract, so the field is documented as an object rather than as a number and
+// this diagnostic says why. It feeds --strict like every other warning.
+// Deduped by source position so a struct reached from more than one route warns
+// once.
+func (a *ProjectAnalyzer) warnUintptrField(fieldInfo *models.FieldInfo, field *ast.Field) {
+	if field == nil || shapeBaseName(fieldInfo.Shape) != goTypeUintptr {
+		return
+	}
+	if isJSONExcluded(fieldInfo) {
+		return // json:"-" — the field never reaches the spec, so there is nothing to report
+	}
+	pos := a.fileSet.Position(field.Pos())
+	loc := fmt.Sprintf("%s:%d:%d", relToRoot(a.projectRoot, pos.Filename), pos.Line, pos.Column)
+	if a.uintptrWarned == nil {
+		a.uintptrWarned = make(map[string]struct{})
+	}
+	if _, seen := a.uintptrWarned[loc]; seen {
+		return
+	}
+	a.uintptrWarned[loc] = struct{}{}
+	a.addWarningf("field %s at %s is a uintptr, a machine address with no meaningful API contract "+
+		"— emitting an untyped schema "+
+		"(use a sized integer type, or exclude the field with json:\"-\")", fieldInfo.Name, loc)
 }
 
 // parseFieldTags parses struct tags and populates the FieldInfo
@@ -3741,7 +3779,7 @@ func (a *ProjectAnalyzer) parseFieldTags(fieldInfo *models.FieldInfo, tag *ast.B
 // (behavior keys on TypeShape.Name and on container kinds).
 func isBuiltinShapeName(name string) bool {
 	switch name {
-	case goTypeBool, goTypeByte, goTypeAny, "rune", "error", "uintptr", "complex64", "complex128":
+	case goTypeBool, goTypeByte, goTypeAny, goTypeRune, frameworkTypeError, goTypeUintptr, "complex64", "complex128":
 		return true
 	}
 	return isStringType(name) || isNumericType(name)
