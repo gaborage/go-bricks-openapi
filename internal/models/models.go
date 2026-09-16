@@ -65,6 +65,26 @@ type Route struct {
 	ErrorStatuses []int
 }
 
+// UnresolvedRoute is one route registration the analysis found but could not
+// reduce to a path — see CONTEXT.md, "Unresolved route". It is a diagnostic
+// record, counted on its own and never folded into the typed/untyped ratio;
+// the route itself never reaches the emitted document.
+type UnresolvedRoute struct {
+	// Form is the registration form as written, e.g. "server.GET" for a
+	// server verb or "api.Add" for a raw registration on a group.
+	Form string
+	// File is the source file the registration lives in, relative to the
+	// analyzed project root when that can be computed (absolute otherwise).
+	File string
+	// Line and Col are the 1-based source position of the registration call,
+	// rendered as file:line:col like every other located analyzer diagnostic.
+	Line int
+	Col  int
+	// Reason says what could not be resolved — the path argument itself, or
+	// the group prefix of the registrar it was registered on.
+	Reason string
+}
+
 // TypeInfo represents type metadata for requests and responses
 type TypeInfo struct {
 	Name    string
