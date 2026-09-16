@@ -55,6 +55,14 @@ type Route struct {
 	// documented as requiring no auth. (go-bricks itself has no per-route
 	// tenant opt-out API as of v0.45.)
 	Public bool
+	// ErrorStatuses are extra error status codes the operation can return,
+	// declared on the registration with an `//openapi:errors 404,409` comment
+	// Directive, deduplicated and sorted ascending by the analyzer so the
+	// stamped list is deterministic. The generator unions them with its unconditional 400/500
+	// baseline (plus the JOSE 401/415 additions), deduplicating silently; each
+	// added response reuses the route's error-envelope $ref and is described
+	// with the canonical HTTP status text.
+	ErrorStatuses []int
 }
 
 // TypeInfo represents type metadata for requests and responses

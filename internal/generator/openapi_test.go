@@ -3498,3 +3498,87 @@ func TestResponsePayloadSchemaWellKnownPointerElement(t *testing.T) {
 	assert.Equal(t, typeInteger, nums.Items.Type)
 	assert.Equal(t, formatInt64, nums.Items.Format)
 }
+
+// TestBuildResponsesDeclaredErrorStatuses verifies statuses declared with
+// //openapi:errors become responses that reuse the route's error envelope $ref
+// and carry the canonical HTTP status text as their description.
+func TestBuildResponsesDeclaredErrorStatuses(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	resps := gen.buildResponses(&models.Route{
+		Method:        "POST",
+		Path:          "/v1/users",
+		Response:      &models.TypeInfo{Name: "User"},
+		ErrorStatuses: []int{404, 409},
+	})
+
+	for code, want := range map[string]string{"404": "Not Found", "409": "Conflict"} {
+		require.Contains(t, resps, code, "declared error status must be emitted")
+		assert.Equal(t, want, resps[code].Description, "description must be the canonical HTTP status text")
+		require.Contains(t, resps[code].Content, mediaJSON)
+		assert.Equal(t, refPath("ErrorResponse"), resps[code].Content[mediaJSON].Schema.Ref,
+			"declared error responses reuse the route's error envelope")
+	}
+	assert.Contains(t, resps, "400", "the 400 baseline stays unconditional")
+	assert.Contains(t, resps, "500")
+}
+
+// TestBuildResponsesDeclaredErrorStatusesDedupe verifies declaring a baseline
+// code rewrites nothing: the 400/500 descriptions and content survive intact.
+func TestBuildResponsesDeclaredErrorStatusesDedupe(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	baseline := gen.buildResponses(&models.Route{Method: "GET", Path: "/v1/users"})
+	resps := gen.buildResponses(&models.Route{
+		Method:        "GET",
+		Path:          "/v1/users",
+		ErrorStatuses: []int{400, 500, 404, 404},
+	})
+
+	assert.Equal(t, baseline["400"].Description, resps["400"].Description, "a declared 400 must not rewrite the baseline")
+	assert.Equal(t, baseline["500"].Description, resps["500"].Description, "a declared 500 must not rewrite the baseline")
+	assert.Equal(t, "Not Found", resps["404"].Description, "a repeated code is emitted once")
+	assert.Len(t, resps, 4, "400, 500, 404 and the success response")
+}
+
+// TestBuildResponsesDeclaredErrorStatusesJOSE verifies the declared set unions
+// with the JOSE pre-trust catalog: 401/415 keep their JOSE descriptions and a
+// declared 403 joins them against the JOSE envelope.
+func TestBuildResponsesDeclaredErrorStatusesJOSE(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	resps := gen.buildResponses(&models.Route{
+		Method:        "POST",
+		Path:          "/v1/tokens",
+		Response:      &models.TypeInfo{Name: "TokenResponse", JOSE: true},
+		ErrorStatuses: []int{401, 403, 415},
+	})
+
+	assert.Contains(t, resps["401"].Description, "JOSE decrypt/verify failure", "the JOSE 401 must not be rewritten")
+	assert.Contains(t, resps["415"].Description, "plaintext request on a JOSE route", "the JOSE 415 must not be rewritten")
+	require.Contains(t, resps, "403")
+	assert.Equal(t, "Forbidden", resps["403"].Description)
+	assert.Equal(t, refPath("JOSEErrorEnvelope"), resps["403"].Content[mediaJSON].Schema.Ref,
+		"a declared error on a JOSE route uses the JOSE envelope")
+}
+
+// TestBuildResponsesDeclaredErrorStatusClashesWithSuccess verifies the success
+// response still wins a code collision — success is assigned last.
+func TestBuildResponsesDeclaredErrorStatusClashesWithSuccess(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	resps := gen.buildResponses(&models.Route{
+		Method:        "POST",
+		Path:          "/v1/users",
+		Response:      &models.TypeInfo{Name: "User"},
+		SuccessStatus: 409,
+		ErrorStatuses: []int{409},
+	})
+
+	assert.NotEqual(t, "Conflict", resps["409"].Description, "the documented success response wins a collision")
+	require.Contains(t, resps["409"].Content, mediaJSON)
+	assert.NotNil(t, resps["409"].Content[mediaJSON].Schema.Properties, "the success envelope survives")
+}
+
+// TestErrorStatusDescriptionFallback verifies a status net/http does not name
+// still yields a non-empty description (an empty one is an invalid document).
+func TestErrorStatusDescriptionFallback(t *testing.T) {
+	assert.Equal(t, "Not Found", errorStatusDescription(404))
+	assert.Equal(t, "HTTP 599", errorStatusDescription(599))
+}
