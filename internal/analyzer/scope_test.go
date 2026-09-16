@@ -540,3 +540,45 @@ func TestHelperInheritsCallerGroupPrefix(t *testing.T) {
 	assert.Equal(t, []string{"/api/admin/users", "/api/ping"}, got,
 		"a sub-group inside a helper must nest under the prefix its caller passed in")
 }
+
+// TestShadowIndex verifies the index answers "is this name locally declared
+// here" over the same block model constant resolution uses: a declaration
+// covers its own block from its position onward, and nothing outside it.
+func TestShadowIndex(t *testing.T) {
+	src := `package api
+
+func handle(http string) error {
+	if cond {
+		server := fake()
+		_ = server
+	}
+	x := 1
+	_ = x
+	return nil
+}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "api.go", src, parser.ParseComments)
+	require.NoError(t, err)
+	fn, ok := file.Decls[0].(*ast.FuncDecl)
+	require.True(t, ok)
+	idx := newShadowIndex(fn)
+
+	body := fn.Body
+	ifStmt, ok := body.List[0].(*ast.IfStmt)
+	require.True(t, ok)
+	assert.True(t, idx.shadows("http", body.Pos()), "a parameter shadows over the whole body")
+	assert.True(t, idx.shadows("server", ifStmt.Body.End()-1), "a block declaration shadows inside its block")
+	assert.False(t, idx.shadows("server", body.End()-1), "and nowhere outside it")
+	assert.False(t, idx.shadows("x", body.List[0].Pos()), "a declaration shadows nothing above itself")
+	assert.True(t, idx.shadows("x", body.End()-1), "and everything below it")
+	assert.False(t, idx.shadows("absent", body.Pos()), "an undeclared name is never shadowed")
+}
+
+// TestShadowIndexNoBody verifies a body-less declaration indexes to nothing and
+// the nil index answers every query false.
+func TestShadowIndexNoBody(t *testing.T) {
+	assert.Nil(t, newShadowIndex(&ast.FuncDecl{Name: ast.NewIdent("h")}))
+	assert.Nil(t, newShadowIndex(nil))
+	assert.False(t, shadowIndex(nil).shadows("server", token.NoPos))
+}

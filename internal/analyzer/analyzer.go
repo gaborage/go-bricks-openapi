@@ -1009,8 +1009,13 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes prefixMap, scop
 		Module: w.moduleName,
 	}
 	if shape.handlerIdx() < len(call.Args) {
-		route.HandlerName, route.Request, route.Response, route.SuccessStatus =
-			w.a.extractHandlerInfo(call.Args[shape.handlerIdx()], w.astFile, w.filePath, w.structName)
+		handlerName, handler := w.a.extractHandlerInfo(call.Args[shape.handlerIdx()], w.astFile, w.filePath, w.structName)
+		route.HandlerName = handlerName
+		route.Request, route.Response = handler.request, handler.response
+		route.SuccessStatus = handler.successStatus
+		// Inferred error statuses land first; applyRouteDirectives unions the
+		// declared ones on top.
+		route.ErrorStatuses = handler.errorStatuses
 	}
 	for i := shape.optsIdx(); i < len(call.Args); i++ {
 		w.a.extractRouteMetadata(call.Args[i], route, w.serverAliases)
@@ -1507,31 +1512,47 @@ func receiverVarName(recv *ast.FieldList) string {
 	return recv.List[0].Names[0].Name
 }
 
-// extractHandlerInfo extracts handler name and type information from a route
-// registration's handler argument. Returns handler name, request type,
-// response type, and constructor-derived success status.
+// handlerAnalysis is everything one handler declaration contributes to its
+// route: the request and response Shapes, the constructor-derived success
+// status, and the error statuses inferred from the constructors its body calls.
+type handlerAnalysis struct {
+	request       *models.TypeInfo
+	response      *models.TypeInfo
+	successStatus int
+	errorStatuses []int
+}
+
+// found reports whether the analysis came from a matched handler declaration.
+// A declaration carrying neither a request nor a response Shape is not treated
+// as the handler, so the search continues into the rest of the package.
+func (h handlerAnalysis) found() bool {
+	return h.request != nil || h.response != nil
+}
+
+// extractHandlerInfo extracts the handler name and its analysis from a route
+// registration's handler argument.
 func (a *ProjectAnalyzer) extractHandlerInfo(
 	handlerArg ast.Expr,
 	astFile *ast.File,
 	filePath string,
 	structName string,
-) (handlerName string, reqType, respType *models.TypeInfo, successStatus int) {
+) (handlerName string, handler handlerAnalysis) {
 	handlerName, receiverType, isPackageFunc, ok := a.resolveHandler(handlerArg, structName, astFile, filePath)
 	if !ok {
-		return "", nil, nil, 0
+		return "", handlerAnalysis{}
 	}
 
 	// Extract handler signature if we have required context.
 	if astFile != nil && filePath != "" {
-		req, resp, status, err := a.extractHandlerSignature(astFile, filePath, receiverType, isPackageFunc, handlerName)
+		h, err := a.extractHandlerSignature(astFile, filePath, receiverType, isPackageFunc, handlerName)
 		if err != nil {
 			// Don't fail — some routes use inline or external handlers.
-			return handlerName, nil, nil, 0
+			return handlerName, handlerAnalysis{}
 		}
-		return handlerName, req, resp, status
+		return handlerName, h
 	}
 
-	return handlerName, nil, nil, 0
+	return handlerName, handlerAnalysis{}
 }
 
 // resolveHandler determines the handler name and where to find its signature from
@@ -2443,13 +2464,14 @@ func (a *ProjectAnalyzer) extractResponseType(results *ast.FieldList, packageNam
 }
 
 // findHandlerInFile searches a single AST file for a handler method
-// Returns request and response TypeInfo if found
+// Returns its analysis — request/response TypeInfo, success status, and the
+// error statuses inferred from its body — or the zero value if not found
 func (a *ProjectAnalyzer) findHandlerInFile(
 	astFile *ast.File,
 	receiverType string,
 	isPackageFunc bool,
 	handlerName string,
-) (requestType, responseType *models.TypeInfo, successStatus int) {
+) handlerAnalysis {
 	for _, decl := range astFile.Decls {
 		funcDecl, ok := decl.(*ast.FuncDecl)
 		if !ok || funcDecl.Name.Name != handlerName {
@@ -2468,14 +2490,15 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 		serverAliases := a.extractImportAliases(astFile, serverImportPath)
 
 		// Extract types using helpers
-		requestType := a.extractRequestType(funcDecl.Type.Params, astFile.Name.Name, serverAliases)
-		responseType := a.extractResponseType(funcDecl.Type.Results, astFile.Name.Name, serverAliases)
-		status := a.extractSuccessStatus(funcDecl, serverAliases)
-
-		return requestType, responseType, status
+		return handlerAnalysis{
+			request:       a.extractRequestType(funcDecl.Type.Params, astFile.Name.Name, serverAliases),
+			response:      a.extractResponseType(funcDecl.Type.Results, astFile.Name.Name, serverAliases),
+			successStatus: a.extractSuccessStatus(funcDecl, serverAliases),
+			errorStatuses: a.inferErrorStatuses(funcDecl, serverAliases),
+		}
 	}
 
-	return nil, nil, 0
+	return handlerAnalysis{}
 }
 
 // extractSuccessStatus inspects a handler body for the result constructor used in
@@ -2504,7 +2527,8 @@ func (a *ProjectAnalyzer) extractSuccessStatus(funcDecl *ast.FuncDecl, serverAli
 	if funcDecl.Body == nil {
 		return 0
 	}
-	bindings := a.collectResultBindings(funcDecl.Body, serverAliases)
+	shadows := newShadowIndex(funcDecl)
+	bindings := a.collectResultBindings(funcDecl.Body, serverAliases, shadows)
 	status := 0
 	ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
 		// Do not descend into nested closures: their returns belong to the closure,
@@ -2517,7 +2541,7 @@ func (a *ProjectAnalyzer) extractSuccessStatus(funcDecl *ast.FuncDecl, serverAli
 		if !ok {
 			return true
 		}
-		if s := a.statusFromReturn(ret, bindings, serverAliases); s != 0 {
+		if s := a.statusFromReturn(ret, bindings, serverAliases, shadows); s != 0 {
 			status = s // last-wins: keep scanning, terminal return is authoritative
 		}
 		return true
@@ -2534,13 +2558,14 @@ func (a *ProjectAnalyzer) statusFromReturn(
 	ret *ast.ReturnStmt,
 	bindings map[string]*resultBinding,
 	serverAliases map[string]struct{},
+	shadows shadowIndex,
 ) int {
 	if len(ret.Results) == 0 {
 		return 0
 	}
 	switch res := ret.Results[0].(type) {
 	case *ast.CallExpr:
-		return a.statusFromServerCall(res, serverAliases)
+		return a.statusFromServerCall(res, serverAliases, shadows)
 	case *ast.Ident:
 		if b, ok := bindings[res.Name]; ok && !b.ambiguous {
 			return b.status
@@ -2565,8 +2590,11 @@ type resultBinding struct {
 type bindingCollector struct {
 	analyzer      *ProjectAnalyzer
 	serverAliases map[string]struct{}
-	bindings      map[string]*resultBinding
-	accepted      map[ast.Node]struct{}
+	// shadows are the body's own declarations, so a local named after a package
+	// is not read as that package's qualifier.
+	shadows  shadowIndex
+	bindings map[string]*resultBinding
+	accepted map[ast.Node]struct{}
 }
 
 // collectResultBindings resolves the local result bindings of a handler body in
@@ -2589,10 +2617,12 @@ type bindingCollector struct {
 func (a *ProjectAnalyzer) collectResultBindings(
 	body *ast.BlockStmt,
 	serverAliases map[string]struct{},
+	shadows shadowIndex,
 ) map[string]*resultBinding {
 	c := &bindingCollector{
 		analyzer:      a,
 		serverAliases: serverAliases,
+		shadows:       shadows,
 		bindings:      make(map[string]*resultBinding),
 		accepted:      make(map[ast.Node]struct{}),
 	}
@@ -2664,7 +2694,7 @@ func (c *bindingCollector) bindResult(name string, rhs ast.Expr) {
 		existing.ambiguous = true
 		return
 	}
-	c.bindings[name] = &resultBinding{status: c.analyzer.statusFromBoundExpr(rhs, c.serverAliases)}
+	c.bindings[name] = &resultBinding{status: c.analyzer.statusFromBoundExpr(rhs, c.serverAliases, c.shadows)}
 }
 
 // recordStatusWrite applies an unconditional `<ident>.Status = <expr>` write to
@@ -2686,7 +2716,7 @@ func (c *bindingCollector) recordStatusWrite(lhs *ast.SelectorExpr, rhs ast.Expr
 		return false
 	}
 	if !binding.ambiguous {
-		binding.status = statusFromArg(rhs)
+		binding.status = successStatusFromArg(rhs, c.shadows)
 	}
 	return true
 }
@@ -2763,12 +2793,12 @@ func varDeclNames(stmt *ast.DeclStmt) []string {
 // statusFromBoundExpr resolves the status implied by the expression an
 // identifier is bound to: a server constructor call, or a server.Result /
 // server.ResultWithMeta composite literal. Anything else yields 0.
-func (a *ProjectAnalyzer) statusFromBoundExpr(expr ast.Expr, serverAliases map[string]struct{}) int {
+func (a *ProjectAnalyzer) statusFromBoundExpr(expr ast.Expr, serverAliases map[string]struct{}, shadows shadowIndex) int {
 	switch e := expr.(type) {
 	case *ast.CallExpr:
-		return a.statusFromServerCall(e, serverAliases)
+		return a.statusFromServerCall(e, serverAliases, shadows)
 	case *ast.CompositeLit:
-		return a.statusFromResultLiteral(e, serverAliases)
+		return a.statusFromResultLiteral(e, serverAliases, shadows)
 	}
 	return 0
 }
@@ -2776,7 +2806,7 @@ func (a *ProjectAnalyzer) statusFromBoundExpr(expr ast.Expr, serverAliases map[s
 // statusFromServerCall maps a call expression to a status when it is a
 // server-qualified result constructor, honouring local import aliases. Returns 0
 // for any other call.
-func (a *ProjectAnalyzer) statusFromServerCall(call *ast.CallExpr, serverAliases map[string]struct{}) int {
+func (a *ProjectAnalyzer) statusFromServerCall(call *ast.CallExpr, serverAliases map[string]struct{}, shadows shadowIndex) int {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return 0
@@ -2785,7 +2815,10 @@ func (a *ProjectAnalyzer) statusFromServerCall(call *ast.CallExpr, serverAliases
 	if !ok || !a.aliasContains(serverAliases, pkg.Name, frameworkPkgServer) {
 		return 0
 	}
-	return statusForConstructor(sel.Sel.Name, call.Args)
+	if shadows.shadows(pkg.Name, pkg.Pos()) {
+		return 0
+	}
+	return statusForConstructor(sel.Sel.Name, call.Args, shadows)
 }
 
 // statusFromResultLiteral resolves a hand-built server.NoContentResult{} /
@@ -2795,7 +2828,7 @@ func (a *ProjectAnalyzer) statusFromServerCall(call *ast.CallExpr, serverAliases
 // one the framework serves the zero value as 200, so 200 is returned explicitly
 // (the same wire code as the 0 default, but a resolved answer rather than a
 // fallback). A Status: key this analyzer cannot read yields 0.
-func (a *ProjectAnalyzer) statusFromResultLiteral(lit *ast.CompositeLit, serverAliases map[string]struct{}) int {
+func (a *ProjectAnalyzer) statusFromResultLiteral(lit *ast.CompositeLit, serverAliases map[string]struct{}, shadows shadowIndex) int {
 	typ := unwrapGenericType(lit.Type)
 	if a.isNoContentResultType(typ, serverAliases) {
 		return 204
@@ -2809,7 +2842,7 @@ func (a *ProjectAnalyzer) statusFromResultLiteral(lit *ast.CompositeLit, serverA
 			continue
 		}
 		if key, ok := kv.Key.(*ast.Ident); ok && key.Name == resultStatusFieldName {
-			return statusFromArg(kv.Value)
+			return successStatusFromArg(kv.Value, shadows)
 		}
 	}
 	return defaultSuccessStatus
@@ -2841,63 +2874,6 @@ func unwrapGenericType(expr ast.Expr) ast.Expr {
 	return expr
 }
 
-// statusForConstructor maps a server result-constructor name to its HTTP status.
-// For NewResult/NewResultWithMeta the status is the first argument resolved via
-// statusFromArg (an integer literal or an http.StatusXxx constant). Returns 0 for
-// anything unrecognized.
-func statusForConstructor(name string, args []ast.Expr) int {
-	switch name {
-	case "Created":
-		return 201
-	case "Accepted":
-		return 202
-	case "NoContent":
-		return 204
-	case "NewResult", "NewResultWithMeta":
-		if len(args) > 0 {
-			return statusFromArg(args[0])
-		}
-	}
-	return 0
-}
-
-// statusFromArg resolves the status argument of NewResult/NewResultWithMeta. It
-// accepts a bare integer literal (NewResult(201, ...)) and the idiomatic
-// net/http status constant (NewResult(http.StatusCreated, ...)), which is the
-// dominant real-world form. Returns 0 when the argument is anything else (a
-// variable, a non-http constant), letting the caller fall back to the default.
-func statusFromArg(arg ast.Expr) int {
-	switch a := arg.(type) {
-	case *ast.BasicLit:
-		if a.Kind == token.INT {
-			if v, err := strconv.Atoi(a.Value); err == nil {
-				return v
-			}
-		}
-	case *ast.SelectorExpr:
-		if pkg, ok := a.X.(*ast.Ident); ok && pkg.Name == stdlibPkgHTTP {
-			return httpStatusConstants[a.Sel.Name]
-		}
-	}
-	return 0
-}
-
-// httpStatusConstants maps the net/http 2xx status-constant names to their codes.
-// Only success codes are needed: a handler returning a 4xx/5xx as a non-error
-// Result is a misuse the generator does not try to model as a success response.
-var httpStatusConstants = map[string]int{
-	"StatusOK":                   200,
-	"StatusCreated":              201,
-	"StatusAccepted":             202,
-	"StatusNonAuthoritativeInfo": 203,
-	"StatusNoContent":            204,
-	"StatusResetContent":         205,
-	"StatusPartialContent":       206,
-	"StatusMultiStatus":          207,
-	"StatusAlreadyReported":      208,
-	"StatusIMUsed":               226,
-}
-
 // handlerReceiverMatches reports whether a function declaration's receiver matches
 // the resolved handler target: a package-level function must have no receiver,
 // otherwise the receiver type must equal receiverType.
@@ -2911,7 +2887,8 @@ func (a *ProjectAnalyzer) handlerReceiverMatches(recv *ast.FieldList, receiverTy
 	return a.isMethodOnStruct(recv, receiverType)
 }
 
-// extractHandlerSignature extracts request and response type information from a handler method
+// extractHandlerSignature extracts a handler method's analysis (request and
+// response types, success status, inferred error statuses)
 // Searches current file first, then falls back to other files in the package
 // Also populates struct fields for discovered types
 func (a *ProjectAnalyzer) extractHandlerSignature(
@@ -2920,29 +2897,29 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 	receiverType string,
 	isPackageFunc bool,
 	handlerName string,
-) (reqType, respType *models.TypeInfo, successStatus int, err error) {
+) (handler handlerAnalysis, err error) {
 	// Try current file first
-	if reqType, respType, status := a.findHandlerInFile(astFile, receiverType, isPackageFunc, handlerName); reqType != nil || respType != nil {
-		a.populateTypeFields(reqType, astFile, filePath)
-		a.populateTypeFields(respType, astFile, filePath)
-		return reqType, respType, status, nil
+	if h := a.findHandlerInFile(astFile, receiverType, isPackageFunc, handlerName); h.found() {
+		a.populateTypeFields(h.request, astFile, filePath)
+		a.populateTypeFields(h.response, astFile, filePath)
+		return h, nil
 	}
 
 	// Try other files in the package
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
 	if err == nil && files != nil {
 		for _, file := range files {
-			if reqType, respType, status := a.findHandlerInFile(file, receiverType, isPackageFunc, handlerName); reqType != nil || respType != nil {
-				a.populateTypeFields(reqType, file, filePath)
-				a.populateTypeFields(respType, file, filePath)
-				return reqType, respType, status, nil
+			if h := a.findHandlerInFile(file, receiverType, isPackageFunc, handlerName); h.found() {
+				a.populateTypeFields(h.request, file, filePath)
+				a.populateTypeFields(h.response, file, filePath)
+				return h, nil
 			}
 		}
 	}
 
 	// Handler not found - this is not necessarily an error
 	// Some routes might use inline handlers or external handlers
-	return nil, nil, 0, fmt.Errorf("handler %s not found for receiver %q", handlerName, receiverType)
+	return handlerAnalysis{}, fmt.Errorf("handler %s not found for receiver %q", handlerName, receiverType)
 }
 
 // populateTypeFields populates a request/response TypeInfo's fields and registers
