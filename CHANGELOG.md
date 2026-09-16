@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.0](https://github.com/gaborage/go-bricks-openapi/compare/v0.3.1...v0.4.0) (2026-09-16)
+
+
+### Added
+
+* **analyzer:** add openapi:errors directive for declared errors ([#85](https://github.com/gaborage/go-bricks-openapi/issues/85)) ([895baf6](https://github.com/gaborage/go-bricks-openapi/commit/895baf679522f8d18769ac36747bcf57530fa408)), closes [#68](https://github.com/gaborage/go-bricks-openapi/issues/68)
+* **commands:** report unresolved routes in generate and doctor output ([#86](https://github.com/gaborage/go-bricks-openapi/issues/86)) ([8db1833](https://github.com/gaborage/go-bricks-openapi/commit/8db1833ce0433e2ebf642c1ab0ef7e82b26c496d)), closes [#64](https://github.com/gaborage/go-bricks-openapi/issues/64)
+* **generate:** print warning count in the run summary ([#73](https://github.com/gaborage/go-bricks-openapi/issues/73)) ([d788968](https://github.com/gaborage/go-bricks-openapi/commit/d78896847b9afb81caa0efcf0ff1c98374a3821b))
+
+
+### Fixed
+
+* **analyzer:** resolve route paths from scoped consts and concatenation ([#82](https://github.com/gaborage/go-bricks-openapi/issues/82)) ([32676d1](https://github.com/gaborage/go-bricks-openapi/commit/32676d194fb1a4f543b55ae154949c30dc9228b9)), closes [#64](https://github.com/gaborage/go-bricks-openapi/issues/64)
+* **analyzer:** resolve success status through local result bindings ([#74](https://github.com/gaborage/go-bricks-openapi/issues/74)) ([e1fedc1](https://github.com/gaborage/go-bricks-openapi/commit/e1fedc18c9cd9b4f58faee3672125a2e1a93fb1e))
+* **generator:** map byte and rune named scalars to integer ([#80](https://github.com/gaborage/go-bricks-openapi/issues/80)) ([162e244](https://github.com/gaborage/go-bricks-openapi/commit/162e244594f367092759d662590d914cd9f71b98)), closes [#60](https://github.com/gaborage/go-bricks-openapi/issues/60)
+* **generator:** render slice result payloads as typed arrays ([#76](https://github.com/gaborage/go-bricks-openapi/issues/76)) ([eb25d58](https://github.com/gaborage/go-bricks-openapi/commit/eb25d582c2ff24856de8650631f989ed4cd88d93))
+
+
+### Changed
+
+* **analyzer:** drop unread TypeInfo.IsPointer ([#72](https://github.com/gaborage/go-bricks-openapi/issues/72)) ([cfa67ed](https://github.com/gaborage/go-bricks-openapi/commit/cfa67ed36eb641cdf4bc56d52c07d978948d8deb))
+
 ## [0.3.1](https://github.com/gaborage/go-bricks-openapi/compare/v0.3.0...v0.3.1) (2026-09-05)
 
 
