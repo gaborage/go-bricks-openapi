@@ -102,23 +102,39 @@ version floor, analyzer diagnostics, and content checks). It is printed on every
 run — including a run with no warnings and a `--strict` run that then fails — so
 a CI gate can assert `Warnings: 0` instead of scraping stderr.
 
-### Marking a route as public
+### Comment directives
 
-By default every operation carries the tenant security scheme. A route that
-needs no auth (health checks, login, webhooks) can opt out with an
-`//openapi:public` comment directive on the line directly above its
-registration call:
+A directive is an `//openapi:<name>[ <args>]` comment in a comment group whose
+**last line sits directly above a route registration call**. A directive
+anywhere else (inside the call, on the handler, or separated from the call by a
+blank line) is not attached to any route. Anything after a second `//` on the
+directive line is a human comment and is ignored. Directives are this tool's own
+annotations — go-bricks parses none of them, so they have no runtime effect.
 
 ```go
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	//openapi:public
 	server.GET(hr, r, "/ping", ping, server.WithTags("health"))
+
+	// Orders conflict when the idempotency key is replayed.
+	//openapi:errors 404, 409
+	server.POST(hr, r, "/orders", createOrder)
 }
 ```
 
-The generator emits `security: []` for that operation. go-bricks itself has
-no per-route tenant opt-out API as of v0.53.0, so this directive is the
-tool's own annotation — it has no runtime effect.
+| Directive | Arguments | Effect |
+| --- | --- | --- |
+| `//openapi:public` | none | Emits `security: []` for that operation. By default every operation carries the tenant security scheme; a route that needs no auth (health checks, login, webhooks) opts out this way. go-bricks itself has no per-route tenant opt-out API as of v0.53.0. |
+| `//openapi:errors` | a single-line, comma-separated list of status codes (400–599); whitespace after commas is tolerated | Adds one error response per code, referencing the same error envelope the route's `400`/`500` use, described with the canonical HTTP status text. |
+
+Every operation keeps its unconditional `400`/`500` responses (plus `401`/`415`
+on JOSE routes); a declared code that is already present is deduplicated
+silently.
+
+An unknown `//openapi:<name>`, an argument on `//openapi:public`, and a
+malformed or out-of-range `errors` token each raise an analyzer warning naming
+the offender — so they fail `generate --strict` with no artifact emitted. The
+remaining valid `errors` tokens are still applied.
 
 ## Requirements
 

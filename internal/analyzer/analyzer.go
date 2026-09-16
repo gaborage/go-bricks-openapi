@@ -50,12 +50,6 @@ const (
 	moduleMethodRegisterRoutes = "RegisterRoutes"
 	moduleMethodShutdown       = "Shutdown"
 
-	// publicDirective marks the route registered on the following line as public
-	// (no tenant security) in the generated spec. go-bricks v0.45 has no per-route
-	// tenant opt-out API, so the tool provides one as a comment directive, in the
-	// spirit of go:generate.
-	publicDirective = "//openapi:public"
-
 	// RouteRegistrar.Group(prefix) — sub-router with a path prefix.
 	groupMethodName        = "Group"
 	routeRegistrarTypeName = "RouteRegistrar"
@@ -117,19 +111,20 @@ const maxTypeRegistrationDepth = 1000
 
 // ProjectAnalyzer analyzes Go-Bricks projects to extract module and route information
 type ProjectAnalyzer struct {
-	projectRoot      string
-	modulePath       string // go.mod module path; prefix for translating in-module imports to dirs
-	fileSet          *token.FileSet
-	constants        map[string]string               // Map of constant names to their values
-	warnings         []string                        // Non-fatal diagnostics collected during analysis
-	typeRegistry     map[string]*models.TypeInfo     // Named struct types reachable from routes (by final schema name)
-	pkgCache         map[string]map[string]*ast.File // dir -> (file path -> parsed AST), populated on demand
-	nameAssign       map[string]string               // "pkg\x00Type" -> final schema name (collision qualification)
-	usedNames        map[string]struct{}             // final schema names already taken
-	publicDirectives map[string]map[int]struct{}     // filename -> lines where a directive comment group ends
-	depthWarned      bool                            // once-latch: registration-depth cap already warned this run
-	tagWarned        map[string]struct{}             // dedupes malformed-struct-tag warnings by "file:line:col"
-	uintptrWarned    map[string]struct{}             // dedupes uintptr-field warnings by "file:line:col"
+	projectRoot    string
+	modulePath     string // go.mod module path; prefix for translating in-module imports to dirs
+	fileSet        *token.FileSet
+	constants      map[string]string                  // Map of constant names to their values
+	warnings       []string                           // Non-fatal diagnostics collected during analysis
+	typeRegistry   map[string]*models.TypeInfo        // Named struct types reachable from routes (by final schema name)
+	pkgCache       map[string]map[string]*ast.File    // dir -> (file path -> parsed AST), populated on demand
+	nameAssign     map[string]string                  // "pkg\x00Type" -> final schema name (collision qualification)
+	usedNames      map[string]struct{}                // final schema names already taken
+	directives     map[string]map[int]routeDirectives // filename -> end line of a Directive comment group -> its Directives
+	directiveFiles map[string]struct{}                // files already Directive-indexed (keeps diagnostics once-only)
+	depthWarned    bool                               // once-latch: registration-depth cap already warned this run
+	tagWarned      map[string]struct{}                // dedupes malformed-struct-tag warnings by "file:line:col"
+	uintptrWarned  map[string]struct{}                // dedupes uintptr-field warnings by "file:line:col"
 }
 
 // New creates a new project analyzer
@@ -142,14 +137,15 @@ func New(projectRoot string) *ProjectAnalyzer {
 		projectRoot = abs
 	}
 	return &ProjectAnalyzer{
-		projectRoot:      projectRoot,
-		fileSet:          token.NewFileSet(),
-		constants:        make(map[string]string),
-		typeRegistry:     make(map[string]*models.TypeInfo),
-		pkgCache:         make(map[string]map[string]*ast.File),
-		nameAssign:       make(map[string]string),
-		usedNames:        make(map[string]struct{}),
-		publicDirectives: map[string]map[int]struct{}{},
+		projectRoot:    projectRoot,
+		fileSet:        token.NewFileSet(),
+		constants:      make(map[string]string),
+		typeRegistry:   make(map[string]*models.TypeInfo),
+		pkgCache:       make(map[string]map[string]*ast.File),
+		nameAssign:     make(map[string]string),
+		usedNames:      make(map[string]struct{}),
+		directives:     map[string]map[int]routeDirectives{},
+		directiveFiles: map[string]struct{}{},
 	}
 }
 
@@ -214,7 +210,8 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	a.warnings = nil
 	a.typeRegistry = make(map[string]*models.TypeInfo)
 	a.pkgCache = make(map[string]map[string]*ast.File)
-	a.publicDirectives = make(map[string]map[int]struct{})
+	a.directives = make(map[string]map[int]routeDirectives)
+	a.directiveFiles = make(map[string]struct{})
 	a.nameAssign = make(map[string]string)
 	a.usedNames = make(map[string]struct{})
 	a.depthWarned = false
@@ -407,44 +404,8 @@ func (d *moduleDiscoverer) dirShouldSkip(path, name string) bool {
 	return false
 }
 
-// indexPublicDirectives records, for every comment group containing an
-// `//openapi:public` line, the file line the group ends on. routeFromCall marks
-// a route public when a directive group ends directly above the registration
-// call. Position-keyed (file+line) so it works regardless of which file a
-// walked body lives in (helpers and delegates may be cross-file). Idempotent
-// across re-parses of the same file.
-func (a *ProjectAnalyzer) indexPublicDirectives(astFile *ast.File) {
-	for _, cg := range astFile.Comments {
-		found := false
-		for _, c := range cg.List {
-			if strings.TrimSpace(c.Text) == publicDirective {
-				found = true
-				break
-			}
-		}
-		if !found {
-			continue
-		}
-		pos := a.fileSet.Position(cg.End())
-		lines := a.publicDirectives[pos.Filename]
-		if lines == nil {
-			lines = map[int]struct{}{}
-			a.publicDirectives[pos.Filename] = lines
-		}
-		lines[pos.Line] = struct{}{}
-	}
-}
-
-// isPublicRoute reports whether a public directive comment group ends on the
-// line directly above pos (a route registration call's first token).
-func (a *ProjectAnalyzer) isPublicRoute(pos token.Pos) bool {
-	p := a.fileSet.Position(pos)
-	_, ok := a.publicDirectives[p.Filename][p.Line-1]
-	return ok
-}
-
 // parseGoFile is the single entry point for parsing a source file into the
-// shared FileSet: it parses with comments and indexes public directives, so
+// shared FileSet: it parses with comments and indexes Directives, so
 // the "every parsed file is directive-indexed" invariant holds by
 // construction. src may be nil (the parser reads the file) or the file's
 // bytes when the caller already read them; it is typed any because a typed
@@ -455,7 +416,7 @@ func (a *ProjectAnalyzer) parseGoFile(filePath string, src any) (*ast.File, erro
 	if err != nil {
 		return nil, err
 	}
-	a.indexPublicDirectives(astFile)
+	a.indexDirectives(astFile)
 	return astFile, nil
 }
 
@@ -1028,9 +989,7 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes prefixMap, scop
 	for i := shape.optsIdx(); i < len(call.Args); i++ {
 		w.a.extractRouteMetadata(call.Args[i], route, w.serverAliases)
 	}
-	if w.a.isPublicRoute(call.Pos()) {
-		route.Public = true
-	}
+	w.a.applyRouteDirectives(route, call.Pos())
 	return route
 }
 
@@ -1117,9 +1076,7 @@ func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, prefixes prefixMap, s
 	if name, _, _, ok := w.a.resolveHandler(call.Args[2], w.structName, w.astFile, w.filePath); ok {
 		route.HandlerName = name
 	}
-	if w.a.isPublicRoute(call.Pos()) {
-		route.Public = true
-	}
+	w.a.applyRouteDirectives(route, call.Pos())
 	return route
 }
 

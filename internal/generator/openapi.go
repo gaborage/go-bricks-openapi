@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -772,11 +773,41 @@ func (g *OpenAPIGenerator) buildResponses(route *models.Route) map[string]*OpenA
 		}
 		responses["500"].Content[mediaJOSE] = &OpenAPIMediaType{Schema: joseTokenSchema()}
 	}
+	addDeclaredErrorResponses(responses, route, errorSchema)
 	// Assign the success entry LAST so a success status that overlaps an error code
 	// (e.g. a handler that returns NewResult(400, ...) as a non-error Result) keeps
 	// the documented success response rather than being clobbered by the 400 entry.
 	responses[successCode] = success
 	return responses
+}
+
+// addDeclaredErrorResponses adds one response per status declared by the
+// route's `//openapi:errors` Directive, reusing the route's error-envelope $ref
+// and describing each with the canonical HTTP status text. A code already
+// present — the 400/500 baseline, the JOSE 401/415 additions, or a repeat in
+// the directive itself — is skipped silently, so the baseline is never
+// rewritten by a declaration.
+func addDeclaredErrorResponses(responses map[string]*OpenAPIResponse, route *models.Route, errorSchema string) {
+	for _, code := range route.ErrorStatuses {
+		key := strconv.Itoa(code)
+		if _, exists := responses[key]; exists {
+			continue
+		}
+		responses[key] = &OpenAPIResponse{
+			Description: errorStatusDescription(code),
+			Content:     jsonMediaRef(errorSchema),
+		}
+	}
+}
+
+// errorStatusDescription is the canonical HTTP status text for code, falling
+// back to a generic phrase for a code net/http does not name — a response
+// object must carry a non-empty description to be a valid OpenAPI document.
+func errorStatusDescription(code int) string {
+	if text := http.StatusText(code); text != "" {
+		return text
+	}
+	return "HTTP " + strconv.Itoa(code)
 }
 
 // successStatusCode resolves the success response code as a string key. A 204
