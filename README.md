@@ -102,6 +102,14 @@ version floor, analyzer diagnostics, and content checks). It is printed on every
 run — including a run with no warnings and a `--strict` run that then fails — so
 a CI gate can assert `Warnings: 0` instead of scraping stderr.
 
+`Unresolved routes: K` follows it whenever the analysis dropped at least one
+route whose path it could not resolve (a `var` path, a qualified constant, an
+unresolvable group prefix — see "Known limitations"). The line is omitted
+entirely when there are none, so anything parsing the summary must tolerate an
+extra line rather than assume a fixed one. `doctor` reports the same count in
+its diagnostics block and lists each dropped registration with its
+`file:line:col` and the reason.
+
 ### Comment directives
 
 A directive is an `//openapi:<name>[ <args>]` comment in a comment group whose

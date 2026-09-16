@@ -467,6 +467,19 @@ func runModuleDiagnostics(ctx context.Context, projectRoot string, verbose bool)
 		warned = true
 	}
 
+	// The Unresolved-routes slot: the count plus one located line per dropped
+	// registration, printed only when there are any. Each entry also has a
+	// companion analyzer warning below, which is what already flips the caveat
+	// banner — this block adds the locations that warning cannot carry.
+	unresolved := a.UnresolvedRoutes(ctx)
+	if line := unresolvedRouteCountLine(unresolved); line != "" {
+		fmt.Printf("   🚧 %s\n", line)
+		for _, entry := range unresolvedRouteLocations(unresolved) {
+			fmt.Printf("      • %s\n", entry)
+		}
+		warned = true
+	}
+
 	// Surface analyzer diagnostics collected during analysis (unrecognized module
 	// methods, unresolvable route paths, etc.).
 	for _, w := range a.Warnings(ctx) {

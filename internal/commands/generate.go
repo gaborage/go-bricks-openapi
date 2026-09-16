@@ -146,6 +146,13 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 	// "Warnings: 0" on stdout instead of scraping stderr for a text pattern.
 	fmt.Printf("Warnings: %d\n", warningCount)
 
+	// The Unresolved-routes slot: a count of the registrations the analysis
+	// found but could not reduce to a path. Printed only when there are any, so
+	// a clean run's stdout is unchanged; `doctor` lists them individually.
+	if line := unresolvedRouteCountLine(projectAnalyzer.UnresolvedRoutes(ctx)); line != "" {
+		fmt.Println(line)
+	}
+
 	// Strict gate: every diagnostic printed above and by emitContentWarnings
 	// feeds one count, so a surfaced warning can never slip past --strict.
 	// Evaluated BEFORE the spec is rendered or persisted: a failed strict run

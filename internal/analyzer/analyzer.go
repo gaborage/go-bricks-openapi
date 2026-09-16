@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -111,20 +112,21 @@ const maxTypeRegistrationDepth = 1000
 
 // ProjectAnalyzer analyzes Go-Bricks projects to extract module and route information
 type ProjectAnalyzer struct {
-	projectRoot    string
-	modulePath     string // go.mod module path; prefix for translating in-module imports to dirs
-	fileSet        *token.FileSet
-	constants      map[string]string                  // Map of constant names to their values
-	warnings       []string                           // Non-fatal diagnostics collected during analysis
-	typeRegistry   map[string]*models.TypeInfo        // Named struct types reachable from routes (by final schema name)
-	pkgCache       map[string]map[string]*ast.File    // dir -> (file path -> parsed AST), populated on demand
-	nameAssign     map[string]string                  // "pkg\x00Type" -> final schema name (collision qualification)
-	usedNames      map[string]struct{}                // final schema names already taken
-	directives     map[string]map[int]routeDirectives // filename -> end line of a Directive comment group -> its Directives
-	directiveFiles map[string]struct{}                // files already Directive-indexed (keeps diagnostics once-only)
-	depthWarned    bool                               // once-latch: registration-depth cap already warned this run
-	tagWarned      map[string]struct{}                // dedupes malformed-struct-tag warnings by "file:line:col"
-	uintptrWarned  map[string]struct{}                // dedupes uintptr-field warnings by "file:line:col"
+	projectRoot      string
+	modulePath       string // go.mod module path; prefix for translating in-module imports to dirs
+	fileSet          *token.FileSet
+	constants        map[string]string                  // Map of constant names to their values
+	warnings         []string                           // Non-fatal diagnostics collected during analysis
+	unresolvedRoutes []models.UnresolvedRoute           // Route registrations dropped because their path did not resolve
+	typeRegistry     map[string]*models.TypeInfo        // Named struct types reachable from routes (by final schema name)
+	pkgCache         map[string]map[string]*ast.File    // dir -> (file path -> parsed AST), populated on demand
+	nameAssign       map[string]string                  // "pkg\x00Type" -> final schema name (collision qualification)
+	usedNames        map[string]struct{}                // final schema names already taken
+	directives       map[string]map[int]routeDirectives // filename -> end line of a Directive comment group -> its Directives
+	directiveFiles   map[string]struct{}                // files already Directive-indexed (keeps diagnostics once-only)
+	depthWarned      bool                               // once-latch: registration-depth cap already warned this run
+	tagWarned        map[string]struct{}                // dedupes malformed-struct-tag warnings by "file:line:col"
+	uintptrWarned    map[string]struct{}                // dedupes uintptr-field warnings by "file:line:col"
 }
 
 // New creates a new project analyzer
@@ -160,6 +162,29 @@ func (a *ProjectAnalyzer) addWarningf(format string, args ...any) {
 // APIs; the returned slice is cloned so callers cannot mutate analyzer state.
 func (a *ProjectAnalyzer) Warnings(_ context.Context) []string {
 	return slices.Clone(a.warnings)
+}
+
+// UnresolvedRoutes returns a copy of the Unresolved routes collected during the
+// last analysis — the registrations the walk found but whose path it could not
+// reduce to a string (see CONTEXT.md, "Unresolved route"). Each entry has a
+// companion warning in Warnings; the count is derived from this list, never
+// stored. ctx is accepted per the repo's context-first convention for exported
+// APIs; the slice is cloned so callers cannot mutate analyzer state.
+func (a *ProjectAnalyzer) UnresolvedRoutes(_ context.Context) []models.UnresolvedRoute {
+	out := slices.Clone(a.unresolvedRoutes)
+	// Sorted by source position so the rendered order is a property of the
+	// project's source, not of the directory/file walk order (which varies with
+	// discovery and would make the CLI output unstable across platforms).
+	slices.SortStableFunc(out, func(x, y models.UnresolvedRoute) int {
+		if c := strings.Compare(x.File, y.File); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(x.Line, y.Line); c != 0 {
+			return c
+		}
+		return cmp.Compare(x.Col, y.Col)
+	})
+	return out
 }
 
 // warnDepthExceeded records ONE diagnostic the first time the registration depth
@@ -208,6 +233,7 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	// Reset per-run state so repeated analyses on the same analyzer don't
 	// accumulate stale warnings or type-registry entries.
 	a.warnings = nil
+	a.unresolvedRoutes = nil
 	a.typeRegistry = make(map[string]*models.TypeInfo)
 	a.pkgCache = make(map[string]map[string]*ast.File)
 	a.directives = make(map[string]map[int]routeDirectives)
@@ -963,14 +989,14 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes prefixMap, scop
 
 	rawPath, resolved := w.a.resolvePathExpr(call.Args[shape.pathIdx], scopes)
 	if !resolved {
-		w.a.addWarningf(unresolvedRoutePathWarning, "server."+shape.method)
+		w.a.warnUnresolvedPath(call.Pos(), "server."+shape.method)
 		return nil
 	}
 
 	// Prepend the group prefix bound to the registrar argument (Args[1]).
 	prefix, recv, prefixOK := registrarPrefixFor(call.Args[1], prefixes)
 	if !prefixOK {
-		w.a.addWarningf(unresolvedGroupPrefixWarning, "server."+shape.method, recv)
+		w.a.warnUnresolvedGroupPrefix(call.Pos(), "server."+shape.method, recv)
 		return nil
 	}
 
@@ -1056,11 +1082,11 @@ func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, prefixes prefixMap, s
 	}
 	rawPath, resolved := w.a.resolvePathExpr(call.Args[1], scopes)
 	if !resolved {
-		w.a.addWarningf(unresolvedRoutePathWarning, recv+"."+addMethodName)
+		w.a.warnUnresolvedPath(call.Pos(), recv+"."+addMethodName)
 		return nil
 	}
 	if !group.resolved {
-		w.a.addWarningf(unresolvedGroupPrefixWarning, recv+"."+addMethodName, recv)
+		w.a.warnUnresolvedGroupPrefix(call.Pos(), recv+"."+addMethodName, recv)
 		return nil
 	}
 
@@ -1758,6 +1784,44 @@ const unresolvedRoutePathWarning = "unresolved route: skipping the %s registrati
 // than emitted at a prefix-less — and therefore wrong — path. The verbs are the
 // registration form and the group registrar's variable name.
 const unresolvedGroupPrefixWarning = "unresolved route: skipping the %s registration on registrar %q, whose group prefix is not a string literal or a resolvable constant"
+
+// unresolvedPathReason and unresolvedPrefixReason are the machine-facing halves
+// of the two warnings above: the Reason carried by the models.UnresolvedRoute
+// record, without the "skipping the ..." narration a warning line needs.
+const (
+	unresolvedPathReason   = "path argument is not a string literal or a resolvable constant"
+	unresolvedPrefixReason = "group prefix on registrar %q is not a string literal or a resolvable constant"
+)
+
+// warnUnresolvedPath drops a registration whose path expression did not resolve:
+// it emits the user-facing warning AND records the structured Unresolved-route
+// entry the commands render. Both diagnostics are raised here, together, so the
+// warning list and the record list can never disagree about what was dropped.
+func (a *ProjectAnalyzer) warnUnresolvedPath(pos token.Pos, form string) {
+	a.addWarningf(unresolvedRoutePathWarning, form)
+	a.addUnresolvedRoute(pos, form, unresolvedPathReason)
+}
+
+// warnUnresolvedGroupPrefix is warnUnresolvedPath's sibling for a registration
+// dropped because the group it was registered on has an unresolvable prefix.
+// recv is the group registrar's variable name.
+func (a *ProjectAnalyzer) warnUnresolvedGroupPrefix(pos token.Pos, form, recv string) {
+	a.addWarningf(unresolvedGroupPrefixWarning, form, recv)
+	a.addUnresolvedRoute(pos, form, fmt.Sprintf(unresolvedPrefixReason, recv))
+}
+
+// addUnresolvedRoute appends one Unresolved-route record, resolving pos to a
+// project-relative file:line for display.
+func (a *ProjectAnalyzer) addUnresolvedRoute(pos token.Pos, form, reason string) {
+	p := a.fileSet.Position(pos)
+	a.unresolvedRoutes = append(a.unresolvedRoutes, models.UnresolvedRoute{
+		Form:   form,
+		File:   relToRoot(a.projectRoot, p.Filename),
+		Line:   p.Line,
+		Col:    p.Column,
+		Reason: reason,
+	})
+}
 
 // extractPathFromArg resolves a route path argument with no enclosing lexical
 // scope, i.e. against package-level constants only. Callers inside a walked
