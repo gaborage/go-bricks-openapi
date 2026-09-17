@@ -259,3 +259,63 @@ func stringLiteralValue(expr ast.Expr) (string, bool) {
 	}
 	return "", false
 }
+
+// shadowRange is the source span one local declaration shadows a name over:
+// from the position the name enters scope to the end of the block that
+// declares it.
+type shadowRange struct{ from, to token.Pos }
+
+// shadowIndex records every name one function body declares locally, with the
+// spans those declarations cover. It answers one question: at this position,
+// does this identifier still name the imported package, or a local that hides
+// it?
+//
+// Package qualifiers are matched by spelling — `server.NewNotFoundError(...)`
+// is recognized because the file imports go-bricks/server as `server` — so a
+// body that declares `server := newFake()` (or takes a parameter named `http`)
+// would otherwise have its calls read as framework calls. A shadowed qualifier
+// resolves to nothing, and each caller falls back to its own default.
+//
+// The spans come from scopeBindings, the same block model constant resolution
+// uses, so a declaration in a sibling block shadows nothing here either.
+type shadowIndex map[string][]shadowRange
+
+// newShadowIndex indexes one function declaration: its signature (receiver,
+// parameters, named results) over the whole body, plus every block-level
+// declaration inside it over that block.
+func newShadowIndex(funcDecl *ast.FuncDecl) shadowIndex {
+	if funcDecl == nil || funcDecl.Body == nil {
+		return nil
+	}
+	idx := shadowIndex{}
+	idx.add(funcTypeBindings(funcDecl.Type, receiverVarName(funcDecl.Recv), funcDecl.Body.Pos()), funcDecl.Body.End())
+	ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
+		if n == nil {
+			return false
+		}
+		if scope, introduces := scopeBindings(n); introduces {
+			idx.add(scope, n.End())
+		}
+		return true
+	})
+	return idx
+}
+
+// add records one scope's bindings as spans ending at to.
+func (s shadowIndex) add(scope map[string]binding, to token.Pos) {
+	for name, b := range scope {
+		s[name] = append(s[name], shadowRange{from: b.from, to: to})
+	}
+}
+
+// shadows reports whether a local declaration of name is in scope at position
+// at. A declaration written after that point shadows nothing there, matching
+// Go's own scoping.
+func (s shadowIndex) shadows(name string, at token.Pos) bool {
+	for _, r := range s[name] {
+		if r.from <= at && at <= r.to {
+			return true
+		}
+	}
+	return false
+}

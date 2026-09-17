@@ -139,6 +139,44 @@ Every operation keeps its unconditional `400`/`500` responses (plus `401`/`415`
 on JOSE routes); a declared code that is already present is deduplicated
 silently.
 
+### Inferred error responses
+
+Error responses are also inferred from the go-bricks error constructors the
+handler calls: every call the handler's own body makes contributes the status
+that constructor produces, unioned with the declared codes and the baseline.
+
+| Constructor | Status |
+| --- | --- |
+| `server.NewBadRequestError`, `server.NewValidationError` | `400` |
+| `server.NewUnauthorizedError` | `401` |
+| `server.NewForbiddenError` | `403` |
+| `server.NewNotFoundError` | `404` |
+| `server.NewConflictError` | `409` |
+| `server.NewBusinessLogicError` | `422` |
+| `server.NewTooManyRequestsError` | `429` |
+| `server.NewInternalServerError` | `500` |
+| `server.NewServiceUnavailableError` | `503` |
+| `server.NewBaseAPIError(code, message, status)` | its third argument, when that is an integer literal or an `http.StatusXxx` constant in 400–599 |
+
+Only calls qualified by the identifier the file imports go-bricks/`server` as
+count — a file that does not import it at all is treated as if it used the
+literal `server`, the same convention the rest of the analyzer follows. Local
+shadowing is respected: where the handler declares that name itself (`server :=
+newFake()`, or a parameter named `server`), the call names the local and
+contributes nothing; the same holds for an `http` the body shadows. And only
+calls in the **handler's own body** — nested blocks and closures included, but
+no call it makes. A constructor reached through a helper, even one in the same
+package, contributes nothing; declare those codes with `//openapi:errors`.
+
+A `NewBaseAPIError` status is dropped silently, with no warning, when this
+analyzer cannot read it (a variable, a computed expression) and when it reads
+as something outside 400–599 (`http.StatusOK`): a missing error response costs
+one documented branch, a wrong one misleads every consumer.
+
+Inference does not touch the success response. A 4xx/5xx returned as a non-error
+`Result` — `server.NewResult(http.StatusNotFound, x)`, `Result{Status: 409}` —
+is a misuse the tool does not model: the operation keeps its `200` default.
+
 An unknown `//openapi:<name>`, an argument on `//openapi:public`, and a
 malformed or out-of-range `errors` token each raise an analyzer warning naming
 the offender — so they fail `generate --strict` with no artifact emitted. The
@@ -162,6 +200,10 @@ remaining valid `errors` tokens are still applied.
 - Routes registered outside a module's `RegisterRoutes` (e.g. via
   `RootGroup()` in `main`) are not discovered.
 - Embedded-module method promotion is not resolved.
+- Error-response inference walks the handler's own body only. A constructor
+  called from a helper, a service layer, or middleware is invisible to it — no
+  call is followed, even within the same package. Declare those statuses with
+  `//openapi:errors`.
 - Response trace headers (`traceparent`, `X-Request-ID`) are not modeled in
   the generated spec.
 - `server.WithMiddleware(...)` is intentionally ignored — middleware names
