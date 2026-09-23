@@ -399,3 +399,67 @@ func TestExtractSuccessStatusNoBody(t *testing.T) {
 	src := "package mod\n\nfunc handle(req Req) (Resp, error)\n"
 	assert.Equal(t, 0, statusForSource(t, src, nil))
 }
+
+// TestExtractSuccessStatusRejectsNonSuccessCodes pins the success path to the
+// 2xx range: a handler returning a 4xx/5xx as a non-error Result is a misuse
+// this analyzer does not model as a success response. Stamping it would replace
+// the operation's baseline 400 (or an inferred error response of that code)
+// with a success entry, since the generator assigns the success entry last.
+func TestExtractSuccessStatusRejectsNonSuccessCodes(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"NewResult with an http 4xx constant", "\treturn server.NewResult(http.StatusNotFound, Resp{}), nil"},
+		{"NewResult with a 4xx literal", "\treturn server.NewResult(404, Resp{}), nil"},
+		{"NewResult with an http 5xx constant", "\treturn server.NewResult(http.StatusServiceUnavailable, Resp{}), nil"},
+		{"Result literal with an http 4xx constant", "\treturn server.Result[Resp]{Status: http.StatusConflict}, nil"},
+		{"Result literal with a 5xx literal", "\treturn server.Result[Resp]{Status: 503}, nil"},
+		{"status write of an http 4xx constant", "\tres := server.Accepted(req)\n\tres.Status = http.StatusGone\n\treturn res, nil"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, 0, statusForHandlerBody(t, tt.body), "non-2xx status -> 0, the generator's 200 default")
+		})
+	}
+}
+
+// TestExtractSuccessStatusShadowedQualifier verifies the success path reads a
+// package qualifier the body shadows as the local it names: the constructor
+// call and the status constant both stop resolving, and the generator keeps its
+// 200 default. A declaration positioned after the call shadows nothing there.
+func TestExtractSuccessStatusShadowedQualifier(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"server shadowed by a short declaration", "\tserver := fake()\n\treturn server.Created(req), nil", 0},
+		{"http shadowed by a short declaration", "\thttp := fake()\n\treturn server.NewResult(http.StatusCreated, Resp{}), nil", 0},
+		{"http shadowed on a Result literal Status field", "\thttp := fake()\n\treturn server.Result[Resp]{Status: http.StatusAccepted}, nil", 0},
+		// An unresolvable status write clears the bound status rather than leaving
+		// the stale one, so a shadowed write drops to the 200 default.
+		{"http shadowed on a status write", "\thttp := fake()\n\tres := server.Created(req)\n\tres.Status = http.StatusAccepted\n\treturn res, nil", 0},
+		{"shadow declared after the constructor call", "\tres := server.Created(req)\n\tserver := fake()\n\t_ = server\n\treturn res, nil", 201},
+		{"unshadowed control case", "\treturn server.NewResult(http.StatusAccepted, Resp{}), nil", 202},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, statusForHandlerBody(t, tt.body))
+		})
+	}
+}
+
+// TestExtractSuccessStatusShadowParameter verifies a parameter named after the
+// server package shadows it for the whole body.
+func TestExtractSuccessStatusShadowParameter(t *testing.T) {
+	src := `package api
+
+import "github.com/gaborage/go-bricks/server"
+
+func handle(server *fake, ctx Ctx) (Result, Err) {
+	return server.Created(nil), nil
+}
+`
+	assert.Equal(t, 0, statusForSource(t, src, nil))
+}

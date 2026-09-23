@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -207,11 +206,9 @@ func (a *ProjectAnalyzer) applyRouteDirectives(route *models.Route, pos token.Po
 	if rd.public {
 		route.Public = true
 	}
-	if len(rd.errorStatuses) > 0 {
-		// Sorted and deduplicated so `404,404` (or two errors directives in one
-		// group) declares 404 once, and the stamped order is deterministic.
-		codes := slices.Clone(rd.errorStatuses)
-		slices.Sort(codes)
-		route.ErrorStatuses = slices.Compact(codes)
-	}
+	// Unioned with whatever the handler-body walk already inferred, sorted and
+	// deduplicated so `404,404` (or two errors directives in one group, or a
+	// declaration of a code the handler demonstrably returns) declares 404 once,
+	// and the stamped order is deterministic.
+	route.ErrorStatuses = mergeErrorStatuses(route.ErrorStatuses, rd.errorStatuses)
 }

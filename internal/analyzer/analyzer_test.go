@@ -2696,12 +2696,12 @@ func (h *Handler) actualHandler() {}`,
 			require.NoError(t, err, "Failed to parse file")
 
 			analyzer := New(tempDir)
-			reqType, respType, _, err := analyzer.extractHandlerSignature(astFile, testFilePath, tt.structName, false, tt.handlerName)
+			handler, err := analyzer.extractHandlerSignature(astFile, testFilePath, tt.structName, false, tt.handlerName)
 
 			if tt.shouldFindHandler {
 				require.NoError(t, err, tt.description)
-				assertTypeInfo(t, tt.description+" request", tt.expectedRequest, reqType)
-				assertTypeInfo(t, tt.description+" response", tt.expectedResponse, respType)
+				assertTypeInfo(t, tt.description+" request", tt.expectedRequest, handler.request)
+				assertTypeInfo(t, tt.description+" response", tt.expectedResponse, handler.response)
 			} else {
 				assert.Error(t, err, "%s: expected error for missing handler", tt.description)
 			}
@@ -5170,24 +5170,31 @@ var _ = http.Money{}
 // constructor->status mapping: unrecognized constructors and NewResult with a
 // non-resolvable status argument both fall through to 0 ("use the default").
 func TestStatusForConstructorEdgeCases(t *testing.T) {
-	intLit := &ast.BasicLit{Kind: token.INT, Value: "418"}
+	intLit := &ast.BasicLit{Kind: token.INT, Value: "206"}
+	// 418 is outside the success range: resolvable, but not a success status.
+	errLit := &ast.BasicLit{Kind: token.INT, Value: "418"}
 	identArg := &ast.Ident{Name: "code"}
 	// http.StatusAccepted -> SelectorExpr{X: http, Sel: StatusAccepted}
 	httpConst := &ast.SelectorExpr{X: &ast.Ident{Name: "http"}, Sel: &ast.Ident{Name: "StatusAccepted"}}
 	// fmt.Sprint -> a non-http selector must NOT be mistaken for a status constant.
 	otherConst := &ast.SelectorExpr{X: &ast.Ident{Name: "fmt"}, Sel: &ast.Ident{Name: "Sprint"}}
-	// http.StatusTeapot is not in the 2xx success map -> 0.
-	unknownHTTP := &ast.SelectorExpr{X: &ast.Ident{Name: "http"}, Sel: &ast.Ident{Name: "StatusTeapot"}}
+	// http.StatusMovedPermanently is a 3xx: no constructor produces one, so it is
+	// absent from the status-constant map -> 0.
+	unknownHTTP := &ast.SelectorExpr{X: &ast.Ident{Name: "http"}, Sel: &ast.Ident{Name: "StatusMovedPermanently"}}
+	// http.StatusGone resolves, but only on the error-inference path.
+	errorHTTP := &ast.SelectorExpr{X: &ast.Ident{Name: "http"}, Sel: &ast.Ident{Name: "StatusGone"}}
 
-	assert.Equal(t, 0, statusForConstructor("Unknown", nil), "unrecognized constructor -> 0")
-	assert.Equal(t, 0, statusForConstructor("OK", nil), "server.OK does not exist -> 0")
-	assert.Equal(t, 0, statusForConstructor("NewResult", nil), "NewResult with no args -> 0")
-	assert.Equal(t, 0, statusForConstructor("NewResult", []ast.Expr{identArg}), "NewResult with a variable status -> 0")
-	assert.Equal(t, 0, statusForConstructor("NewResult", []ast.Expr{otherConst}), "non-http selector -> 0")
-	assert.Equal(t, 0, statusForConstructor("NewResult", []ast.Expr{unknownHTTP}), "non-2xx http constant -> 0")
-	assert.Equal(t, 418, statusForConstructor("NewResult", []ast.Expr{intLit}), "NewResult with int literal -> that status")
-	assert.Equal(t, 202, statusForConstructor("NewResultWithMeta", []ast.Expr{httpConst}), "NewResultWithMeta with http.StatusAccepted -> 202")
-	assert.Equal(t, 204, statusForConstructor("NoContent", nil))
+	assert.Equal(t, 0, statusForConstructor("Unknown", nil, nil), "unrecognized constructor -> 0")
+	assert.Equal(t, 0, statusForConstructor("OK", nil, nil), "server.OK does not exist -> 0")
+	assert.Equal(t, 0, statusForConstructor("NewResult", nil, nil), "NewResult with no args -> 0")
+	assert.Equal(t, 0, statusForConstructor("NewResult", []ast.Expr{identArg}, nil), "NewResult with a variable status -> 0")
+	assert.Equal(t, 0, statusForConstructor("NewResult", []ast.Expr{otherConst}, nil), "non-http selector -> 0")
+	assert.Equal(t, 0, statusForConstructor("NewResult", []ast.Expr{unknownHTTP}, nil), "3xx http constant -> 0")
+	assert.Equal(t, 206, statusForConstructor("NewResult", []ast.Expr{intLit}, nil), "NewResult with a 2xx int literal -> that status")
+	assert.Equal(t, 0, statusForConstructor("NewResult", []ast.Expr{errLit}, nil), "NewResult with a non-2xx int literal -> 0")
+	assert.Equal(t, 202, statusForConstructor("NewResultWithMeta", []ast.Expr{httpConst}, nil), "NewResultWithMeta with http.StatusAccepted -> 202")
+	assert.Equal(t, 0, statusForConstructor("NewResult", []ast.Expr{errorHTTP}, nil), "4xx http constant -> 0 on the success path")
+	assert.Equal(t, 204, statusForConstructor("NoContent", nil, nil))
 }
 
 // TestMapValueRefRegistration verifies a struct-valued map registers its value
