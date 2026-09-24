@@ -117,6 +117,7 @@ Token rules:
 - An `example:` with no valid representation in its declared type is dropped silently — no warning, no `--strict` failure.
 - This is deliberate: a missing example costs one hint, an ill-typed one would make the whole document invalid.
 - A kept example can still violate `enum`, `format`, `minLength`/`maxLength`, or `pattern` — a known, accepted residual.
+- One exception: under `format: byte`, `coerceStringExample` keeps an example only if `isBase64Text` accepts it (padded standard base64 that `encoding/json` can decode), so a kept byte example never fails kin-openapi's `byte` format check — it can still violate other keywords such as `minLength`.
 - `NOSONAR` and `//nolint` are not interchangeable: `NOSONAR` suppresses a SonarCloud rule, `//nolint` names golangci-lint linters, and both forms exist here.
 - `nolintlint` runs with `allow-unused: false`, so an unnecessary `//nolint` is itself a lint error — don't strip either blindly.
 

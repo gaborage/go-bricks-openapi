@@ -2,6 +2,7 @@ package generator
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"maps"
 	"math"
@@ -27,7 +28,6 @@ const (
 	formatFloat    = "float"
 	formatDouble   = "double"
 	formatDateTime = "date-time"
-	formatBinary   = "binary"
 	formatUUID     = "uuid"
 )
 
@@ -1608,13 +1608,16 @@ var wellKnownFormats = map[string]wellKnownType{
 }
 
 // wellKnownShape resolves the well-known stdlib/library schemas by shape:
-// []byte / []uint8 (a base64 binary string, matched on the element name so a
-// []pkg.uint8 selector correctly misses), and the qualified names in
-// wellKnownFormats (time.Time, time.Duration, uuid.UUID, json.RawMessage).
+// []byte / []uint8 (matched on the element name so a []pkg.uint8 selector
+// correctly misses), and the qualified names in wellKnownFormats (time.Time,
+// time.Duration, uuid.UUID, json.RawMessage).
+//
+// encoding/json marshals a []byte as base64 text, which OpenAPI 3.0 spells
+// `format: byte`; `binary` means raw octets, which no JSON or JOSE body carries.
 func wellKnownShape(s models.TypeShape) (wellKnownType, bool) {
 	if s.Kind == models.ShapeSlice && s.Elem != nil &&
 		(s.Elem.Name == goTypeByte || s.Elem.Name == goTypeUint8) {
-		return wellKnownType{typeString, formatBinary}, true
+		return wellKnownType{typeString, formatByte}, true
 	}
 	if s.Kind == models.ShapeNamed {
 		wk, ok := wellKnownFormats[s.Name]
@@ -1736,7 +1739,7 @@ func coerceExample(raw string, prop *OpenAPIProperty) any {
 	case typeString, "":
 		// "" is the untyped schema emitted for any/interface{} — a string is
 		// valid there because there is no type to violate.
-		return raw
+		return coerceStringExample(raw, prop)
 	case typeInteger:
 		return coerceIntegerExample(raw, prop)
 	case typeNumber:
@@ -1750,6 +1753,32 @@ func coerceExample(raw string, prop *OpenAPIProperty) any {
 		// array and object cannot be expressed by a scalar tag value.
 		return nil
 	}
+}
+
+// coerceStringExample keeps raw verbatim, except under `format: byte`, where a
+// value that is not standard base64 text (see isBase64Text) is dropped. The
+// format is the property's FINAL one — a []byte field's and a validate:"base64"
+// string's alike.
+func coerceStringExample(raw string, prop *OpenAPIProperty) any {
+	if prop.Format == formatByte && !isBase64Text(raw) {
+		return nil
+	}
+	return raw
+}
+
+// isBase64Text reports whether raw is standard, padded base64 (RFC 4648 §4):
+// what encoding/json decodes into a []byte, and the form go-playground's base64
+// rule requires. kin-openapi's `format: byte` pattern is looser — it also passes
+// unpadded and URL-safe text — so everything kept here passes that format
+// check, but an example a go-bricks server would answer with a 400 is dropped. The decoder
+// silently skips '\r' and '\n', which that pattern rejects, so both are refused
+// up front. TestIsBase64TextContract pins the rule to both decoders.
+func isBase64Text(raw string) bool {
+	if strings.ContainsAny(raw, "\r\n") {
+		return false
+	}
+	_, err := base64.StdEncoding.DecodeString(raw)
+	return err == nil
 }
 
 // coerceIntegerExample parses raw as an integer and rejects it unless it also

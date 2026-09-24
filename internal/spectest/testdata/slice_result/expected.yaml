@@ -103,7 +103,7 @@ paths:
                 properties:
                   data:
                     type: string
-                    format: binary
+                    format: byte
                   meta:
                     type: object
                     properties:

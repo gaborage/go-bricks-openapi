@@ -33,8 +33,8 @@ type Packet struct {
 	Cursor uintptr `json:"cursor"` // -> {object}, and one analyzer diagnostic
 
 	Text   []rune   `json:"text"`   // -> array of {integer, int32} — NOT a base64 string
-	Blob   []byte   `json:"blob"`   // -> {string, binary} (unchanged well-known shape)
-	Chunks [][]byte `json:"chunks"` // -> array of {string, binary}
+	Blob   []byte   `json:"blob"`   // -> {string, byte} (unchanged well-known shape)
+	Chunks [][]byte `json:"chunks"` // -> array of {string, byte}
 }
 
 // GetPacketReq identifies a packet by path parameter.
