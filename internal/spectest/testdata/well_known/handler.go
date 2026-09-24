@@ -28,7 +28,7 @@ type Event struct {
 	Labels    map[string]string    `json:"labels"`    // -> object, additionalProperties {string}
 	Addrs     map[string]Address   `json:"addrs"`     // -> object, additionalProperties $ref Address
 	History   map[string][]Address `json:"history"`   // -> object, additionalProperties {array, items $ref}
-	Raw       json.RawMessage      `json:"raw"`       // -> {object}
+	Raw       json.RawMessage      `json:"raw"`       // -> {} (any JSON value)
 }
 
 // GetEventReq identifies an event by path parameter.

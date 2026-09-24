@@ -1,24 +1,18 @@
 openapi: 3.0.1
 info:
-  title: Events API
+  title: Raw_message API
   version: 1.0.0
   description: Generated API specification
 servers:
   - url: /
     description: Relative to the deployment host
 paths:
-  /events/{id}:
+  /documents:
     get:
-      operationId: eventsGetEvent
-      summary: GET /events/{id}
+      operationId: documentsListBodies
+      summary: GET /documents
       tags:
-        - events
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+        - documents
       responses:
         "200":
           description: Successful response
@@ -28,7 +22,51 @@ paths:
                 type: object
                 properties:
                   data:
-                    $ref: '#/components/schemas/Event'
+                    type: array
+                    items: {}
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      operationId: documentsCreateDocument
+      summary: POST /documents
+      tags:
+        - documents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDocumentReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Document'
                   meta:
                     type: object
                     properties:
@@ -53,13 +91,28 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
   schemas:
-    Address:
+    CreateDocumentReq:
       type: object
       properties:
-        city:
-          type: string
-        street:
-          type: string
+        body: {}
+      required:
+        - body
+    Document:
+      type: object
+      properties:
+        attrs:
+          type: object
+          additionalProperties: {}
+        body:
+          example: '{"a":1}'
+        id:
+          type: integer
+          format: int64
+        patches:
+          type: array
+          items: {}
+          maxItems: 5
+        previous: {}
     ErrorResponse:
       type: object
       properties:
@@ -104,39 +157,6 @@ components:
               description: W3C trace identifier for the request
       required:
         - error
-    Event:
-      type: object
-      properties:
-        addrs:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/Address'
-        count:
-          type: integer
-          format: int64
-          minimum: 0
-        createdAt:
-          type: string
-          format: date-time
-        history:
-          type: object
-          additionalProperties:
-            type: array
-            items:
-              $ref: '#/components/schemas/Address'
-        id:
-          type: string
-          format: uuid
-        labels:
-          type: object
-          additionalProperties:
-            type: string
-        payload:
-          type: string
-          format: byte
-        raw: {}
-        ttl:
-          type: integer
   securitySchemes:
     TenantID:
       type: apiKey

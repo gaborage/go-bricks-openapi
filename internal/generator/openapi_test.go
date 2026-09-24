@@ -1427,7 +1427,10 @@ func TestSetTypeAndFormatWellKnownTypes(t *testing.T) {
 		{"byte slice", sliceOf(prim(goTypeByte)), typeString, formatByte},
 		{"uint8 slice alias", sliceOf(prim(goTypeUint8)), typeString, formatByte},
 		{"uuid.UUID", named(goTypeUUID), typeString, formatUUID},
-		{"json.RawMessage", named(goTypeRawMessage), typeObject, ""},
+		// json.RawMessage holds ANY JSON value: an untyped schema, never object,
+		// and never the base64 string or array its underlying []byte suggests.
+		{"json.RawMessage", named(goTypeRawMessage), "", ""},
+		{"pointer json.RawMessage", ptrOf(named(goTypeRawMessage)), "", ""},
 		// []byte must win over the generic []T array branch (not become an array).
 		{"byte slice not array", sliceOf(prim(goTypeByte)), typeString, formatByte},
 		// *[]byte sheds its one pointer level to the same base64 string.
@@ -3519,7 +3522,7 @@ func TestResponsePayloadSchemaWellKnownElement(t *testing.T) {
 	}{
 		{goTypeTimeTime, typeString, formatDateTime},
 		{goTypeUUID, typeString, formatUUID},
-		{goTypeRawMessage, typeObject, ""},
+		{goTypeRawMessage, "", ""}, // any JSON value: untyped items ({})
 	} {
 		got := responsePayloadSchema(&models.TypeInfo{
 			Name:  "Time", // the analyzer stamps the element's type name
@@ -3544,7 +3547,7 @@ func TestResponsePayloadSchemaWellKnownPointerElement(t *testing.T) {
 	}{
 		{goTypeTimeTime, typeString, formatDateTime},
 		{goTypeUUID, typeString, formatUUID},
-		{goTypeRawMessage, typeObject, ""},
+		{goTypeRawMessage, "", ""}, // any JSON value: untyped items ({})
 	} {
 		got := responsePayloadSchema(&models.TypeInfo{
 			Name:  "Time", // the analyzer stamps the element's type name
@@ -3568,6 +3571,81 @@ func TestResponsePayloadSchemaWellKnownPointerElement(t *testing.T) {
 	require.NotNil(t, nums.Items)
 	assert.Equal(t, typeInteger, nums.Items.Type)
 	assert.Equal(t, formatInt64, nums.Items.Format)
+}
+
+// TestRawMessageIsUntypedInEveryPosition locks json.RawMessage to the untyped
+// schema ({}) wherever it appears. A RawMessage holds any JSON value, so a
+// `type` of any kind rejects valid payloads. Each position is compared whole,
+// so a later step that stamps a type, format, `nullable`, constraint or array
+// wrapper onto the empty schema fails here.
+func TestRawMessageIsUntypedInEveryPosition(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	raw := named(goTypeRawMessage)
+
+	// The entry stays in the table, empty: a miss would send the name to the
+	// object fallback, and a []json.RawMessage payload's items to an element $ref.
+	wk, ok := wellKnownShape(raw)
+	require.True(t, ok, "json.RawMessage must stay a well-known type")
+	assert.Equal(t, wellKnownType{}, wk)
+
+	untyped := func() *OpenAPIProperty { return &OpenAPIProperty{} }
+	for _, tc := range []struct {
+		name  string
+		field *models.FieldInfo
+		want  *OpenAPIProperty
+	}{
+		{
+			name:  "field",
+			field: &models.FieldInfo{Shape: raw, JSONName: "body", Description: "d"},
+			want:  &OpenAPIProperty{Description: "d"},
+		},
+		{
+			// No `nullable`: an untyped schema already admits null, like *any.
+			name:  "pointer field",
+			field: &models.FieldInfo{Shape: ptrOf(raw), JSONName: "previous"},
+			want:  untyped(),
+		},
+		{
+			// min/max/len have no keyword on a schema with no kind: nothing lands.
+			name: "field with scalar rules",
+			field: &models.FieldInfo{Shape: raw, JSONName: "body",
+				Constraints: map[string]string{"required": "", "min": "2", "max": "9", "len": "4", "gte": "1"}},
+			want: untyped(),
+		},
+		{
+			name: "slice field with dive rules",
+			field: &models.FieldInfo{Shape: sliceOf(raw), JSONName: "patches",
+				Constraints: map[string]string{"max": "5"}, ElementConstraints: map[string]string{"min": "1"}},
+			want: &OpenAPIProperty{Type: typeArray, Items: untyped(), MaxItems: intPtr(5)},
+		},
+		{
+			name:  "map value",
+			field: &models.FieldInfo{Shape: mapOf(prim(goTypeString), raw), JSONName: "attrs"},
+			want:  &OpenAPIProperty{Type: typeObject, AdditionalProperties: untyped()},
+		},
+		{
+			// An example is kept as a plain string, exactly as on an any field.
+			name:  "field with example",
+			field: &models.FieldInfo{Shape: raw, JSONName: "body", Example: `{"a":1}`},
+			want:  &OpenAPIProperty{Example: `{"a":1}`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, gen.fieldInfoToProperty(tc.field))
+		})
+	}
+
+	t.Run("pointer field emits no nullable key", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: ptrOf(raw), JSONName: "previous"})
+		assert.Equal(t, "{}\n", mustMarshalYAML(t, p))
+	})
+
+	// server.Result[[]json.RawMessage]: the analyzer stamps the element's bare
+	// name, which must not become a $ref (no component exists for it).
+	t.Run("slice payload items", func(t *testing.T) {
+		got := responsePayloadSchema(&models.TypeInfo{Name: "RawMessage", Package: "json", Shape: payloadSlice(raw)})
+		assert.Equal(t, &OpenAPIProperty{Type: typeArray, Items: untyped()}, got)
+	})
 }
 
 // TestBuildResponsesDeclaredErrorStatuses verifies statuses declared with
