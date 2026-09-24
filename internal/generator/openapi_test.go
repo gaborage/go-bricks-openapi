@@ -2,10 +2,13 @@ package generator
 
 import (
 	"bytes"
+	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/gaborage/go-bricks-openapi/internal/models"
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.yaml.in/yaml/v3"
@@ -1421,12 +1424,14 @@ func TestSetTypeAndFormatWellKnownTypes(t *testing.T) {
 		{"pointer time.Time", ptrOf(named(goTypeTimeTime)), typeString, formatDateTime},
 		// encoding/json marshals a Duration as its int64 ns count, NOT a string.
 		{"time.Duration", named(goTypeTimeDuration), typeInteger, formatInt64},
-		{"byte slice", sliceOf(prim(goTypeByte)), typeString, formatBinary},
-		{"uint8 slice alias", sliceOf(prim(goTypeUint8)), typeString, formatBinary},
+		{"byte slice", sliceOf(prim(goTypeByte)), typeString, formatByte},
+		{"uint8 slice alias", sliceOf(prim(goTypeUint8)), typeString, formatByte},
 		{"uuid.UUID", named(goTypeUUID), typeString, formatUUID},
 		{"json.RawMessage", named(goTypeRawMessage), typeObject, ""},
 		// []byte must win over the generic []T array branch (not become an array).
-		{"byte slice not array", sliceOf(prim(goTypeByte)), typeString, formatBinary},
+		{"byte slice not array", sliceOf(prim(goTypeByte)), typeString, formatByte},
+		// *[]byte sheds its one pointer level to the same base64 string.
+		{"pointer byte slice", ptrOf(sliceOf(prim(goTypeByte))), typeString, formatByte},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2765,7 +2770,7 @@ func TestResponsePayloadSchemaWellKnownSlice(t *testing.T) {
 	for _, elem := range []string{goTypeByte, goTypeUint8} {
 		got := responsePayloadSchema(&models.TypeInfo{Shape: payloadSlice(prim(elem))})
 		assert.Equal(t, typeString, got.Type, elem)
-		assert.Equal(t, formatBinary, got.Format, elem)
+		assert.Equal(t, formatByte, got.Format, elem)
 		assert.Nil(t, got.Items, "a base64 string payload is not an array")
 	}
 
@@ -3349,6 +3354,13 @@ func TestCoerceExample(t *testing.T) {
 		{name: "boolean true", raw: "true", prop: &OpenAPIProperty{Type: typeBoolean}, want: true},
 		{name: "boolean rejects yes", raw: "yes", prop: &OpenAPIProperty{Type: typeBoolean}, want: nil},
 		{name: "string passthrough", raw: "12345", prop: &OpenAPIProperty{Type: typeString}, want: "12345"},
+		{name: "byte keeps padded base64", raw: "aGVsbG8=", prop: &OpenAPIProperty{Type: typeString, Format: formatByte}, want: "aGVsbG8="},
+		{name: "byte drops url-safe base64", raw: "_-8", prop: &OpenAPIProperty{Type: typeString, Format: formatByte}, want: nil},
+		{name: "byte drops unpadded base64", raw: "aGVsbG8", prop: &OpenAPIProperty{Type: typeString, Format: formatByte}, want: nil},
+		{name: "byte drops line-wrapped base64", raw: "aGk=\n", prop: &OpenAPIProperty{Type: typeString, Format: formatByte}, want: nil},
+		{name: "byte drops non-base64 text", raw: "not base64!", prop: &OpenAPIProperty{Type: typeString, Format: formatByte}, want: nil},
+		{name: "byte drops padding mid-value", raw: "a=b", prop: &OpenAPIProperty{Type: typeString, Format: formatByte}, want: nil},
+		{name: "non-byte format keeps non-base64 text", raw: "not base64!", prop: &OpenAPIProperty{Type: typeString, Format: formatEmail}, want: "not base64!"},
 		{name: "untyped schema passthrough", raw: "7", prop: &OpenAPIProperty{Type: ""}, want: "7"},
 		{name: "array cannot take a scalar", raw: "x", prop: &OpenAPIProperty{Type: typeArray}, want: nil},
 		{name: "object cannot take a scalar", raw: "x", prop: &OpenAPIProperty{Type: typeObject}, want: nil},
@@ -3358,6 +3370,57 @@ func TestCoerceExample(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := coerceExample(tt.raw, tt.prop)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestIsBase64TextContract pins the byte-format example rule to the two
+// decoders that judge it: an example is kept exactly when kin-openapi's
+// `format: byte` pattern accepts it (so the document still validates) AND
+// encoding/json can decode it into a []byte (so a client sending it back gets
+// no 400). kin's pattern alone also passes unpadded and URL-safe text, which
+// encoding/json rejects; the decoder alone skips '\r' and '\n', which kin
+// rejects.
+func TestIsBase64TextContract(t *testing.T) {
+	kin := regexp.MustCompile(openapi3.FormatOfStringByte)
+	for _, raw := range []string{
+		"", "aGVsbG8=", "aGVsbG8", "aGk=", "aGk==", "aGl=", "YQ==", "_-8", "+/+/",
+		"hello", "a=b", "=", "==", "a b", "not base64!", "aGk=\n", "\naGk=",
+		"aG\r\nk=", "a.b", "é", "%%%", "aGVsbG8=\x00",
+	} {
+		quoted, err := json.Marshal(raw)
+		require.NoError(t, err)
+		var decoded []byte
+		want := kin.MatchString(raw) && json.Unmarshal(quoted, &decoded) == nil
+		assert.Equal(t, want, isBase64Text(raw), "%q", raw)
+	}
+}
+
+// TestFieldInfoToPropertyByteFormatExample pins the example rule for the byte
+// format through the fieldInfoToProperty wrapper, where the example is checked
+// against the FINAL format: a []byte field's well-known format and a string
+// field's validate:"base64" format alike. A non-base64 example is dropped
+// silently; a base64 one is kept verbatim.
+func TestFieldInfoToPropertyByteFormatExample(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	base64Tag := map[string]string{validatorBase64: boolTrueString}
+	tests := []struct {
+		name  string
+		field models.FieldInfo
+		want  any
+	}{
+		{"[]byte keeps base64", models.FieldInfo{Shape: sliceOf(prim(goTypeByte)), Example: "aGVsbG8="}, "aGVsbG8="},
+		{"[]byte drops non-base64", models.FieldInfo{Shape: sliceOf(prim(goTypeByte)), Example: "not base64!"}, nil},
+		{"*[]byte drops non-base64", models.FieldInfo{Shape: ptrOf(sliceOf(prim(goTypeUint8))), Example: "a=b"}, nil},
+		{"base64 string keeps base64", models.FieldInfo{Shape: prim(goTypeString), Constraints: base64Tag, Example: "c2VjcmV0"}, "c2VjcmV0"},
+		{"base64 string drops non-base64", models.FieldInfo{Shape: prim(goTypeString), Constraints: base64Tag, Example: "hello world"}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prop := gen.fieldInfoToProperty(&tt.field)
+			assert.Equal(t, typeString, prop.Type)
+			assert.Equal(t, formatByte, prop.Format)
+			assert.Equal(t, tt.want, prop.Example)
 		})
 	}
 }
@@ -3422,7 +3485,7 @@ func TestResponsePayloadSchemaNestedByteSliceItems(t *testing.T) {
 	assert.Equal(t, typeArray, got.Type)
 	require.NotNil(t, got.Items)
 	assert.Equal(t, typeString, got.Items.Type)
-	assert.Equal(t, formatBinary, got.Items.Format)
+	assert.Equal(t, formatByte, got.Items.Format)
 }
 
 // TestSetTypeAndFormatNestedByteSlice locks the field-path counterpart of the
@@ -3434,7 +3497,15 @@ func TestSetTypeAndFormatNestedByteSlice(t *testing.T) {
 	assert.Equal(t, typeArray, prop.Type)
 	require.NotNil(t, prop.Items)
 	assert.Equal(t, typeString, prop.Items.Type)
-	assert.Equal(t, formatBinary, prop.Items.Format)
+	assert.Equal(t, formatByte, prop.Items.Format)
+
+	// map[string][]byte: every value is a base64 string too.
+	m := &OpenAPIProperty{}
+	gen.setTypeAndFormat(m, mapOf(prim(goTypeString), sliceOf(prim(goTypeByte))))
+	assert.Equal(t, typeObject, m.Type)
+	require.NotNil(t, m.AdditionalProperties)
+	assert.Equal(t, typeString, m.AdditionalProperties.Type)
+	assert.Equal(t, formatByte, m.AdditionalProperties.Format)
 }
 
 // TestResponsePayloadSchemaWellKnownElement locks the items path for a NAMED
@@ -3491,7 +3562,7 @@ func TestResponsePayloadSchemaWellKnownPointerElement(t *testing.T) {
 	blob := responsePayloadSchema(&models.TypeInfo{Shape: payloadSlice(ptrOf(sliceOf(prim(goTypeByte))))})
 	require.NotNil(t, blob.Items)
 	assert.Equal(t, typeString, blob.Items.Type)
-	assert.Equal(t, formatBinary, blob.Items.Format)
+	assert.Equal(t, formatByte, blob.Items.Format)
 
 	nums := responsePayloadSchema(&models.TypeInfo{Shape: payloadSlice(ptrOf(prim(formatInt64)))})
 	require.NotNil(t, nums.Items)

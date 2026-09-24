@@ -15,6 +15,7 @@ const (
 	validatorOneOf    = "oneof"
 	validatorDatetime = "datetime"
 	validatorRegexp   = "regexp"
+	validatorBase64   = "base64"
 
 	// OpenAPI format values
 	formatEmail = "email"
@@ -185,7 +186,7 @@ func constraintsFor(shape models.TypeShape, underlyingKind string, constraints m
 		base = *base.Elem
 	}
 	// []byte/[]uint8 are well-known base64 string types, not arrays — treat them as
-	// scalars (the well-known mapper already types them string/binary), not slices.
+	// scalars (the well-known mapper already types them string/byte), not slices.
 	// Their min/max are byte counts, which do NOT equal the base64-encoded character
 	// length, so we deliberately drop length bounds on them rather than emit a wrong
 	// minLength/maxLength. Map types are handled by a parallel branch below: their
@@ -315,16 +316,16 @@ func isEffectiveNumeric(k string) bool { return k == typeInteger || k == typeNum
 
 // formatTagMap maps boolean validator format tags to their OpenAPI `format`.
 var formatTagMap = map[string]string{
-	formatEmail: formatEmail,
-	"url":       "uri",
-	"uri":       "uri",
-	formatUUID:  formatUUID,
-	"uuid4":     formatUUID,
-	formatDate:  formatDate,
-	formatIPv4:  formatIPv4,
-	"ipv6":      "ipv6",
-	"hostname":  "hostname",
-	"base64":    formatByte,
+	formatEmail:     formatEmail,
+	"url":           "uri",
+	"uri":           "uri",
+	formatUUID:      formatUUID,
+	"uuid4":         formatUUID,
+	formatDate:      formatDate,
+	formatIPv4:      formatIPv4,
+	"ipv6":          "ipv6",
+	"hostname":      "hostname",
+	validatorBase64: formatByte,
 }
 
 // applyFormatConstraint maps boolean format tags to OpenAPI `format`. datetime is

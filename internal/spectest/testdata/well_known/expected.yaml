@@ -133,7 +133,7 @@ components:
             type: string
         payload:
           type: string
-          format: binary
+          format: byte
         raw:
           type: object
         ttl:
