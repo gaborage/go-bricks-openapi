@@ -915,8 +915,8 @@ func sliceResponsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
 	elem := response.Shape.Elem
 	switch {
 	case elem != nil && isWellKnownElem(*elem):
-		// A well-known element (time.Time, uuid.UUID, json.RawMessage) is a
-		// scalar schema, never a component: the $ref branch below would dangle,
+		// A well-known element (time.Time, uuid.UUID, json.RawMessage) is an
+		// inline schema, never a component: the $ref branch below would dangle,
 		// because generateSchemasFromTypes emits no component for it.
 		setElemTypeAndFormat(items, *elem)
 	case response.Name != "":
@@ -954,7 +954,8 @@ func setElemTypeAndFormat(prop *OpenAPIProperty, elem models.TypeShape) {
 }
 
 // setWellKnown stamps a resolved well-known type onto prop. The format is
-// written only when the entry has one (json.RawMessage is a bare object).
+// written only when the entry has one; json.RawMessage has neither, so its
+// schema stays untyped ({}).
 func setWellKnown(prop *OpenAPIProperty, wk wellKnownType) {
 	prop.Type = wk.typ
 	if wk.format != "" {
@@ -1594,7 +1595,12 @@ type wellKnownType struct {
 //     marshals a Duration as its underlying int64 nanosecond count — a JSON
 //     number, NOT a string.
 //   - uuid.UUID      -> uuid-formatted string
-//   - json.RawMessage-> arbitrary JSON object
+//   - json.RawMessage-> untyped schema ({}): it holds ANY JSON value (string,
+//     number, array, boolean, null or object), exactly like any/interface{}.
+//     The entry is empty but must stay. Without it the name falls to the
+//     object fallback in setBasicTypeAndFormat, and a []json.RawMessage
+//     payload's items to a dangling element $ref. Its underlying []byte is
+//     invisible to the AST-only analyzer, so the base64 branch never sees it.
 //
 // NOTE: matching is by the analyzer's qualified type string (pkg-local alias +
 // "." + name), so an aliased import (import t "time" -> "t.Time") is not yet
@@ -1604,7 +1610,7 @@ var wellKnownFormats = map[string]wellKnownType{
 	goTypeTimeTime:     {typeString, formatDateTime},
 	goTypeTimeDuration: {typeInteger, formatInt64},
 	goTypeUUID:         {typeString, formatUUID},
-	goTypeRawMessage:   {typeObject, ""},
+	goTypeRawMessage:   {},
 }
 
 // wellKnownShape resolves the well-known stdlib/library schemas by shape:
