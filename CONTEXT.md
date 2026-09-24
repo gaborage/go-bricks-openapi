@@ -28,6 +28,10 @@ _Avoid_: dropped route, skipped route, missing route
 An `//openapi:<name>` comment attached to a route registration that overrides or supplements what the Survey infers for that route — e.g. marking it public, naming its error statuses. One parser, one namespace; every directive shares the same placement rule.
 _Avoid_: annotation, pragma, marker comment
 
+**Detached directive**:
+A comment group holding at least one recognised Directive that attaches to no registration the Survey recognised — separated from its call by a blank line, above an enclosing statement, inside a call, after code on the same line (`server.GET(...) //openapi:public`), or above a registration the Survey never walks. Only files the Survey's module discovery visits are checked; a file read just to resolve an import (e.g. in a nested Go module) is not. It is a diagnostic, raised once per group. A group attaches as soon as the call below it is recognised as a registration, so a Directive above an Unresolved route is never Detached; a group of only unknown names is reported as unknown, never Detached.
+_Avoid_: orphan directive, misplaced directive, unattached comment
+
 **Pre-flight check**:
 A `doctor`-only check on the environment around the project — Go version, directory layout, `go.mod` presence — made before any Survey and able to stop it. Not part of the Survey.
 _Avoid_: diagnostic (reserved for what a Survey raises), health check
