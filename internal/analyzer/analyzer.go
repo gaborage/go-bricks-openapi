@@ -105,7 +105,7 @@ const (
 // deep chain of DISTINCT types (which the identity cycle guard cannot stop)
 // cannot exhaust the stack. Set far above any realistic schema nesting; a chain
 // deeper than this is treated as pathological input and truncated with a
-// warning. Mirrors the alias-chain cap pattern (namedScalarKind /
+// warning. Mirrors the alias-chain cap pattern (namedScalarBuiltin /
 // resolveTypeSpecChain), applied to both the field-ref and embedded-promotion
 // recursion cycles.
 const maxTypeRegistrationDepth = 1000
@@ -3092,7 +3092,7 @@ func (a *ProjectAnalyzer) registerViaTypeSpecAt(name, pkg string, astFile *ast.F
 // another local named type (recurse in the same package); and `type X = q.T`
 // (resolve the qualified struct in its own package). Returns ok=false when the
 // chain bottoms out at a non-struct (slice/map/interface/func) or cannot be
-// resolved. depth bounds pathological chains (same cap as namedScalarKind).
+// resolved. depth bounds pathological chains (same cap as namedScalarBuiltin).
 func (a *ProjectAnalyzer) resolveTypeSpecChain(astFile *ast.File, filePath, name string, depth int) (st *ast.StructType, pkg string, file *ast.File, path string, ok bool) {
 	if depth > 8 {
 		return nil, "", nil, "", false
@@ -3408,10 +3408,35 @@ func (a *ProjectAnalyzer) registerFieldRefAt(f *models.FieldInfo, pkg string, as
 	}
 	if reg := a.registerTypeAt(shapeBaseName(f.Shape), pkg, astFile, filePath, depth); reg != nil {
 		f.RefName = reg.Name
-		return // a struct ref carries no scalar underlying kind
+		// A struct ref carries no scalar underlying builtin, even when a
+		// build-tagged variant declares the same name as a scalar (see
+		// resolveNamedScalars, which classified the field at extraction).
+		f.UnderlyingKind, f.UnderlyingBuiltin = "", ""
 	}
-	// Not a struct: classify a named, non-struct scalar (Cents -> integer, etc.).
-	f.UnderlyingKind = a.resolveUnderlyingKind(shapeBaseName(f.Shape), astFile, filePath)
+}
+
+// resolveNamedScalars classifies each named, non-struct scalar field by the
+// builtin it bottoms out in (Cents -> int64) and derives its 3-way kind from
+// that. It runs at extraction, where astFile/filePath are those of the struct
+// that declares the fields, so a field promoted from an embedded struct in
+// another package resolves its type in that package rather than in the
+// embedding one. The builtin itself is kept only when every declaration agrees
+// on it: build constraints are not evaluated, so a type declared at different
+// widths in build-tagged files (word_amd64.go / word_386.go) has no single
+// width to advertise and is typed from its kind alone. Fields excluded from
+// JSON and map fields are skipped: neither ever carries a scalar kind.
+func (a *ProjectAnalyzer) resolveNamedScalars(fields []models.FieldInfo, astFile *ast.File, filePath string) {
+	for i := range fields {
+		f := &fields[i]
+		if _, isMap := shapeMapValueBase(f.Shape); isMap || isJSONExcluded(f) {
+			continue
+		}
+		b := a.resolveUnderlyingBuiltin(shapeBaseName(f.Shape), astFile, filePath)
+		f.UnderlyingKind = primitiveKind(b.name)
+		if b.agreed {
+			f.UnderlyingBuiltin = b.name
+		}
+	}
 }
 
 // isJSONExcluded reports whether a field never reaches the emitted document:
@@ -3420,53 +3445,102 @@ func isJSONExcluded(f *models.FieldInfo) bool {
 	return f.JSONName == jsonSkipValue && f.ParamType == ""
 }
 
-// knownUnderlyingKinds maps qualified stdlib/library types with a non-struct
-// scalar underlying type to their OpenAPI kind. (time.Time is a struct handled by
+// knownUnderlyingBuiltins maps qualified stdlib/library types with a non-struct
+// scalar underlying type to that Go builtin. (time.Time is a struct handled by
 // the generator's well-known map, so it is intentionally absent.)
-var knownUnderlyingKinds = map[string]string{
-	"time.Duration": kindInteger,
+var knownUnderlyingBuiltins = map[string]string{
+	"time.Duration": goTypeInt64, // encoding/json marshals it as its int64 ns count
 }
 
-// resolveUnderlyingKind returns the OpenAPI 3-way kind ("integer"/"number"/
-// "string") of a named, non-struct scalar type, or "" when the type is a builtin
-// primitive (handled directly), a struct, or unresolved. base is the already
-// unwrapped terminal name (see shapeBaseName); this recognizes a small set of
-// qualified stdlib types and resolves local `type X <primitive>` declarations
-// to their underlying kind.
-func (a *ProjectAnalyzer) resolveUnderlyingKind(base string, astFile *ast.File, filePath string) string {
-	if k, ok := knownUnderlyingKinds[base]; ok {
-		return k
-	}
-	if strings.Contains(base, ".") {
-		return "" // other qualified types: not classified here
-	}
-	if primitiveKind(base) != "" {
-		return "" // a builtin used directly is not a named wrapper
-	}
-	return a.namedScalarKind(base, astFile, filePath, 0)
+// scalarBuiltin is the outcome of resolving a named scalar to its builtin.
+// name is the builtin reached by following each type's first SCALAR
+// declaration (the field's own file, then sibling files in sorted path order;
+// a declaration over a struct/slice/map/etc. is skipped) — "" when that chain
+// is unresolved — and is what the 3-way kind derives from. agreed reports
+// whether every declaration of every type along the chain bottoms out in that
+// same builtin (byte and uint8, or rune and int32, are one builtin: see
+// sameBuiltin); it is false when build-tagged variants disagree (type Word
+// int64 in one file, type Word int32 in another), or when one variant is not a
+// scalar at all.
+type scalarBuiltin struct {
+	name   string
+	agreed bool
 }
 
-// namedScalarKind resolves a LOCAL named type to its underlying primitive kind,
-// following alias chains (type Cents int64 -> integer; type A B; type B int -> A
-// resolves to integer). depth bounds pathological chains.
-func (a *ProjectAnalyzer) namedScalarKind(name string, astFile *ast.File, filePath string, depth int) string {
+// resolveUnderlyingBuiltin resolves the Go builtin scalar ("int64", "byte",
+// "float32", "string", ...) a named, non-struct scalar type bottoms out in. The
+// name is "" when the type is a builtin primitive (handled directly), a struct,
+// or unresolved. base is the already unwrapped terminal name (see
+// shapeBaseName); this recognizes a small set of qualified stdlib types and
+// resolves local `type X <primitive>` declarations to their underlying builtin.
+func (a *ProjectAnalyzer) resolveUnderlyingBuiltin(base string, astFile *ast.File, filePath string) scalarBuiltin {
+	if b, ok := knownUnderlyingBuiltins[base]; ok {
+		return scalarBuiltin{name: b, agreed: true}
+	}
+	if strings.Contains(base, ".") || primitiveKind(base) != "" {
+		// Other qualified types are not classified here, and a builtin used
+		// directly is not a named wrapper.
+		return scalarBuiltin{agreed: true}
+	}
+	return a.namedScalarBuiltin(base, astFile, filePath, 0)
+}
+
+// namedScalarBuiltin resolves a LOCAL named type to the builtin scalar it
+// bottoms out in, following alias chains (type Cents int64 -> int64; type A B;
+// type B int -> A resolves to int). Every declaration of the type is resolved,
+// not just the first: the first scalar one names the builtin, and any other
+// that bottoms out elsewhere, or in no scalar, clears agreed. depth bounds
+// pathological chains.
+func (a *ProjectAnalyzer) namedScalarBuiltin(name string, astFile *ast.File, filePath string, depth int) scalarBuiltin {
+	res := scalarBuiltin{agreed: true}
 	if depth > 8 {
-		return ""
+		return res
 	}
-	underlying, ok := a.localTypeUnderlying(name, astFile, filePath)
-	if !ok {
-		return ""
+	first := true
+	for _, u := range a.localTypeUnderlyings(name, astFile, filePath) {
+		if u == "" {
+			res.agreed = false // a non-scalar variant has no builtin to agree on
+			continue
+		}
+		r := a.underlyingScalarBuiltin(u, astFile, filePath, depth)
+		if first {
+			res.name, first = r.name, false
+		}
+		res.agreed = res.agreed && r.agreed && sameBuiltin(r.name, res.name)
 	}
-	if k, known := knownUnderlyingKinds[underlying]; known {
-		return k // e.g. `type Timeout time.Duration` -> integer
+	return res
+}
+
+// sameBuiltin reports whether two builtin names denote one Go type. byte and
+// rune are Go's predeclared aliases of uint8 and int32, so `type Word byte` in
+// one build-tagged file and `type Word uint8` in another agree (and
+// setBasicTypeAndFormat emits one schema for either spelling).
+func sameBuiltin(x, y string) bool {
+	canonical := func(name string) string {
+		switch name {
+		case goTypeByte:
+			return goTypeUint8
+		case goTypeRune:
+			return goTypeInt32
+		}
+		return name
 	}
-	if k := primitiveKind(underlying); k != "" {
-		return k // underlying is a builtin scalar
+	return canonical(x) == canonical(y)
+}
+
+// underlyingScalarBuiltin resolves one declaration's underlying identifier u
+// (the "int64" of `type Cents int64`) for namedScalarBuiltin.
+func (a *ProjectAnalyzer) underlyingScalarBuiltin(u string, astFile *ast.File, filePath string, depth int) scalarBuiltin {
+	if b, known := knownUnderlyingBuiltins[u]; known {
+		return scalarBuiltin{name: b, agreed: true} // e.g. `type Timeout time.Duration` -> int64
 	}
-	if strings.Contains(underlying, ".") {
-		return "" // unknown qualified underlying — not classified
+	if primitiveKind(u) != "" {
+		return scalarBuiltin{name: u, agreed: true} // underlying is a builtin scalar
 	}
-	return a.namedScalarKind(underlying, astFile, filePath, depth+1) // chained named type
+	if strings.Contains(u, ".") {
+		return scalarBuiltin{agreed: true} // unknown qualified underlying — not classified
+	}
+	return a.namedScalarBuiltin(u, astFile, filePath, depth+1) // chained named type
 }
 
 // primitiveKind maps a Go builtin scalar type name to its OpenAPI 3-way kind, or
@@ -3484,30 +3558,41 @@ func primitiveKind(goType string) string {
 	return ""
 }
 
-// localTypeUnderlying finds a local `type Name <ident>` declaration and returns
-// the underlying identifier (e.g. Cents -> "int64"). Returns ok=false when Name
-// is not a local non-struct named type. It searches the current file first, then
-// sibling files in the same package (via the cached per-dir parse).
-func (a *ProjectAnalyzer) localTypeUnderlying(name string, astFile *ast.File, filePath string) (string, bool) {
-	if u, ok := namedTypeUnderlyingInFile(astFile, name); ok {
-		return u, true
-	}
-	files, err := a.parsePackageDir(filepath.Dir(filePath))
-	if err != nil {
-		return "", false
-	}
-	for _, file := range files {
-		if u, ok := namedTypeUnderlyingInFile(file, name); ok {
-			return u, true
+// localTypeUnderlyings returns the underlying identifier of every local
+// `type Name ...` declaration (e.g. Cents -> ["int64"]), without duplicates, in
+// a stable search order: the current file first, then sibling files in the
+// same package (via the cached per-dir parse; files of another package in the
+// directory are skipped) in sorted path order. Build constraints are not
+// evaluated, so a type declared at different widths in build-tagged variants
+// (word_amd64.go / word_386.go) yields one entry per width, and the caller
+// decides what a disagreement means. A declaration whose
+// underlying type is not a bare or qualified identifier (a struct/slice/map/
+// etc.) contributes "". The result is empty when Name is not declared locally.
+func (a *ProjectAnalyzer) localTypeUnderlyings(name string, astFile *ast.File, filePath string) []string {
+	var decls []string
+	add := func(file *ast.File) {
+		if u, declared := namedTypeUnderlyingInFile(file, name); declared && !slices.Contains(decls, u) {
+			decls = append(decls, u)
 		}
 	}
-	return "", false
+	add(astFile)
+	files, err := a.parsePackageDir(filepath.Dir(filePath))
+	if err != nil {
+		return decls
+	}
+	for _, p := range slices.Sorted(maps.Keys(files)) {
+		if files[p].Name.Name != astFile.Name.Name {
+			continue // another package in the directory, e.g. a //go:build ignore generator
+		}
+		add(files[p]) // the current file's own on-disk parse repeats, deduplicated
+	}
+	return decls
 }
 
-// namedTypeUnderlyingInFile returns the underlying identifier of a `type Name
-// <ident>` declaration in file, or ok=false when name is absent or its underlying
-// type is not a bare identifier (a struct/slice/map/etc.).
-func namedTypeUnderlyingInFile(file *ast.File, name string) (string, bool) {
+// namedTypeUnderlyingInFile reports whether file declares `type Name ...`, and
+// if so returns the underlying identifier — "" when the underlying type is not
+// a bare or qualified identifier (a struct/slice/map/etc.).
+func namedTypeUnderlyingInFile(file *ast.File, name string) (underlying string, declared bool) {
 	for _, decl := range file.Decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok || gen.Tok != token.TYPE {
@@ -3518,7 +3603,8 @@ func namedTypeUnderlyingInFile(file *ast.File, name string) (string, bool) {
 			if !ok || ts.Name.Name != name {
 				continue
 			}
-			return underlyingIdentString(ts.Type)
+			u, _ := underlyingIdentString(ts.Type)
+			return u, true
 		}
 	}
 	return "", false
@@ -3747,6 +3833,10 @@ func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, pkg st
 		}
 		shallow = append(shallow, a.namedFields(field)...)
 	}
+	// Promoted fields were classified by their own extraction, in the context
+	// of the struct that declares them (another package, for a cross-package
+	// embed); only this struct's own fields are classified here.
+	a.resolveNamedScalars(shallow, astFile, filePath)
 
 	return mergeFieldsByPrecedence(shallow, promoted)
 }

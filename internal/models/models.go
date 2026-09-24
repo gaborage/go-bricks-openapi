@@ -130,7 +130,8 @@ const (
 
 // TypeShape is the syntactic container structure of a field's declared type,
 // decoded once from the AST at extraction. Purely syntactic — it carries no
-// registry knowledge (that is Resolution: RefName/MapValueRefName/UnderlyingKind).
+// registry knowledge (that is Resolution: RefName/MapValueRefName/
+// UnderlyingBuiltin/UnderlyingKind).
 // The zero value (Kind "") is treated everywhere as ShapeUnknown.
 type TypeShape struct {
 	Kind ShapeKind
@@ -174,7 +175,18 @@ type FieldInfo struct {
 	// UnderlyingKind is the OpenAPI 3-way kind ("integer", "number", or "string")
 	// a named, non-struct scalar type resolves to — e.g. `type Cents int64` ->
 	// "integer", time.Duration -> "integer". Empty for builtin primitives (handled
-	// directly), structs, and unresolved types. Consumed by the type/constraint
-	// mappers so a named numeric is documented as its underlying kind.
+	// directly), structs, and unresolved types. Gates the generator's
+	// named-scalar path and drives the constraint mapper's string-vs-numeric
+	// rule decisions.
 	UnderlyingKind string
+	// UnderlyingBuiltin is the Go builtin a named, non-struct scalar resolves to
+	// — e.g. `type Cents int64` -> "int64", `type Flag byte` -> "byte",
+	// time.Duration -> "int64". The generator types a named scalar from this
+	// name, emitting the same type/format/unsigned minimum a bare field of that
+	// builtin does. Empty whenever UnderlyingKind is, and also left empty — with
+	// UnderlyingKind still set — when the type's declarations disagree on the
+	// builtin (build-tagged width variants: `type Word int64` in one file,
+	// `type Word int32` in another). The generator then emits the kind alone,
+	// with no format and no unsigned floor.
+	UnderlyingBuiltin string
 }

@@ -137,6 +137,7 @@ components:
         raw: {}
         ttl:
           type: integer
+          format: int64
   securitySchemes:
     TenantID:
       type: apiKey

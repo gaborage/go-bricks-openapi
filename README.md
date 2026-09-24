@@ -276,7 +276,13 @@ nested Go module, is not.
   declared in several build-tagged files, only one copy is walked — the one in
   the calling file (for a delegate in another package, the file declaring its
   type) if that file declares one, otherwise the one in the first file by name —
-  and a directive in any other copy is reported as detached.
+  and a directive in any other copy is reported as detached. A named scalar
+  declared at different widths in build-tagged files (`type Word int64` in one,
+  `type Word int32` in another) is emitted with its type only, with no `format`
+  and no unsigned `minimum: 0`; `byte` and `uint8`, or `rune` and `int32`, are
+  one width. When the copies also disagree on kind (`type Word string` in one),
+  the type comes from the first scalar copy: the one in the field's own file,
+  otherwise the one in the first file by name.
 
 ## Development
 

@@ -10,6 +10,7 @@ const (
 	kindInteger = "integer"
 
 	// Go primitive type names referenced for type discrimination
+	goTypeInt32 = "int32"
 	goTypeInt64 = "int64"
 	goTypeByte  = "byte"
 	goTypeRune  = "rune"
@@ -40,7 +41,7 @@ func isStringType(typeName string) bool {
 // purpose (see goTypeUintptr).
 func isIntegerType(typeName string) bool {
 	switch typeName {
-	case "int", "int8", "int16", "int32", goTypeInt64,
+	case "int", "int8", "int16", goTypeInt32, goTypeInt64,
 		"uint", goTypeUint8, "uint16", "uint32", "uint64",
 		goTypeByte, goTypeRune:
 		return true

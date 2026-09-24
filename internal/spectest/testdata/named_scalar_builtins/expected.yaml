@@ -197,10 +197,13 @@ components:
             format: byte
         code:
           type: integer
+          format: int32
         cursor:
           type: object
         flag:
           type: integer
+          format: int32
+          minimum: 0
         raw:
           type: integer
           format: int32

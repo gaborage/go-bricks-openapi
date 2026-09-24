@@ -10,12 +10,12 @@ import (
 // Handler holds the shop's HTTP handlers.
 type Handler struct{}
 
-// Cents is a local named scalar; its underlying kind (integer) is emitted instead
-// of the object fallback.
+// Cents is a local named scalar; it is emitted as its underlying int64
+// ({integer, int64}) instead of the object fallback.
 type Cents int64
 
 // Order has a field of an in-module sibling-package type (types.Money) -> $ref,
-// plus a named-scalar field (Discount) emitted as its underlying integer kind.
+// plus a named-scalar field (Discount) emitted as its underlying int64.
 type Order struct {
 	ID       int64       `json:"id"`
 	Total    types.Money `json:"total"`

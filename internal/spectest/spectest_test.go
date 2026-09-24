@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 )
 
 // update regenerates the golden files instead of comparing against them.
@@ -91,4 +92,97 @@ func TestGenerateEmptyProject(t *testing.T) {
 	spec, err := Generate(t.Context(), t.TempDir())
 	require.NoError(t, err)
 	require.NotEmpty(t, spec)
+}
+
+// widthsModule is the module file of TestNamedScalarBuildTaggedWidths; each
+// case declares Word and UWord itself, in build-tagged sibling files.
+const widthsModule = `package words
+
+import (
+	"net/http"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "words" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+type Packet struct {
+	Size  Word   ` + "`json:\"size\"`" + `
+	Sizes []Word ` + "`json:\"sizes\"`" + `
+	Count UWord  ` + "`json:\"count\"`" + `
+}
+
+func (m *Module) get(ctx server.HandlerContext) (server.Result[Packet], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Packet{}), nil
+}
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/packets", m.get)
+}
+`
+
+// TestNamedScalarBuildTaggedWidths runs the real analyze -> generate ->
+// validate pipeline over a project whose named scalars are declared in
+// build-tagged files. Build constraints are not evaluated, so when the
+// variants disagree on width the schema carries the type alone — no format,
+// no unsigned floor — rather than one target's width. When they agree, the
+// builtin's format and floor are kept.
+func TestNamedScalarBuildTaggedWidths(t *testing.T) {
+	integer := map[string]any{"type": "integer"}
+	cases := []struct {
+		name                    string
+		amd64, i386             string // declarations in words_amd64.go / words_386.go
+		size, count, sizesItems map[string]any
+	}{
+		{
+			name:  "widths disagree",
+			amd64: "type Word int64\ntype UWord uint64\n",
+			i386:  "type Word int32\ntype UWord uint32\n",
+			size:  integer, count: integer, sizesItems: integer,
+		},
+		{
+			name:       "widths agree",
+			amd64:      "type Word int64\ntype UWord uint32\n",
+			i386:       "type Word int64\ntype UWord uint32\n",
+			size:       map[string]any{"type": "integer", "format": "int64"},
+			count:      map[string]any{"type": "integer", "format": "int32", "minimum": 0},
+			sizesItems: map[string]any{"type": "integer", "format": "int64"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, src := range map[string]string{
+				"go.mod":         "module github.com/example/words\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.53.0\n",
+				"module.go":      widthsModule,
+				"words_amd64.go": "//go:build amd64\n\npackage words\n\n" + c.amd64,
+				"words_386.go":   "//go:build 386\n\npackage words\n\n" + c.i386,
+			} {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(src), 0o600))
+			}
+
+			spec, err := Generate(t.Context(), dir)
+			require.NoError(t, err)
+			require.NoError(t, Validate(t.Context(), []byte(spec)))
+
+			var doc struct {
+				Components struct {
+					Schemas map[string]struct {
+						Properties map[string]map[string]any `yaml:"properties"`
+					} `yaml:"schemas"`
+				} `yaml:"components"`
+			}
+			require.NoError(t, yaml.Unmarshal([]byte(spec), &doc))
+			props := doc.Components.Schemas["Packet"].Properties
+			require.NotNil(t, props, "Packet component missing:\n%s", spec)
+			assert.Equal(t, c.size, props["size"], "size")
+			assert.Equal(t, c.count, props["count"], "count")
+			assert.Equal(t, map[string]any{"type": "array", "items": c.sizesItems}, props["sizes"], "sizes")
+		})
+	}
 }

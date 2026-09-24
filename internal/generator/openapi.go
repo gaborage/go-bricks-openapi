@@ -1486,21 +1486,25 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 	}
 
 	// A named, non-struct scalar (e.g. `type Cents int64`) carries its resolved
-	// OpenAPI kind from the analyzer; emit that instead of the object fallback
-	// setTypeAndFormat would pick for an unrecognized type name. For a slice of a
-	// named scalar ([]Cents) the resolved kind is the ELEMENT's, so emit an array
-	// whose items carry that kind (and the dive element constraints).
+	// underlying builtin from the analyzer; type it exactly as a bare field of
+	// that builtin (see setNamedScalarType) instead of the object fallback
+	// setTypeAndFormat would pick for an unrecognized type name. For a slice of
+	// a named scalar ([]Cents) the resolved builtin is the ELEMENT's, so emit an
+	// array whose items carry it (and the dive element constraints). Either way
+	// the builtin mapping runs before applyValidationConstraints, so an explicit
+	// bound still overwrites the unsigned floor.
 	if field.UnderlyingKind != "" {
 		if unwrapped.Kind == models.ShapeSlice {
 			prop.Type = typeArray
-			prop.Items = &OpenAPIProperty{Type: field.UnderlyingKind}
+			prop.Items = &OpenAPIProperty{}
+			setNamedScalarType(prop.Items, field)
 			applyValidationConstraints(prop, field) // minItems/maxItems on the array, dive rules on items
 			return prop
 		}
 		// Path 5 — named scalar (Cents). The slice branch is false here, and
-		// prop.Type is set from UnderlyingKind just above, so a `nullable`
-		// emitted here always has a declared type to extend.
-		prop.Type = field.UnderlyingKind
+		// setNamedScalarType always sets prop.Type (UnderlyingKind is non-empty),
+		// so a `nullable` emitted here always has a declared type to extend.
+		setNamedScalarType(prop, field)
 		applyValidationConstraints(prop, field)
 		prop.Nullable = isPointerField(field)
 		return prop
@@ -1667,6 +1671,20 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, shape models.
 	}
 
 	setBasicTypeAndFormat(prop, s.Name)
+}
+
+// setNamedScalarType types prop for a named scalar field (UnderlyingKind set):
+// exactly as a bare field of its UnderlyingBuiltin (type, format, unsigned
+// minimum: 0), or — when the analyzer left the builtin empty because the
+// type's build-tagged declarations disagree on width — from the 3-way kind
+// alone, with no format and no floor, since no single width holds on every
+// target.
+func setNamedScalarType(prop *OpenAPIProperty, field *models.FieldInfo) {
+	if field.UnderlyingBuiltin == "" {
+		prop.Type = field.UnderlyingKind
+		return
+	}
+	setBasicTypeAndFormat(prop, field.UnderlyingBuiltin)
 }
 
 // setBasicTypeAndFormat maps a leaf type NAME to its OpenAPI type and format.

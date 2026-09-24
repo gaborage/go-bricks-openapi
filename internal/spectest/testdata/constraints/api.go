@@ -6,8 +6,9 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
-// Cents is a named integer scalar; its underlying kind (integer) drives numeric
-// constraints (min/max) instead of the object fallback.
+// Cents is a named integer scalar: it is typed as its underlying int64
+// ({integer, int64}), and its integer kind drives numeric constraints (min/max)
+// instead of the object fallback.
 type Cents int64
 
 // CreateReq carries one field per PR11 constraint family.
