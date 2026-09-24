@@ -114,10 +114,13 @@ its diagnostics block and lists each dropped registration with its
 
 A directive is an `//openapi:<name>[ <args>]` comment in a comment group whose
 **last line sits directly above a route registration call**. A directive
-anywhere else (inside the call, on the handler, or separated from the call by a
-blank line) is not attached to any route. Anything after a second `//` on the
-directive line is a human comment and is ignored. Directives are this tool's own
-annotations — go-bricks parses none of them, so they have no runtime effect.
+anywhere else (inside the call, on the handler, above an enclosing `if`,
+separated from the call by a blank line, after code on the same line as in
+`server.GET(...) //openapi:public`, or above a registration the analyzer never
+walks) is not attached to any route and raises a warning. Anything after a
+second `//` on the directive line is a human comment and is ignored. Directives
+are this tool's own annotations — go-bricks parses none of them, so they have
+no runtime effect.
 
 ```go
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
@@ -180,7 +183,15 @@ is a misuse the tool does not model: the operation keeps its `200` default.
 An unknown `//openapi:<name>`, an argument on `//openapi:public`, and a
 malformed or out-of-range `errors` token each raise an analyzer warning naming
 the offender — so they fail `generate --strict` with no artifact emitted. The
-remaining valid `errors` tokens are still applied.
+remaining valid `errors` tokens are still applied. A recognised directive that
+attaches to no route raises the same kind of warning, once per comment group and
+located at its first recognised directive:
+`mod/module.go:12: directive public has no effect — it is not directly above an analyzed route registration`.
+A directive above a registration the analyzer recognises but then drops (an
+unresolved path, a non-static method) is covered by that registration's own
+warning instead. Only the service's own files are checked for detached
+directives: a file read just to resolve an imported type, such as one in a
+nested Go module, is not.
 
 ## Requirements
 
@@ -230,6 +241,11 @@ remaining valid `errors` tokens are still applied.
 - A route registered on a `Group(...)` whose prefix argument is itself
   unresolvable is an Unresolved route too — it is dropped rather than emitted
   at a path missing its prefix.
+- Build constraints (`//go:build`) are ignored. When a registration helper is
+  declared in several build-tagged files, only one copy is walked — the one in
+  the calling file (for a delegate in another package, the file declaring its
+  type) if that file declares one, otherwise the one in the first file by name —
+  and a directive in any other copy is reported as detached.
 
 ## Development
 

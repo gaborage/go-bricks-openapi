@@ -122,7 +122,7 @@ type ProjectAnalyzer struct {
 	pkgCache         map[string]map[string]*ast.File    // dir -> (file path -> parsed AST), populated on demand
 	nameAssign       map[string]string                  // "pkg\x00Type" -> final schema name (collision qualification)
 	usedNames        map[string]struct{}                // final schema names already taken
-	directives       map[string]map[int]routeDirectives // filename -> end line of a Directive comment group -> its Directives
+	directives       map[string]map[int]*directiveGroup // filename -> end line of a Directive comment group -> the group and its attached flag
 	directiveFiles   map[string]struct{}                // files already Directive-indexed (keeps diagnostics once-only)
 	depthWarned      bool                               // once-latch: registration-depth cap already warned this run
 	tagWarned        map[string]struct{}                // dedupes malformed-struct-tag warnings by "file:line:col"
@@ -146,7 +146,7 @@ func New(projectRoot string) *ProjectAnalyzer {
 		pkgCache:       make(map[string]map[string]*ast.File),
 		nameAssign:     make(map[string]string),
 		usedNames:      make(map[string]struct{}),
-		directives:     map[string]map[int]routeDirectives{},
+		directives:     map[string]map[int]*directiveGroup{},
 		directiveFiles: map[string]struct{}{},
 	}
 }
@@ -236,7 +236,7 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	a.unresolvedRoutes = nil
 	a.typeRegistry = make(map[string]*models.TypeInfo)
 	a.pkgCache = make(map[string]map[string]*ast.File)
-	a.directives = make(map[string]map[int]routeDirectives)
+	a.directives = make(map[string]map[int]*directiveGroup)
 	a.directiveFiles = make(map[string]struct{})
 	a.nameAssign = make(map[string]string)
 	a.usedNames = make(map[string]struct{})
@@ -294,7 +294,8 @@ func (a *ProjectAnalyzer) parseGoModForProjectName(project *models.Project, cont
 }
 
 // discoverModules finds all go-bricks modules in the project and, afterward,
-// surfaces near-miss diagnostics for packages that produced no real module.
+// surfaces near-miss diagnostics for packages that produced no real module and
+// Detached directives in the files the walk visited.
 func (a *ProjectAnalyzer) discoverModules() ([]models.Module, error) {
 	d := &moduleDiscoverer{
 		analyzer:   a,
@@ -302,6 +303,7 @@ func (a *ProjectAnalyzer) discoverModules() ([]models.Module, error) {
 		seen:       make(map[string]bool),
 		moduleDirs: make(map[string]bool),
 		nearMiss:   make(map[string]nearMissCandidate),
+		files:      make(map[string]bool),
 	}
 
 	err := filepath.Walk(a.projectRoot, d.walk)
@@ -325,6 +327,9 @@ func (a *ProjectAnalyzer) discoverModules() ([]models.Module, error) {
 			c.structName, c.relFile, moduleMethodRegisterRoutes)
 	}
 
+	// Every registration the walk will ever recognise has now been recognised.
+	a.warnDetachedDirectives(d.files)
+
 	return d.modules, err
 }
 
@@ -343,6 +348,7 @@ type moduleDiscoverer struct {
 	seen       map[string]bool              // module directories already added (dedup modules)
 	moduleDirs map[string]bool              // directories that produced a real module
 	nearMiss   map[string]nearMissCandidate // directory -> first near-miss struct
+	files      map[string]bool              // Go source files the walk visited: this service's own code
 }
 
 // walk is the callback function for filepath.Walk to discover modules
@@ -361,6 +367,7 @@ func (d *moduleDiscoverer) walk(path string, info os.FileInfo, err error) error 
 	if !strings.HasSuffix(path, goFileExt) || strings.HasSuffix(path, testFileExt) {
 		return nil
 	}
+	d.files[path] = true
 
 	module, nearMiss, err := d.analyzer.analyzeGoFile(path)
 	if err != nil {
@@ -986,6 +993,7 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes prefixMap, scop
 	if !ok {
 		return nil
 	}
+	w.a.markDirectivesAttached(call.Pos())
 
 	rawPath, resolved := w.a.resolvePathExpr(call.Args[shape.pathIdx], scopes)
 	if !resolved {
@@ -1075,6 +1083,7 @@ func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, prefixes prefixMap, s
 	if !ok {
 		return nil
 	}
+	w.a.markDirectivesAttached(call.Pos())
 	if len(call.Args) < 3 {
 		w.a.addWarningf("skipping a %s.Add route: expected at least 3 arguments (method, path, handler), got %d", recv, len(call.Args))
 		return nil
@@ -1408,6 +1417,10 @@ func (a *ProjectAnalyzer) validateServerCall(callExpr *ast.CallExpr, serverAlias
 		if len(callExpr.Args) < 5 {
 			return routeCallShape{}, false
 		}
+		// Recognised as a registration even if its method then fails to
+		// resolve: the skip warning below covers the route, so its directives
+		// are attached rather than reported as detached.
+		a.markDirectivesAttached(callExpr.Pos())
 		method, ok := a.staticHTTPMethod(callExpr.Args[2])
 		if !ok || !a.isHTTPMethod(method) {
 			a.addWarningf("skipping a server.RegisterHandler route: its method argument is not a static HTTP method (string literal or http.MethodX constant)")
@@ -1439,7 +1452,9 @@ func (a *ProjectAnalyzer) staticHTTPMethod(arg ast.Expr) (string, bool) {
 // findMethodDecl finds the declaration of method methodName on structName,
 // searching the current file then the rest of the package (through the
 // per-dir parse cache, so a directory resolved earlier in the walk — e.g. by
-// resolveQualifiedStruct — is not re-read and re-parsed).
+// resolveQualifiedStruct — is not re-read and re-parsed). The package's files
+// are searched in file-name order, so a method declared in more than one file
+// (build constraints are ignored) resolves to the same copy on every run.
 func (a *ProjectAnalyzer) findMethodDecl(astFile *ast.File, filePath, structName, methodName string) *ast.FuncDecl {
 	if decl := a.findMethodInFile(astFile, structName, methodName); decl != nil {
 		return decl
@@ -1449,8 +1464,8 @@ func (a *ProjectAnalyzer) findMethodDecl(astFile *ast.File, filePath, structName
 	}
 	files, err := a.parsePackageDir(filepath.Dir(filePath))
 	if err == nil {
-		for _, file := range files {
-			if decl := a.findMethodInFile(file, structName, methodName); decl != nil {
+		for _, path := range slices.Sorted(maps.Keys(files)) {
+			if decl := a.findMethodInFile(files[path], structName, methodName); decl != nil {
 				return decl
 			}
 		}
