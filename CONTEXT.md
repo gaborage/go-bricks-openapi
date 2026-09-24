@@ -21,7 +21,7 @@ One reading of a project's source that every command consumes: the discovered mo
 _Avoid_: analysis run, pipeline, report, audit
 
 **Unresolved route**:
-A route whose registration the Survey found but whose path expression it could not reduce to a string — a `var` or `:=` local, a non-string local binding shadowing a constant of the same name, a qualified constant from another package, a call result, or a group whose own prefix is unresolvable. Distinct from an Untyped route, which has a path but no typed handler. An Unresolved route is a diagnostic and is counted on its own, never folded into the typed/untyped ratio.
+A route whose registration the Survey found but whose path expression it could not reduce to a string — a `var` or `:=` local, a non-string local binding shadowing a constant of the same name, a qualified constant from another package, a call result, a group whose own prefix is unresolvable, a group registrar reassigned inside a branch of an `if`, `switch` or `select`, a loop or a closure, or after a closure that reads it, whose prefix therefore depends on control flow (a bare `{ }` block always runs, so a reassignment in it counts as one in the block enclosing it), or a group registrar holding a value the Survey cannot trace to a `Group(...)` call. Distinct from an Untyped route, which has a path but no typed handler. An Unresolved route is a diagnostic and is counted on its own, never folded into the typed/untyped ratio.
 _Avoid_: dropped route, skipped route, missing route
 
 **Directive**:

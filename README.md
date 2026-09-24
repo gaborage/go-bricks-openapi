@@ -104,11 +104,11 @@ a CI gate can assert `Warnings: 0` instead of scraping stderr.
 
 `Unresolved routes: K` follows it whenever the analysis dropped at least one
 route whose path it could not resolve (a `var` path, a qualified constant, an
-unresolvable group prefix — see "Known limitations"). The line is omitted
-entirely when there are none, so anything parsing the summary must tolerate an
-extra line rather than assume a fixed one. `doctor` reports the same count in
-its diagnostics block and lists each dropped registration with its
-`file:line:col` and the reason.
+unresolvable, path-dependent or untraced group prefix — see "Known
+limitations"). The line is omitted entirely when there are none, so anything
+parsing the summary must tolerate an extra line rather than assume a fixed
+one. `doctor` reports the same count in its diagnostics block and lists each
+dropped registration with its `file:line:col` and the reason.
 
 ### Comment directives
 
@@ -188,7 +188,8 @@ attaches to no route raises the same kind of warning, once per comment group and
 located at its first recognised directive:
 `mod/module.go:12: directive public has no effect — it is not directly above an analyzed route registration`.
 A directive above a registration the analyzer recognises but then drops (an
-unresolved path, a non-static method) is covered by that registration's own
+unresolved path; a group prefix that is unresolvable, depends on control flow or
+cannot be traced; a non-static method) is covered by that registration's own
 warning instead. Only the service's own files are checked for detached
 directives: a file read just to resolve an imported type, such as one in a
 nested Go module, is not.
@@ -241,6 +242,36 @@ nested Go module, is not.
 - A route registered on a `Group(...)` whose prefix argument is itself
   unresolvable is an Unresolved route too — it is dropped rather than emitted
   at a path missing its prefix.
+- A group registrar takes the binding in effect where each route is
+  registered: `api = r.Group("/v2")`, `var api = r.Group(...)` or `api = v1`
+  (another registrar) in the registrar's own block applies only to the routes
+  below it, and an inner `api := r.Group(...)` shadows it only inside that
+  block. A bare `{ }` block always runs, so a reassignment in it counts as
+  a reassignment in the block that encloses it. A reassignment from a nested
+  `if`, `switch` or `select` block stands inside that block, and an `else` or
+  a later `case` still sees the earlier binding — except a `case` reached by
+  `fallthrough`, where it is unresolved; once the whole statement is left the
+  prefix depends on which path ran, so routes on it are Unresolved routes. A reassignment
+  inside a loop or closure makes them Unresolved routes throughout the loop
+  or closure too, and for good after a closure; a closure's routes on a
+  registrar reassigned after it (or by the statement that creates it) are
+  likewise unresolved, since the closure may run later. Branches are not
+  merged: an `if` and an `else` assigning the same prefix still leave it
+  unresolved. `goto` is not modelled: a jump in either direction can skip or
+  repeat a reassignment, yet each route keeps the prefix a top-to-bottom
+  reading gives it, with no warning.
+- A registrar assigned a value the analyzer cannot follow to a `Group(...)`
+  call, such as `api = m.legacyGroup()`, has an untraced prefix, and routes on
+  it are Unresolved routes. So are routes on a closure parameter, range
+  variable, `select` receive variable or local that shadows a group registrar
+  of the same name. A registrar never bound to a `Group(...)` call or another
+  registrar — a closure parameter under a fresh name, a struct field, a local
+  copied from one — is treated as prefix-less: `server.<METHOD>` routes a
+  caller registers on it through a group are emitted without that group's
+  prefix, and an `.Add` on it is not recognized as a registration at all, so a
+  directive above that `.Add` is reported as detached. This is read where the
+  `.Add` is: a local that is a group registrar only in a sibling block, or
+  only from a later write in its own block, is not one there.
 - Build constraints (`//go:build`) are ignored. When a registration helper is
   declared in several build-tagged files, only one copy is walked — the one in
   the calling file (for a delegate in another package, the file declaring its
