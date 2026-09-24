@@ -31,6 +31,9 @@ const (
 	directiveGetThings = "GET /things"
 	publicNoArgsMsg    = "directive public takes no arguments"
 	detachedMsg        = "not directly above an analyzed route registration"
+
+	pathDependentGroupPrefixMsg = "whose group prefix depends on control flow"
+	untracedGroupPrefixMsg      = "whose group prefix cannot be traced"
 )
 
 // directiveLoc is the "file:line: " prefix of a directive diagnostic raised on
@@ -373,8 +376,9 @@ func TestDetachedDirectiveUnknownOnlyGroup(t *testing.T) {
 
 // TestDirectiveAboveDroppedRegistrationNotDetached verifies a group attaches as
 // soon as the call below it is recognised as a registration, before its path,
-// prefix, or method resolves: the route's own skip diagnostic already covers
-// it, so no detached warning is added.
+// prefix, or method resolves — including a group prefix that depends on
+// control flow or cannot be traced: the route's own skip diagnostic already
+// covers it, so no detached warning is added.
 func TestDirectiveAboveDroppedRegistrationNotDetached(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -416,6 +420,88 @@ func TestDirectiveAboveDroppedRegistrationNotDetached(t *testing.T) {
 	r.Add("GET", "/things")`,
 			dropWarn: "skipping a r.Add route",
 		},
+		{
+			name: "registrar reassigned inside an if, route after it",
+			body: `	api := r.Group("/a")
+	if m != nil {
+		api = r.Group("/b")
+	}
+	//openapi:public
+	server.GET(hr, api, "/things", m.h)`,
+			dropWarn: pathDependentGroupPrefixMsg,
+		},
+		{
+			name: "Add on a registrar reassigned inside an if, route after it",
+			body: `	api := r.Group("/a")
+	if m != nil {
+		api = r.Group("/b")
+	}
+	//openapi:errors 404
+	api.Add("GET", "/things", m.h)`,
+			dropWarn: pathDependentGroupPrefixMsg,
+		},
+		{
+			name: "closure parameter shadowing a group registrar",
+			body: `	api := r.Group("/a")
+	register := func(api server.RouteRegistrar) {
+		//openapi:public
+		server.GET(hr, api, "/things", m.h)
+	}
+	register(api)`,
+			dropWarn: untracedGroupPrefixMsg,
+		},
+		{
+			name: "Add on a closure parameter shadowing a group registrar",
+			body: `	api := r.Group("/a")
+	register := func(api server.RouteRegistrar) {
+		//openapi:public
+		api.Add("GET", "/things", m.h)
+	}
+	register(api)`,
+			dropWarn: untracedGroupPrefixMsg,
+		},
+		{
+			name: "route in a loop whose registrar the loop reassigns",
+			body: `	api := r.Group("/a")
+	for i := 0; i < 2; i++ {
+		//openapi:public
+		server.GET(hr, api, "/things", m.h)
+		api = r.Group("/b")
+	}`,
+			dropWarn: pathDependentGroupPrefixMsg,
+		},
+		{
+			name: "Add in a loop whose registrar the loop reassigns",
+			body: `	api := r.Group("/a")
+	for i := 0; i < 2; i++ {
+		//openapi:public
+		api.Add("GET", "/things", m.h)
+		api = r.Group("/b")
+	}`,
+			dropWarn: pathDependentGroupPrefixMsg,
+		},
+		{
+			name: "route in a closure on a registrar reassigned after it",
+			body: `	api := r.Group("/a")
+	register := func() {
+		//openapi:errors 404
+		server.GET(hr, api, "/things", m.h)
+	}
+	api = r.Group("/b")
+	register()`,
+			dropWarn: pathDependentGroupPrefixMsg,
+		},
+		{
+			name: "Add in a closure on a registrar reassigned after it",
+			body: `	api := r.Group("/a")
+	register := func() {
+		//openapi:errors 404
+		api.Add("GET", "/things", m.h)
+	}
+	api = r.Group("/b")
+	register()`,
+			dropWarn: pathDependentGroupPrefixMsg,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -424,6 +510,56 @@ func TestDirectiveAboveDroppedRegistrationNotDetached(t *testing.T) {
 			assert.Empty(t, routes)
 			assert.Len(t, warningsContaining(warnings, tt.dropWarn), 1)
 			assert.Empty(t, warningsContaining(warnings, detachedMsg), "a recognised registration attaches its directives even when dropped")
+		})
+	}
+}
+
+// TestDirectiveAboveUnrecognisedAddIsDetached verifies an .Add on a local that
+// is not a group registrar at the call's position — one that is a group
+// registrar only in a sibling block, or only from a later write in its own
+// block — is not a registration, so the directive above it attaches to nothing
+// and is reported as detached, while the other route keeps its prefix.
+func TestDirectiveAboveUnrecognisedAddIsDetached(t *testing.T) {
+	tests := []struct {
+		name         string
+		body         string
+		route        string
+		detachedLine int
+	}{
+		{
+			name: "group registrar only in a sibling block",
+			body: `	if m != nil {
+		f := r.Group("/f")
+		server.GET(hr, f, "/things", m.h)
+	} else {
+		f := m.api
+		//openapi:public
+		f.Add("GET", "/things", m.h)
+	}`,
+			route:        "GET /f/things",
+			detachedLine: 6,
+		},
+		{
+			name: "group registrar only after a later write in the same block",
+			body: `	late := m.api
+	//openapi:public
+	late.Add("GET", "/late", m.h)
+	late = r.Group("/late-x")
+	server.GET(hr, late, "/things", m.h)`,
+			route:        "GET /late-x/things",
+			detachedLine: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			routes, warnings := analyzeDirectiveModule(t, tt.body)
+
+			require.Len(t, routes, 1)
+			assert.Equal(t, tt.route, routes[0].key)
+			assert.False(t, routes[0].public)
+			assert.Equal(t, []string{
+				directiveLoc(tt.detachedLine) + "directive public has no effect — it is not directly above an analyzed route registration",
+			}, warnings)
 		})
 	}
 }

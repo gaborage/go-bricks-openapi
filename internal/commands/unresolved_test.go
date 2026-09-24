@@ -101,3 +101,68 @@ func TestRunDoctorNoUnresolvedRoutesBlock(t *testing.T) {
 	assert.NotContains(t, out, "Unresolved routes:")
 	assert.NotContains(t, out, " at "+testMainGoFile+":")
 }
+
+// pathDependentModSrc registers a route on a group whose registrar a nested
+// block reassigns: the route after the block has a prefix that depends on
+// control flow, so the analyzer drops it as an Unresolved route with a warning.
+const pathDependentModSrc = `package svc
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{ legacy bool }
+
+func (m *Module) Name() string                    { return "svc" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+type Ping struct {
+	OK bool ` + "`json:\"ok\"`" + `
+}
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	api := r.Group("/v1")
+	server.GET(hr, api, "/ping", m.ping, server.WithTags("svc"))
+	if m.legacy {
+		api = r.Group("/v0")
+	}
+	server.GET(hr, api, "/status", m.ping, server.WithTags("svc"))
+}
+
+func (m *Module) ping(ctx server.HandlerContext) (server.Result[Ping], server.IAPIError) {
+	return server.NewResult(200, Ping{}), nil
+}
+`
+
+// TestPathDependentGroupPrefixFailsStrict proves a route whose group prefix
+// depends on control flow is surfaced end to end: generate --strict fails
+// without writing an artifact, and doctor lists the route with its reason.
+func TestPathDependentGroupPrefixFailsStrict(t *testing.T) {
+	t.Run("generate --strict fails", func(t *testing.T) {
+		dir := writeProject(t, warningSummaryGoMod(), pathDependentModSrc)
+		out := filepath.Join(t.TempDir(), outputFileName)
+
+		var runErr error
+		stdout := testutil.CaptureStdout(t, func() {
+			runErr = runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out, Strict: true})
+		})
+
+		require.Error(t, runErr, "a path-dependent group prefix must fail --strict")
+		assert.Contains(t, stdout, unresolvedCountLine+"\n")
+		assert.NoFileExists(t, out, "a failed --strict run must not leave an artifact")
+	})
+
+	t.Run("doctor lists the reason", func(t *testing.T) {
+		dir := writeProject(t, warningSummaryGoMod(), pathDependentModSrc)
+		opts := &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion}
+
+		var runErr error
+		out := testutil.CaptureStdout(t, func() { runErr = runDoctor(t.Context(), opts) })
+
+		require.NoError(t, runErr, "an unresolved route is a caveat, not a hard error")
+		assert.Contains(t, out, unresolvedCountLine)
+		assert.Contains(t, out, `group prefix on registrar "api" depends on control flow`)
+	})
+}

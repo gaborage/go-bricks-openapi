@@ -100,6 +100,18 @@ func TestScopedConstRoutePaths(t *testing.T) {
 			wantPaths: nil,
 		},
 		{
+			name:      "select receive variable shadows a package const",
+			pkgDecls:  "const p = \"/pkg\"",
+			body:      "select {\n\tcase p := <-ch:\n\t\tserver.GET(hr, r, p, m.h)\n\t}",
+			wantPaths: nil,
+		},
+		{
+			name:      "short declaration reusing a local keeps it shadowing a package const",
+			pkgDecls:  "const p = \"/pkg\"",
+			body:      "p := compute()\n\tserver.GET(hr, r, p, m.h)\n\tn, p := 1, compute()\n\t_, _ = n, p",
+			wantPaths: nil,
+		},
+		{
 			name:      "group prefix from a function local const",
 			body:      "const base = \"/api/v1\"\n\tapi := r.Group(base)\n\tserver.GET(hr, api, \"/widgets\", m.h)",
 			wantPaths: []string{"/api/v1/widgets"},
@@ -311,6 +323,27 @@ func f() {
 	}
 }
 
+// TestShortDeclReuseKeepsFirstBinding pins Go's rule that a `:=` naming a
+// variable its own block already declares assigns that variable rather than
+// declaring a new one: the binding keeps the position where it first entered
+// scope, so a use between the two statements still resolves to it.
+func TestShortDeclReuseKeepsFirstBinding(t *testing.T) {
+	src := `package p
+func f() {
+	a := x()
+	_ = a
+	b, a := y()
+}`
+	file, err := parser.ParseFile(token.NewFileSet(), "p.go", src, 0)
+	require.NoError(t, err)
+	fn, ok := file.Decls[0].(*ast.FuncDecl)
+	require.True(t, ok)
+
+	got := stmtBindings(fn.Body.List)
+	assert.Equal(t, fn.Body.List[0].End(), got["a"].from, "a reused name keeps its first declaration")
+	assert.Equal(t, fn.Body.List[2].End(), got["b"].from, "a new name enters scope at its own statement")
+}
+
 func TestScopeBindings(t *testing.T) {
 	src := `package p
 func f() {
@@ -323,6 +356,8 @@ func f() {
 	case <-ch:
 		const s = "/s"
 		_ = s
+	case msg := <-ch:
+		_ = msg
 	}
 	for i := 0; i < 3; i++ {
 	}
@@ -354,7 +389,7 @@ func f() {
 		return true
 	})
 
-	for _, name := range []string{"c", "s", "i", "k", "v", "y", "x", "tv"} {
+	for _, name := range []string{"c", "s", "msg", "i", "k", "v", "y", "x", "tv"} {
 		assert.True(t, bound[name], "%s must bind in the scope its statement introduces", name)
 	}
 

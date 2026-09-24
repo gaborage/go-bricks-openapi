@@ -25,8 +25,8 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	api.Add(http.MethodPost, "/things", m.createThing)
 
 	// (3) negative discriminator: .Add on a non-registrar receiver must be
-	// ignored. notReg is a local var absent from the registrar prefix map, so
-	// the comma-ok gate drops it silently (no /nope path in the spec).
+	// ignored. notReg holds no registrar binding, so the registrar gate drops
+	// it silently (no /nope path in the spec).
 	notReg := &sink{}
 	notReg.Add(http.MethodGet, "/nope", m.ping)
 }

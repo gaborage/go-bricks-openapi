@@ -42,6 +42,23 @@ func (s constScopes) resolve(name string, at token.Pos) (b binding, found bool) 
 	return binding{}, false
 }
 
+// hidden returns the declarations of name that the innermost one visible at
+// position at hides, innermost first, as the positions they enter scope at,
+// followed by token.NoPos for the package level. It is empty when no block
+// declares name at that point, since nothing is then hidden.
+func (s constScopes) hidden(name string, at token.Pos) []token.Pos {
+	var froms []token.Pos
+	for i := len(s) - 1; i >= 0; i-- {
+		if b, ok := s[i][name]; ok && b.from <= at {
+			froms = append(froms, b.from)
+		}
+	}
+	if len(froms) == 0 {
+		return nil
+	}
+	return append(froms[1:], token.NoPos)
+}
+
 // push returns the chain extended by one scope. An empty scope is a no-op, and
 // the copy is exact-capacity so a later push by a sibling cannot overwrite this
 // chain's tail.
@@ -59,6 +76,7 @@ func (s constScopes) push(scope map[string]binding) constScopes {
 type scopeVisitor struct {
 	scopes constScopes
 	visit  func(ast.Node, constScopes)
+	blocks functionBlocks
 }
 
 // walkScoped walks body, invoking visit for every node with the binding chain
@@ -68,7 +86,7 @@ func walkScoped(body *ast.BlockStmt, outer map[string]binding, visit func(ast.No
 	if body == nil {
 		return
 	}
-	ast.Walk(&scopeVisitor{scopes: constScopes(nil).push(outer), visit: visit}, body)
+	ast.Walk(&scopeVisitor{scopes: constScopes(nil).push(outer), visit: visit, blocks: newFunctionBlocks(body, outer)}, body)
 }
 
 // Visit implements ast.Visitor. A scope-introducing node is handed to visit
@@ -79,14 +97,44 @@ func (v *scopeVisitor) Visit(n ast.Node) ast.Visitor {
 	if n == nil {
 		return nil
 	}
-	scope, introduces := scopeBindings(n)
+	scope, introduces := v.blocks.scopeOf(n)
 	if !introduces || len(scope) == 0 {
 		v.visit(n, v.scopes)
 		return v
 	}
-	child := &scopeVisitor{scopes: v.scopes.push(scope), visit: v.visit}
+	child := &scopeVisitor{scopes: v.scopes.push(scope), visit: v.visit, blocks: v.blocks}
 	child.visit(n, child.scopes)
 	return child
+}
+
+// functionBlocks maps each function body of one walk — the walked body and
+// every function literal's — to the names its signature declares. Go places a
+// function's receiver, parameters and named results in the same block as the
+// body's top-level declarations, so a `:=` naming one of them
+// (`n, r := 1, f(r)`) assigns it rather than declaring a new variable: the
+// body's own scope must leave such a name to the signature.
+type functionBlocks map[*ast.BlockStmt]map[string]binding
+
+// newFunctionBlocks starts the index for a walk of body, whose signature
+// declares outer.
+func newFunctionBlocks(body *ast.BlockStmt, outer map[string]binding) functionBlocks {
+	return functionBlocks{body: outer}
+}
+
+// scopeOf is scopeBindings for a node of the walk, minus the names a function
+// body's signature already declares. A function literal records its body's
+// signature as it is reached, so nodes must arrive in walk order.
+func (f functionBlocks) scopeOf(n ast.Node) (map[string]binding, bool) {
+	scope, introduces := scopeBindings(n)
+	switch node := n.(type) {
+	case *ast.FuncLit:
+		f[node.Body] = scope
+	case *ast.BlockStmt:
+		for name := range f[node] {
+			delete(scope, name)
+		}
+	}
+	return scope, introduces
 }
 
 // scopeBindings returns the names a node binds in the lexical scope it
@@ -101,7 +149,8 @@ func scopeBindings(n ast.Node) (map[string]binding, bool) {
 	case *ast.CaseClause:
 		return stmtBindings(node.Body), true
 	case *ast.CommClause:
-		return stmtBindings(node.Body), true
+		// A receive clause's `v := <-ch` declares v for the clause body only.
+		return stmtBindings(append([]ast.Stmt{node.Comm}, node.Body...)), true
 	case *ast.IfStmt:
 		return stmtBindings([]ast.Stmt{node.Init}), true
 	case *ast.ForStmt:
@@ -187,13 +236,20 @@ func bindDecl(scope map[string]binding, stmt *ast.DeclStmt) {
 	}
 }
 
-// bindShortDecl records the names a `:=` statement binds.
+// bindShortDecl records the names a `:=` statement binds. A name the block
+// already declares is not redeclared — Go assigns to the existing variable —
+// so its first binding, and the position it entered scope at, stands; a use
+// between the two statements still resolves to that local.
 func bindShortDecl(scope map[string]binding, stmt *ast.AssignStmt) {
 	if stmt.Tok != token.DEFINE {
 		return
 	}
 	for _, lhs := range stmt.Lhs {
-		bindIdent(scope, lhs, stmt.End())
+		if ident, ok := lhs.(*ast.Ident); ok {
+			if _, declared := scope[ident.Name]; !declared {
+				bind(scope, ident, binding{from: stmt.End()})
+			}
+		}
 	}
 }
 
