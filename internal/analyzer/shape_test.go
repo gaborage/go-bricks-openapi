@@ -104,7 +104,7 @@ func TestTypeShapeStructure(t *testing.T) {
 // TestShapeBaseName ports TestBaseStructTypeName to shapes. The one deliberate
 // divergence is documented in the map row: the old string helper returned
 // "map[string]Address" verbatim, which failed every registry lookup; "" fails
-// them identically (verified: registerTypeAt and namedScalarKind both bottom out
+// them identically (verified: registerTypeAt and namedScalarBuiltin both bottom out
 // at a name lookup no declaration can match, with no warning and no side effect).
 func TestShapeBaseName(t *testing.T) {
 	a := New("")

@@ -64,6 +64,7 @@ components:
       properties:
         amount:
           type: integer
+          format: int64
           minimum: 1
           maximum: 10000
         meta:

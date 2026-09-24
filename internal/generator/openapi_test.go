@@ -2923,7 +2923,9 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 	})
 
 	t.Run("named numeric via UnderlyingKind -> minimum/maximum", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: named("Cents"), UnderlyingKind: "integer", JSONName: "amt", Constraints: map[string]string{"min": "1", "max": "100"}})
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: named("Cents"), UnderlyingKind: "integer", UnderlyingBuiltin: goTypeInt64, JSONName: "amt", Constraints: map[string]string{"min": "1", "max": "100"}})
+		assert.Equal(t, typeInteger, p.Type)
+		assert.Equal(t, formatInt64, p.Format, "type Cents int64 keeps the builtin's format")
 		require.NotNil(t, p.Minimum)
 		assert.Equal(t, 1.0, *p.Minimum)
 		require.NotNil(t, p.Maximum)
@@ -2949,7 +2951,7 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 		// []Cents -> field.UnderlyingKind=="integer" (analyzer strips the slice), so
 		// dive,gte=0 maps to a numeric minimum on the items, not a dropped constraint.
 		p := gen.fieldInfoToProperty(&models.FieldInfo{
-			Shape: sliceOf(named("Cents")), UnderlyingKind: "integer", JSONName: "amounts",
+			Shape: sliceOf(named("Cents")), UnderlyingKind: "integer", UnderlyingBuiltin: goTypeInt64, JSONName: "amounts",
 			ElementConstraints: map[string]string{"gte": "0"},
 		})
 		assert.Equal(t, typeArray, p.Type)
@@ -2982,6 +2984,172 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 		assert.Equal(t, 1, *p.MinProperties)
 		require.NotNil(t, p.MaxProperties)
 		assert.Equal(t, 10, *p.MaxProperties)
+	})
+}
+
+// TestFieldInfoToPropertyNamedScalarMatchesBuiltin locks #78: a named scalar
+// over builtin B (`type Cents int64`, `type Flag byte`) emits exactly the schema
+// a bare B field emits — type, format, and the unsigned minimum: 0 floor —
+// directly, behind a pointer, and as the items of a slice. The bare builtin's
+// own output is the oracle, so the two paths cannot drift apart.
+func TestFieldInfoToPropertyNamedScalarMatchesBuiltin(t *testing.T) {
+	gen := New(defaultTitle, defaultVersion, defaultDescription)
+	cases := []struct{ builtin, kind string }{
+		{goTypeInt, typeInteger}, {goTypeInt8, typeInteger}, {goTypeInt16, typeInteger},
+		{goTypeInt32, typeInteger}, {goTypeInt64, typeInteger}, {goTypeRune, typeInteger},
+		{goTypeUint, typeInteger}, {goTypeUint8, typeInteger}, {goTypeUint16, typeInteger},
+		{goTypeUint32, typeInteger}, {goTypeUint64, typeInteger}, {goTypeByte, typeInteger},
+		{goTypeFloat32, typeNumber}, {goTypeFloat64, typeNumber},
+		{goTypeString, typeString},
+	}
+	for _, c := range cases {
+		t.Run(c.builtin, func(t *testing.T) {
+			namedField := func(shape models.TypeShape) *models.FieldInfo {
+				return &models.FieldInfo{Shape: shape, JSONName: "v", UnderlyingKind: c.kind, UnderlyingBuiltin: c.builtin}
+			}
+			bare := gen.fieldInfoToProperty(&models.FieldInfo{Shape: prim(c.builtin), JSONName: "v"})
+			require.Equal(t, c.kind, bare.Type, "oracle sanity: the bare builtin is typed")
+
+			assert.Equal(t, bare, gen.fieldInfoToProperty(namedField(named("N"))), "named scalar")
+
+			barePtr := gen.fieldInfoToProperty(&models.FieldInfo{Shape: ptrOf(prim(c.builtin)), JSONName: "v"})
+			assert.Equal(t, barePtr, gen.fieldInfoToProperty(namedField(ptrOf(named("N")))), "pointer to named scalar")
+
+			// A slice of byte/uint8 elements is skipped: encoding/json marshals
+			// any slice whose element kind is uint8 as a base64 string, a
+			// separate gap this test must not lock in.
+			if c.builtin == goTypeByte || c.builtin == goTypeUint8 {
+				return
+			}
+			arr := gen.fieldInfoToProperty(namedField(sliceOf(named("N"))))
+			assert.Equal(t, typeArray, arr.Type)
+			assert.Equal(t, bare, arr.Items, "items of a named-scalar slice")
+		})
+	}
+}
+
+// TestFieldInfoToPropertyNamedScalarBoundOverFloor locks the order the
+// named-scalar path shares with the bare one: setBasicTypeAndFormat pre-stamps
+// the unsigned minimum: 0 first, then applyValidationConstraints overwrites it
+// only with an explicit bound — on the field itself and on dive items.
+func TestFieldInfoToPropertyNamedScalarBoundOverFloor(t *testing.T) {
+	gen := New(defaultTitle, defaultVersion, defaultDescription)
+	count := func(shape models.TypeShape) *models.FieldInfo {
+		return &models.FieldInfo{Shape: shape, JSONName: "count", UnderlyingKind: typeInteger, UnderlyingBuiltin: goTypeUint32}
+	}
+
+	t.Run("explicit min overwrites the floor", func(t *testing.T) {
+		f := count(named("Count"))
+		f.Constraints = map[string]string{"min": "5"}
+		p := gen.fieldInfoToProperty(f)
+		assert.Equal(t, typeInteger, p.Type)
+		assert.Equal(t, formatInt32, p.Format)
+		require.NotNil(t, p.Minimum)
+		assert.Equal(t, 5.0, *p.Minimum)
+	})
+
+	t.Run("max alone keeps the floor", func(t *testing.T) {
+		f := count(named("Count"))
+		f.Constraints = map[string]string{"max": "10"}
+		p := gen.fieldInfoToProperty(f)
+		require.NotNil(t, p.Minimum)
+		assert.Equal(t, 0.0, *p.Minimum, "an upper bound must not erase the unsigned floor")
+		require.NotNil(t, p.Maximum)
+		assert.Equal(t, 10.0, *p.Maximum)
+	})
+
+	t.Run("dive min overwrites the items floor", func(t *testing.T) {
+		f := count(sliceOf(named("Count")))
+		f.ElementConstraints = map[string]string{"min": "5"}
+		p := gen.fieldInfoToProperty(f)
+		require.NotNil(t, p.Items)
+		assert.Equal(t, formatInt32, p.Items.Format)
+		require.NotNil(t, p.Items.Minimum)
+		assert.Equal(t, 5.0, *p.Items.Minimum)
+	})
+}
+
+// TestFieldInfoToPropertyNamedScalarExample pins the consumer-visible side of
+// #78: example coercion (unchanged) now sees the builtin's format and unsigned
+// floor on a named scalar, so an example the bare builtin would drop is dropped
+// here too — silently, keeping the document valid — and an in-range one is kept.
+func TestFieldInfoToPropertyNamedScalarExample(t *testing.T) {
+	gen := New(defaultTitle, defaultVersion, defaultDescription)
+	cases := []struct {
+		name, builtin, example string
+		want                   any
+	}{
+		{name: "negative on a named byte is dropped by the floor", builtin: goTypeByte, example: "-1", want: nil},
+		{name: "overflow on a named int32 is dropped by the format", builtin: goTypeInt32, example: "3000000000", want: nil},
+		// Bare int is documented as int32 (setBasicTypeAndFormat), so a named
+		// int drops a 64-bit example exactly as a bare int field does.
+		{name: "a 64-bit value on a named int is dropped by the int32 format", builtin: goTypeInt, example: "3000000000", want: nil},
+		{name: "in-range value on a named uint32 is kept", builtin: goTypeUint32, example: "7", want: int64(7)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bare := gen.fieldInfoToProperty(&models.FieldInfo{Shape: prim(c.builtin), JSONName: "v", Example: c.example})
+			p := gen.fieldInfoToProperty(&models.FieldInfo{
+				Shape: named("N"), JSONName: "v", Example: c.example,
+				UnderlyingKind: typeInteger, UnderlyingBuiltin: c.builtin,
+			})
+			assert.Equal(t, c.want, p.Example)
+			assert.Equal(t, bare.Example, p.Example, "a named scalar keeps or drops an example exactly as its bare builtin does")
+		})
+	}
+}
+
+// TestFieldInfoToPropertyNamedScalarKindOnly locks the fallback for a named
+// scalar the analyzer resolved to a kind but no builtin — its build-tagged
+// declarations disagree on width (type Word int64 / type Word int32), so no
+// single format holds on every target. The property is typed from
+// UnderlyingKind alone, with no format and no unsigned floor, directly, behind
+// a pointer and as slice items; constraints and example coercion then apply
+// to that kind-only schema exactly as they always have.
+func TestFieldInfoToPropertyNamedScalarKindOnly(t *testing.T) {
+	gen := New(defaultTitle, defaultVersion, defaultDescription)
+	kindOnly := func(shape models.TypeShape, kind string) *models.FieldInfo {
+		return &models.FieldInfo{Shape: shape, JSONName: "v", UnderlyingKind: kind}
+	}
+	for _, kind := range []string{typeInteger, typeNumber, typeString} {
+		t.Run(kind, func(t *testing.T) {
+			assert.Equal(t, &OpenAPIProperty{Type: kind}, gen.fieldInfoToProperty(kindOnly(named("Word"), kind)), "named scalar")
+			assert.Equal(t, &OpenAPIProperty{Type: kind, Nullable: true}, gen.fieldInfoToProperty(kindOnly(ptrOf(named("Word")), kind)), "pointer to named scalar")
+			assert.Equal(t, &OpenAPIProperty{Type: typeArray, Items: &OpenAPIProperty{Type: kind}}, gen.fieldInfoToProperty(kindOnly(sliceOf(named("Word")), kind)), "items of a named-scalar slice")
+		})
+	}
+
+	t.Run("constraints apply on the field and on dive items", func(t *testing.T) {
+		f := kindOnly(named("Word"), typeInteger)
+		f.Constraints = map[string]string{"min": "5"}
+		p := gen.fieldInfoToProperty(f)
+		assert.Empty(t, p.Format)
+		require.NotNil(t, p.Minimum)
+		assert.Equal(t, 5.0, *p.Minimum)
+
+		f = kindOnly(sliceOf(named("Word")), typeInteger)
+		f.ElementConstraints = map[string]string{"max": "9"}
+		p = gen.fieldInfoToProperty(f)
+		require.NotNil(t, p.Items)
+		assert.Nil(t, p.Items.Minimum, "no unsigned floor on kind-only items")
+		require.NotNil(t, p.Items.Maximum)
+		assert.Equal(t, 9.0, *p.Items.Maximum)
+	})
+
+	t.Run("examples coerce against the kind alone", func(t *testing.T) {
+		for _, c := range []struct {
+			kind, example string
+			want          any
+		}{
+			{typeInteger, "-1", int64(-1)},                 // no unsigned floor to reject it
+			{typeInteger, "3000000000", int64(3000000000)}, // no int32 format to overflow
+			{typeInteger, "1.5", nil},                      // still not an integer
+			{typeNumber, "1.5", 1.5},
+		} {
+			f := kindOnly(named("Word"), c.kind)
+			f.Example = c.example
+			assert.Equal(t, c.want, gen.fieldInfoToProperty(f).Example, "%s example %q", c.kind, c.example)
+		}
 	})
 }
 

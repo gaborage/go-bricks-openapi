@@ -21,10 +21,10 @@ type Addr uintptr
 
 // Packet exercises Go's predeclared scalar aliases and their containers.
 type Packet struct {
-	// Named scalars carry the analyzer's 3-way kind only (no format), exactly
-	// as `type Cents int64` does today.
-	Flag Flag `json:"flag"` // -> {integer}
-	Code Code `json:"code"` // -> {integer}
+	// Named scalars emit exactly what their underlying builtin does, format
+	// and unsigned floor included.
+	Flag Flag `json:"flag"` // -> {integer, int32, minimum 0}, as a bare byte
+	Code Code `json:"code"` // -> {integer, int32}, as a bare rune
 	Addr Addr `json:"addr"` // -> {object} (uintptr: never typed, see README)
 
 	// The builtins themselves carry type AND format.

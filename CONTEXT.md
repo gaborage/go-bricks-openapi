@@ -9,7 +9,7 @@ The syntactic container structure of a declared type — pointer, slice, map, na
 _Avoid_: type string, kind (overloaded with OpenAPI's `type` keyword)
 
 **Resolution**:
-The registry outcome for a field's base type: which named schema it references and what scalar kind underlies it. A distinct, later phase than Shape — resolving requires the type registry; Shape does not.
+The registry outcome for a field's base type: which named schema it references, or which builtin scalar underlies it (and so its kind). A distinct, later phase than Shape — resolving requires the type registry; Shape does not.
 _Avoid_: lookup, ref info
 
 **Constraint set**:
