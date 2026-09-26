@@ -3550,6 +3550,23 @@ func TestCoerceExample(t *testing.T) {
 		{name: "byte drops non-base64 text", raw: "not base64!", prop: &OpenAPIProperty{Type: typeString, Format: formatByte}, want: nil},
 		{name: "byte drops padding mid-value", raw: "a=b", prop: &OpenAPIProperty{Type: typeString, Format: formatByte}, want: nil},
 		{name: "non-byte format keeps non-base64 text", raw: "not base64!", prop: &OpenAPIProperty{Type: typeString, Format: formatEmail}, want: "not base64!"},
+		{name: "date-time keeps UTC", raw: "2024-01-02T03:04:05Z", prop: &OpenAPIProperty{Type: typeString, Format: formatDateTime}, want: "2024-01-02T03:04:05Z"},
+		{name: "date-time keeps fraction and offset", raw: "2024-01-02T03:04:05.123+01:00", prop: &OpenAPIProperty{Type: typeString, Format: formatDateTime}, want: "2024-01-02T03:04:05.123+01:00"},
+		{name: "date-time drops free text", raw: "now", prop: &OpenAPIProperty{Type: typeString, Format: formatDateTime}, want: nil},
+		{name: "date-time drops comma fraction", raw: "2024-01-02T03:04:05,123Z", prop: &OpenAPIProperty{Type: typeString, Format: formatDateTime}, want: nil},
+		{name: "date-time drops lowercase t", raw: "2024-01-02t03:04:05Z", prop: &OpenAPIProperty{Type: typeString, Format: formatDateTime}, want: nil},
+		{name: "date-time drops lowercase z", raw: "2024-01-02T03:04:05z", prop: &OpenAPIProperty{Type: typeString, Format: formatDateTime}, want: nil},
+		{name: "date-time drops space separator", raw: "2024-01-02 03:04:05Z", prop: &OpenAPIProperty{Type: typeString, Format: formatDateTime}, want: nil},
+		{name: "date-time drops colonless offset", raw: "2024-01-02T03:04:05+0100", prop: &OpenAPIProperty{Type: typeString, Format: formatDateTime}, want: nil},
+		{name: "date-time drops impossible day", raw: "2024-02-31T00:00:00Z", prop: &OpenAPIProperty{Type: typeString, Format: formatDateTime}, want: nil},
+		{name: "date-time drops leap second", raw: "2024-01-02T03:04:60Z", prop: &OpenAPIProperty{Type: typeString, Format: formatDateTime}, want: nil},
+		{name: "date keeps full-date", raw: "2024-01-02", prop: &OpenAPIProperty{Type: typeString, Format: formatDate}, want: "2024-01-02"},
+		{name: "date drops impossible day", raw: "2024-02-31", prop: &OpenAPIProperty{Type: typeString, Format: formatDate}, want: nil},
+		{name: "date drops slash layout", raw: "01/02/2024", prop: &OpenAPIProperty{Type: typeString, Format: formatDate}, want: nil},
+		{name: "date drops year-month", raw: "2024-01", prop: &OpenAPIProperty{Type: typeString, Format: formatDate}, want: nil},
+		{name: "date drops unpadded month and day", raw: "2024-1-2", prop: &OpenAPIProperty{Type: typeString, Format: formatDate}, want: nil},
+		{name: "date drops date-time", raw: "2024-01-02T03:04:05Z", prop: &OpenAPIProperty{Type: typeString, Format: formatDate}, want: nil},
+		{name: "uuid format keeps a non-uuid example", raw: "not-a-uuid", prop: &OpenAPIProperty{Type: typeString, Format: formatUUID}, want: "not-a-uuid"},
 		{name: "untyped schema passthrough", raw: "7", prop: &OpenAPIProperty{Type: ""}, want: "7"},
 		{name: "array cannot take a scalar", raw: "x", prop: &OpenAPIProperty{Type: typeArray}, want: nil},
 		{name: "object cannot take a scalar", raw: "x", prop: &OpenAPIProperty{Type: typeObject}, want: nil},
@@ -3582,6 +3599,54 @@ func TestIsBase64TextContract(t *testing.T) {
 		var decoded []byte
 		want := kin.MatchString(raw) && json.Unmarshal(quoted, &decoded) == nil
 		assert.Equal(t, want, isBase64Text(raw), "%q", raw)
+	}
+}
+
+// TestDateFormatPatternsContract pins the local date / date-time patterns to
+// kin-openapi's, and pins the set of string formats kin checks by default to
+// exactly the three coerceStringExample guards (byte, date, date-time): a kin
+// upgrade that changes a pattern or starts checking another string format
+// fails here rather than silently letting an ill-formatted example invalidate
+// the document.
+func TestDateFormatPatternsContract(t *testing.T) {
+	assert.Equal(t, openapi3.FormatOfStringDate, formatOfStringDate)
+	assert.Equal(t, openapi3.FormatOfStringDateTime, formatOfStringDateTime)
+	formats := make([]string, 0, len(openapi3.SchemaStringFormats))
+	for name := range openapi3.SchemaStringFormats {
+		formats = append(formats, name)
+	}
+	assert.ElementsMatch(t, []string{formatByte, formatDate, formatDateTime}, formats)
+}
+
+// TestFieldInfoToPropertyDateFormatExample pins the date / date-time example
+// rule through the fieldInfoToProperty wrapper, where the example is checked
+// against the FINAL format: time.Time's well-known date-time, and the format a
+// validate:"datetime=<layout>" or validate:"date" tag stamps over a string. An
+// example that is not RFC 3339 is dropped silently; a valid one is kept verbatim.
+func TestFieldInfoToPropertyDateFormatExample(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	dateLayout := map[string]string{validatorDatetime: "2006-01-02"}
+	dateTag := map[string]string{formatDate: boolTrueString}
+	tests := []struct {
+		name   string
+		field  models.FieldInfo
+		format string
+		want   any
+	}{
+		{"time.Time keeps RFC 3339", models.FieldInfo{Shape: named(goTypeTimeTime), Example: "2024-01-02T03:04:05Z"}, formatDateTime, "2024-01-02T03:04:05Z"},
+		{"time.Time drops free text", models.FieldInfo{Shape: named(goTypeTimeTime), Example: "now"}, formatDateTime, nil},
+		{"*time.Time drops impossible day", models.FieldInfo{Shape: ptrOf(named(goTypeTimeTime)), Example: "2024-02-31T00:00:00Z"}, formatDateTime, nil},
+		{"datetime layout keeps full-date", models.FieldInfo{Shape: prim(goTypeString), Constraints: dateLayout, Example: "2024-01-02"}, formatDate, "2024-01-02"},
+		{"datetime layout drops slash date", models.FieldInfo{Shape: prim(goTypeString), Constraints: dateLayout, Example: "01/02/2024"}, formatDate, nil},
+		{"date tag drops year-month", models.FieldInfo{Shape: prim(goTypeString), Constraints: dateTag, Example: "2024-01"}, formatDate, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prop := gen.fieldInfoToProperty(&tt.field)
+			assert.Equal(t, typeString, prop.Type)
+			assert.Equal(t, tt.format, prop.Format)
+			assert.Equal(t, tt.want, prop.Example)
+		})
 	}
 }
 

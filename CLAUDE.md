@@ -117,7 +117,7 @@ Token rules:
 - An `example:` with no valid representation in its declared type is dropped silently — no warning, no `--strict` failure.
 - This is deliberate: a missing example costs one hint, an ill-typed one would make the whole document invalid.
 - A kept example can still violate `enum`, `format`, `minLength`/`maxLength`, or `pattern` — a known, accepted residual.
-- One exception: under `format: byte`, `coerceStringExample` keeps an example only if `isBase64Text` accepts it (padded standard base64 that `encoding/json` can decode), so a kept byte example never fails kin-openapi's `byte` format check — it can still violate other keywords such as `minLength`.
+- The exception is the three string formats kin-openapi v0.149.0 checks by default — `byte`, `date`, `date-time` — where `coerceStringExample` keeps an example only if it passes: `byte` needs `isBase64Text` (padded standard base64 that `encoding/json` can decode); `date` / `date-time` need kin's own pattern (local constants pinned to `openapi3.FormatOfStringDate`/`DateTime` by `TestDateFormatPatternsContract`) **and** `time.Parse` with `time.DateOnly` / `time.RFC3339` — both checks, since Go alone passes a comma fraction kin rejects and kin alone passes `2024-02-31` and `:60`. So a kept example never fails kin's format check — it can still violate other keywords such as `minLength`; other formats (`uuid`, `email`, …) are unchecked by kin and stay verbatim.
 - `NOSONAR` and `//nolint` are not interchangeable: `NOSONAR` suppresses a SonarCloud rule, `//nolint` names golangci-lint linters, and both forms exist here.
 - `nolintlint` runs with `allow-unused: false`, so an unnecessary `//nolint` is itself a lint error — don't strip either blindly.
 
