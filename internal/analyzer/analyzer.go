@@ -2358,7 +2358,51 @@ func (a *ProjectAnalyzer) handleResultWrapper(x, index ast.Expr, packageName str
 	if arr, ok := index.(*ast.ArrayType); ok {
 		return a.slicePayloadTypeInfo(arr, packageName, serverAliases)
 	}
-	return a.typeInfoFromExpr(index, packageName, serverAliases)
+	return a.scalarPayloadTypeInfo(index, packageName, serverAliases)
+}
+
+// scalarPayloadTypeInfo resolves a non-slice type argument (server.Result[Item],
+// server.Result[time.Time], server.Result[*string]) and attaches its Shape, so
+// the generator can document a well-known or builtin payload inline instead of
+// $ref'ing a component that is never emitted.
+//
+// A builtin (one pointer level shed) names no component, so its Name is
+// cleared — the same rule slicePayloadTypeInfo applies to a primitive element.
+// interface{} is resolved here too: typeInfoFromExpr has no case for it, but
+// as a payload it is "any JSON value", exactly like any. If the payload later
+// registers as a project struct, populateTypeFields sheds the Shape again
+// (shedRegisteredPayloadShape), so it keeps the plain $ref path.
+func (a *ProjectAnalyzer) scalarPayloadTypeInfo(
+	index ast.Expr, packageName string, serverAliases map[string]struct{},
+) *models.TypeInfo {
+	shape := a.typeShape(index)
+	if _, ok := index.(*ast.InterfaceType); ok {
+		return &models.TypeInfo{Package: packageName, Shape: &shape}
+	}
+	ti := a.typeInfoFromExpr(index, packageName, serverAliases)
+	if ti == nil {
+		return nil
+	}
+	if PayloadBaseShape(shape).Kind == models.ShapePrimitive {
+		ti.Name = ""
+	}
+	ti.Shape = &shape
+	return ti
+}
+
+// PayloadBaseShape returns the shape a payload's schema is resolved from: a
+// slice payload's element, otherwise the payload itself, with one pointer
+// level shed — the generator's uniform pointer discipline (shapeAfterPointer).
+// Exported for doctor's isTypedPayload, which must classify payloads by the
+// same base shape the analyzer screens them by.
+func PayloadBaseShape(s models.TypeShape) models.TypeShape {
+	if s.Kind == models.ShapeSlice && s.Elem != nil {
+		s = *s.Elem
+	}
+	if s.Kind == models.ShapePointer && s.Elem != nil {
+		s = *s.Elem
+	}
+	return s
 }
 
 // slicePayloadTypeInfo resolves a slice type argument (server.Result[[]Item],
@@ -2993,9 +3037,9 @@ func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile 
 	if registered == nil {
 		// Only an UNQUALIFIED (in-package) type can be a local non-struct
 		// declaration. A qualified type that failed both resolution attempts is
-		// stdlib/third-party — keep its existing silent fallback, and never let
-		// a coincidental same-named local type here discard a legitimately-
-		// qualified type.
+		// stdlib/third-party — never let a coincidental same-named local type
+		// here discard a legitimately-qualified type. Whatever is still named
+		// afterwards is screened by dropUnresolvablePayloadName.
 		//
 		// An own-package Ident reference's Package is NOT "" — handleIdentType
 		// stamps Package: packageName, which is always astFile.Name.Name (the
@@ -3011,6 +3055,7 @@ func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile 
 				typeInfo.Fields = nil
 			}
 		}
+		a.dropUnresolvablePayloadName(typeInfo)
 		return
 	}
 	// Mirror the registered fields onto the route's TypeInfo (request bodies and
@@ -3019,6 +3064,44 @@ func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile 
 	typeInfo.Name = registered.Name
 	typeInfo.Fields = registered.Fields
 	typeInfo.JOSE = registered.JOSE
+	shedRegisteredPayloadShape(typeInfo)
+}
+
+// shedRegisteredPayloadShape drops the Shape of a non-slice payload that
+// registered as a project struct, so the generator $refs its component exactly
+// as it did before payloads carried a Shape. The Shape decoder spells a
+// cross-package reference by its short qualified name, so a project struct
+// uuid.UUID (or time.Time) is indistinguishable there from the well-known type:
+// kept, the generator would document it inline and orphan its component. A
+// slice payload keeps its Shape — the array wrapper is built from it — so a
+// slice of such a colliding project type is still inlined by its element name.
+func shedRegisteredPayloadShape(ti *models.TypeInfo) {
+	if ti.Shape != nil && ti.Shape.Kind != models.ShapeSlice {
+		ti.Shape = nil
+	}
+}
+
+// dropUnresolvablePayloadName screens a response payload whose name resolved to
+// no component: a third-party type (decimal.Decimal), an undeclared name, or an
+// aliased import of a well-known type (t.Time, not yet recognised). Left named,
+// the generator would $ref a component that is never emitted, so the name is
+// cleared with a warning — the untyped-object path server.Result[Status] takes —
+// and --strict fails instead of the document.
+//
+// Only a result-wrapper payload carries a Shape, so request bodies are never
+// touched here. A well-known type keeps its name: the generator documents it
+// inline from the Shape, and the doctor counts it as typed by that name.
+func (a *ProjectAnalyzer) dropUnresolvablePayloadName(ti *models.TypeInfo) {
+	if ti.Name == "" || ti.Shape == nil {
+		return
+	}
+	base := PayloadBaseShape(*ti.Shape)
+	if base.Kind == models.ShapeNamed && models.WellKnownTypeNames[base.Name] {
+		return
+	}
+	a.addWarningf("response type %s resolves to no schema component — emitting an untyped schema (declare it as a struct in the project for a typed spec)", base.Name)
+	ti.Name = ""
+	ti.Fields = nil
 }
 
 // registerType resolves the named type and registers it (and its struct-typed
@@ -3449,7 +3532,7 @@ func isJSONExcluded(f *models.FieldInfo) bool {
 // scalar underlying type to that Go builtin. (time.Time is a struct handled by
 // the generator's well-known map, so it is intentionally absent.)
 var knownUnderlyingBuiltins = map[string]string{
-	"time.Duration": goTypeInt64, // encoding/json marshals it as its int64 ns count
+	models.WellKnownTimeDuration: goTypeInt64, // encoding/json marshals it as its int64 ns count
 }
 
 // scalarBuiltin is the outcome of resolving a named scalar to its builtin.

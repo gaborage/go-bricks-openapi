@@ -3604,10 +3604,44 @@ func TestTypeInfoFromExprResultWrappers(t *testing.T) {
 	t.Run("result_map_is_nil", func(t *testing.T) {
 		assert.Nil(t, parseResult(t, "server.Result[map[string]User]"), "maps are out of scope")
 	})
-	t.Run("non_slice_result_carries_no_shape", func(t *testing.T) {
+	t.Run("non_slice_result_carries_its_shape", func(t *testing.T) {
 		ti := parseResult(t, "server.Result[User]")
 		require.NotNil(t, ti)
-		assert.Nil(t, ti.Shape, "a scalar payload must stay shapeless so the $ref path is unchanged")
+		assert.Equal(t, "User", ti.Name, "a named payload keeps its name so the component still registers")
+		require.NotNil(t, ti.Shape, "the generator resolves well-known and builtin payloads from the shape")
+		assert.Equal(t, models.ShapeNamed, ti.Shape.Kind)
+		assert.Equal(t, "User", ti.Shape.Name)
+	})
+	t.Run("non_slice_well_known_keeps_name_and_shape", func(t *testing.T) {
+		ti := parseResult(t, "server.Result[*json.RawMessage]")
+		require.NotNil(t, ti)
+		assert.Equal(t, "RawMessage", ti.Name)
+		require.NotNil(t, ti.Shape)
+		assert.Equal(t, models.ShapePointer, ti.Shape.Kind, "the pointer is kept; consumers shed one level")
+		require.NotNil(t, ti.Shape.Elem)
+		assert.Equal(t, models.ShapeNamed, ti.Shape.Elem.Kind)
+		assert.Equal(t, models.WellKnownRawMessage, ti.Shape.Elem.Name)
+	})
+	t.Run("non_slice_builtin_has_no_component_name", func(t *testing.T) {
+		for _, expr := range []string{"server.Result[int64]", "server.Result[*string]", "server.ResultWithMeta[any]"} {
+			ti := parseResult(t, expr)
+			require.NotNil(t, ti, expr)
+			assert.Empty(t, ti.Name, "%s: a builtin names no component — a $ref would dangle", expr)
+			require.NotNil(t, ti.Shape, expr)
+			assert.Equal(t, models.ShapePrimitive, PayloadBaseShape(*ti.Shape).Kind, expr)
+		}
+	})
+	t.Run("non_slice_empty_interface_is_an_untyped_payload", func(t *testing.T) {
+		ti := parseResult(t, "server.Result[interface{}]")
+		require.NotNil(t, ti, "interface{} documents as {} rather than dropping to the untyped route path")
+		assert.Empty(t, ti.Name)
+		assert.Equal(t, "test", ti.Package)
+		require.NotNil(t, ti.Shape)
+		assert.Equal(t, models.ShapePrimitive, ti.Shape.Kind)
+		assert.Equal(t, goTypeInterface, ti.Shape.Name)
+	})
+	t.Run("non_slice_framework_type_is_nil", func(t *testing.T) {
+		assert.Nil(t, parseResult(t, "server.Result[server.IAPIError]"), "a framework type is not a payload")
 	})
 	t.Run("no_content_result_marks_no_body", func(t *testing.T) {
 		ti := parseResult(t, "server.NoContentResult")
@@ -4090,6 +4124,179 @@ func (m *Module) list(ctx server.HandlerContext) (server.Result[[]Status], serve
 	}
 	assert.True(t, found, "the named non-struct warning must still fire for a slice element")
 	assert.NotContains(t, a.typeRegistry, "Status")
+}
+
+// TestUnresolvablePayloadFallsBackWithWarning pins the fallback for a payload
+// name that resolves to no component: a third-party type, an undeclared name,
+// or an aliased import of a well-known type (which is not recognised). Each is
+// cleared to the warned untyped path — the one server.Result[Status] takes — so
+// the generator never emits a $ref to a missing component and --strict fails.
+// Well-known types keep their name and raise no warning; builtins carry no
+// name at all. A slice payload of an unresolvable element falls back the same
+// way.
+func TestUnresolvablePayloadFallsBackWithWarning(t *testing.T) {
+	src := `package mod
+import (
+	"encoding/json"
+	"time"
+	t "time"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Item struct {
+	ID string ` + "`json:\"id\"`" + `
+}
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/decimal", m.dec)
+	server.GET(hr, r, "/missing", m.missing)
+	server.GET(hr, r, "/aliased", m.aliased)
+	server.GET(hr, r, "/decimals", m.decs)
+	server.GET(hr, r, "/time", m.tm)
+	server.GET(hr, r, "/raw", m.raw)
+	server.GET(hr, r, "/id", m.id)
+	server.GET(hr, r, "/ttl", m.ttl)
+	server.GET(hr, r, "/count", m.count)
+	server.GET(hr, r, "/item", m.item)
+}
+func (m *Module) dec(ctx server.HandlerContext) (server.Result[decimal.Decimal], server.IAPIError) { return server.Result[decimal.Decimal]{}, nil }
+func (m *Module) missing(ctx server.HandlerContext) (server.Result[*Missing], server.IAPIError) { return server.Result[*Missing]{}, nil }
+func (m *Module) aliased(ctx server.HandlerContext) (server.Result[t.Time], server.IAPIError) { return server.Result[t.Time]{}, nil }
+func (m *Module) decs(ctx server.HandlerContext) (server.Result[[]decimal.Decimal], server.IAPIError) { return server.Result[[]decimal.Decimal]{}, nil }
+func (m *Module) tm(ctx server.HandlerContext) (server.Result[*time.Time], server.IAPIError) { return server.Result[*time.Time]{}, nil }
+func (m *Module) raw(ctx server.HandlerContext) (server.Result[json.RawMessage], server.IAPIError) { return server.Result[json.RawMessage]{}, nil }
+func (m *Module) id(ctx server.HandlerContext) (server.Result[uuid.UUID], server.IAPIError) { return server.Result[uuid.UUID]{}, nil }
+func (m *Module) ttl(ctx server.HandlerContext) (server.Result[time.Duration], server.IAPIError) { return server.Result[time.Duration]{}, nil }
+func (m *Module) count(ctx server.HandlerContext) (server.Result[uint64], server.IAPIError) { return server.Result[uint64]{}, nil }
+func (m *Module) item(ctx server.HandlerContext) (server.Result[Item], server.IAPIError) { return server.Result[Item]{}, nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	warnings := a.Warnings(t.Context())
+	warnedAbout := func(typeName string) bool {
+		for _, w := range warnings {
+			if strings.Contains(w, "response type "+typeName+" resolves to no schema component") {
+				return true
+			}
+		}
+		return false
+	}
+
+	for path, written := range map[string]string{
+		"GET /decimal":  "decimal.Decimal",
+		"GET /missing":  "Missing",
+		"GET /aliased":  "t.Time",
+		"GET /decimals": "decimal.Decimal",
+	} {
+		route := routeForPath(t, routes, path)
+		require.NotNil(t, route.Response, path)
+		assert.Empty(t, route.Response.Name, "%s: an unresolvable payload name is cleared so no $ref dangles", path)
+		require.NotNil(t, route.Response.Shape, "%s: the shape survives the cleared name", path)
+		assert.Equal(t, models.ShapeNamed, PayloadBaseShape(*route.Response.Shape).Kind, path)
+		assert.True(t, warnedAbout(written), "%s: expected a warning naming %s, got: %v", path, written, warnings)
+	}
+
+	for path, name := range map[string]string{
+		"GET /time": "Time", "GET /raw": "RawMessage", "GET /id": "UUID", "GET /ttl": "Duration", "GET /item": "Item",
+	} {
+		route := routeForPath(t, routes, path)
+		require.NotNil(t, route.Response, path)
+		assert.Equal(t, name, route.Response.Name, "%s: a well-known or registered payload keeps its name", path)
+	}
+	for _, typeName := range []string{models.WellKnownTimeTime, models.WellKnownRawMessage, models.WellKnownUUID, models.WellKnownTimeDuration, "Item"} {
+		assert.False(t, warnedAbout(typeName), "%s must not warn: %v", typeName, warnings)
+	}
+
+	assert.Len(t, warnings, 4, "exactly one warning per unresolvable payload; well-known, builtin and struct payloads stay silent: %v", warnings)
+
+	count := routeForPath(t, routes, "GET /count")
+	require.NotNil(t, count.Response)
+	assert.Empty(t, count.Response.Name, "a builtin payload names no component")
+	require.NotNil(t, count.Response.Shape)
+	assert.Equal(t, models.ShapePrimitive, count.Response.Shape.Kind)
+}
+
+// TestPayloadBaseShape covers the one-pointer, slice-element unwrapping the
+// payload fallback and its callers resolve a payload from.
+func TestPayloadBaseShape(t *testing.T) {
+	named := models.TypeShape{Kind: models.ShapeNamed, Name: models.WellKnownTimeTime}
+	ptr := models.TypeShape{Kind: models.ShapePointer, Elem: &named}
+	slice := models.TypeShape{Kind: models.ShapeSlice, Elem: &named}
+	assert.Equal(t, named, PayloadBaseShape(named))
+	assert.Equal(t, named, PayloadBaseShape(ptr), "one pointer level is shed")
+	assert.Equal(t, named, PayloadBaseShape(slice), "a slice payload resolves from its element")
+	bare := models.TypeShape{Kind: models.ShapePointer}
+	assert.Equal(t, bare, PayloadBaseShape(bare), "a pointer with no element is returned as-is")
+}
+
+// TestRegisteredPayloadShedsShape pins that a non-slice payload which resolves
+// to a registered project struct carries no Shape, so the generator takes the
+// plain $ref path. The Shape decoder spells a cross-package reference by its
+// short qualified name, so a project struct uuid.UUID reads exactly like the
+// well-known github.com/google/uuid type; a kept Shape would document the
+// payload inline as a uuid string and orphan the project's UUID component. A
+// slice payload keeps its Shape (the array wrapper needs it).
+func TestRegisteredPayloadShedsShape(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(dir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o750))
+		require.NoError(t, os.WriteFile(full, []byte(src), 0o600))
+	}
+	write("go.mod", "module example.com/collide\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.53.0\n")
+	write("uuid/uuid.go", "package uuid\n\ntype UUID struct {\n\tV string `json:\"v\"`\n}\n")
+	write("mod/module.go", `package mod
+
+import (
+	"example.com/collide/uuid"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                 { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error              { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/one", m.one)
+	server.GET(hr, r, "/ptr", m.ptr)
+	server.GET(hr, r, "/many", m.many)
+}
+
+func (m *Module) one(ctx server.HandlerContext) (server.Result[uuid.UUID], server.IAPIError) { return server.Result[uuid.UUID]{}, nil }
+func (m *Module) ptr(ctx server.HandlerContext) (server.Result[*uuid.UUID], server.IAPIError) { return server.Result[*uuid.UUID]{}, nil }
+func (m *Module) many(ctx server.HandlerContext) (server.Result[[]uuid.UUID], server.IAPIError) { return server.Result[[]uuid.UUID]{}, nil }
+`)
+	a := New(dir)
+	project, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	var routes []models.Route
+	for i := range project.Modules {
+		routes = append(routes, project.Modules[i].Routes...)
+	}
+
+	for _, path := range []string{"GET /one", "GET /ptr"} {
+		route := routeForPath(t, routes, path)
+		require.NotNil(t, route.Response, path)
+		assert.Equal(t, "UUID", route.Response.Name, "%s: the registered struct keeps its component name", path)
+		assert.Nil(t, route.Response.Shape, "%s: a registered struct payload sheds its Shape so it is $ref'd, not inlined", path)
+		assert.NotEmpty(t, route.Response.Fields, path)
+	}
+	many := routeForPath(t, routes, "GET /many")
+	require.NotNil(t, many.Response)
+	require.NotNil(t, many.Response.Shape, "a slice payload keeps its Shape")
+	assert.Equal(t, models.ShapeSlice, many.Response.Shape.Kind)
+	assert.Contains(t, project.Types, "UUID")
+	assert.Empty(t, a.Warnings(t.Context()))
 }
 
 // TestAliasChainDepthCapped verifies a chain of named indirections deeper than

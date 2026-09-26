@@ -101,18 +101,50 @@ type TypeInfo struct {
 	// no component schema is generated; later passes use this flag to emit a 204
 	// response instead of a 200 with a body.
 	NoContent bool
-	// Shape is set only when the payload is a CONTAINER around the type this
-	// TypeInfo otherwise describes — today just a slice, from a slice type
-	// argument to server.Result[T] / server.ResultWithMeta[T] ([]Item, []string).
-	// Kind is then ShapeSlice and Elem is the element's shape, using the same
-	// vocabulary FieldInfo.Shape uses for struct fields.
+	// Shape is the decoded type argument of a response payload —
+	// server.Result[T] / server.ResultWithMeta[T] — using the same vocabulary
+	// FieldInfo.Shape uses for struct fields. Nil for request types, for any
+	// response not carried by a result wrapper, and for a non-slice payload that
+	// registered as a project struct (the analyzer sheds it, so the payload is
+	// $ref'd even when its short name collides with a well-known type).
 	//
-	// Name keeps describing the ELEMENT (empty for a primitive element), so type
-	// registration, schemaName and referencedSchemaNames need no slice awareness:
-	// the component emitted for []Item is Item, and the payload schema wraps a
-	// $ref to it in an array. Nil for every non-container payload, which is what
-	// keeps the plain $ref path unchanged.
+	// For a slice payload ([]Item, []string) Kind is ShapeSlice and Elem is the
+	// element's shape; Name keeps describing the ELEMENT (empty for a primitive
+	// element), so type registration, schemaName and referencedSchemaNames need
+	// no slice awareness: the component emitted for []Item is Item, and the
+	// payload schema wraps a $ref to it in an array.
+	//
+	// For any other non-slice payload Shape is the argument as written (a
+	// pointer kept; consumers shed one level). The generator documents a
+	// well-known type (time.Time, uuid.UUID, time.Duration, json.RawMessage) or
+	// a builtin (string, int64, any, interface{}) inline from it and never $refs
+	// it. A builtin carries no Name; a well-known type keeps its Name. Any other
+	// name that resolves to no component is cleared by the analyzer, with a
+	// warning, so the payload falls back to an untyped object.
 	Shape *TypeShape
+}
+
+// Qualified names of the well-known stdlib/library types, spelled as the Shape
+// decoder writes them (import alias + "." + name), so an aliased import
+// (t "time" -> "t.Time") is deliberately not one.
+const (
+	WellKnownTimeTime     = "time.Time"
+	WellKnownTimeDuration = "time.Duration"
+	WellKnownUUID         = "uuid.UUID"
+	WellKnownRawMessage   = "json.RawMessage"
+)
+
+// WellKnownTypeNames is the set of named types the generator documents inline
+// from their Shape rather than as a component. It is the single list the
+// analyzer screens response payload names against; a generator test pins the
+// keys of the generator's wellKnownFormats equal to it, so the two cannot
+// drift. A name the generator lacked would $ref a component that is never
+// emitted; a name this set lacked would be warned about and left untyped.
+var WellKnownTypeNames = map[string]bool{
+	WellKnownTimeTime:     true,
+	WellKnownTimeDuration: true,
+	WellKnownUUID:         true,
+	WellKnownRawMessage:   true,
 }
 
 // FieldInfo represents a struct field with validation metadata

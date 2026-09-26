@@ -235,6 +235,19 @@ nested Go module, is not.
 - `uint64` is documented as `format: int64` with `minimum: 0`, so values of
   2^63 and above exceed its declared format. No signed format holds the whole
   range, and leaving the format off would make generated clients narrower.
+- A `server.Result[T]` payload is typed inline when `T` is a builtin (except
+  `uintptr`, which stays an untyped object with no warning) or one of the
+  well-known types (`time.Time`, `time.Duration`, `uuid.UUID`,
+  `json.RawMessage`), and referenced when `T` is a struct in the project — even
+  one whose short name collides with a well-known type (a project package
+  `uuid` declaring `type UUID struct`). A slice payload of such a colliding
+  project struct (`server.Result[[]uuid.UUID]`) is still typed inline as the
+  well-known type's array. A slice payload (`server.Result[[]T]`) is an array
+  whose items follow the same rules, so `[]string` gives string items. A `T`
+  (or slice element) that resolves to none of these — a third-party type such
+  as `decimal.Decimal`, an undeclared name, or a well-known type under an
+  aliased import (`t "time"`) — is documented as an untyped object and reported
+  as a warning (so `--strict` fails on it).
 - A route path built from a `var` (including a `:=` local) is an Unresolved
   route: only `const` declarations resolve. The route is dropped from the spec
   with a warning.

@@ -1214,6 +1214,142 @@ func (m *Module) ping(ctx server.HandlerContext) (server.Result[Ping], server.IA
 	}
 }
 
+// unresolvablePayloadModSrc is a module whose one route returns
+// server.Result[<payload>]. The route has a typed request, so it is classified
+// typed and no untyped-route warning fires: only the analyzer's payload warning
+// can fail --strict.
+const unresolvablePayloadModSrc = `package svc
+
+import (
+	t "time"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+	"github.com/shopspring/decimal"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "svc" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+type PriceReq struct {
+	ID string ` + "`param:\"id\"`" + `
+}
+
+var _ decimal.Decimal
+var _ t.Time
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/price/:id", m.price, server.WithTags("svc"))
+}
+
+func (m *Module) price(req PriceReq, ctx server.HandlerContext) (server.Result[PAYLOAD], server.IAPIError) {
+	return server.Result[PAYLOAD]{}, nil
+}
+`
+
+// TestRunGenerateUnresolvablePayloadFallsBack pins the fallback for a payload
+// name that resolves to no component — a third-party type, an undeclared name,
+// and an aliased import of a well-known type. Each warns, so --strict fails
+// with no artifact; a non-strict run documents data as a valid untyped object
+// instead of a $ref to a component that is never emitted.
+func TestRunGenerateUnresolvablePayloadFallsBack(t *testing.T) {
+	goMod := "module github.com/example/svc\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks " + minGoBricksVer + "\n"
+	for _, payload := range []string{"decimal.Decimal", "Missing", "t.Time"} {
+		src := strings.ReplaceAll(unresolvablePayloadModSrc, "PAYLOAD", payload)
+		t.Run(payload, func(t *testing.T) {
+			dir := writeProject(t, goMod, src)
+			out := filepath.Join(t.TempDir(), outputFileName)
+			var runErr error
+			stdout := testutil.CaptureStdout(t, func() {
+				runErr = runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out, Strict: true})
+			})
+			require.Error(t, runErr, "an unresolvable payload must fail --strict")
+			assert.Contains(t, stdout, "Warnings: 1\n", "the analyzer's payload warning is the only diagnostic")
+			_, statErr := os.Stat(out)
+			assert.True(t, os.IsNotExist(statErr), "strict failure must not leave an artifact")
+
+			out = filepath.Join(t.TempDir(), outputFileName)
+			testutil.CaptureStdout(t, func() {
+				runErr = runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out, Validate: true})
+			})
+			require.NoError(t, runErr, "a non-strict run must emit a valid document")
+			content, err := os.ReadFile(out)
+			require.NoError(t, err)
+			var spec OpenAPISpec
+			require.NoError(t, yaml.Unmarshal(content, &spec))
+			data := digMap(t, spec.Paths, "/price/{id}", "get", "responses", "200", "content", "application/json", "schema", "properties", "data")
+			assert.Equal(t, "object", data["type"])
+			assert.NotContains(t, data, "$ref")
+		})
+	}
+}
+
+// TestRunGenerateProjectStructNamedLikeWellKnown pins that a project struct
+// whose short qualified name collides with a well-known type (package uuid,
+// struct UUID) is documented as a $ref to its own component, not inlined as a
+// uuid string: inlining would leave the component emitted but unreferenced (an
+// orphan redocly's no-unused-components rejects).
+func TestRunGenerateProjectStructNamedLikeWellKnown(t *testing.T) {
+	goMod := "module github.com/example/svc\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks " + minGoBricksVer + "\n"
+	src := `package svc
+
+import (
+	"github.com/example/svc/uuid"
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "svc" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/id", m.id, server.WithTags("svc"))
+}
+
+func (m *Module) id(ctx server.HandlerContext) (server.Result[uuid.UUID], server.IAPIError) {
+	return server.Result[uuid.UUID]{}, nil
+}
+`
+	dir := writeProject(t, goMod, src)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "uuid"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "uuid", "uuid.go"),
+		[]byte("package uuid\n\ntype UUID struct {\n\tV string `json:\"v\"`\n}\n"), 0o600))
+
+	out := filepath.Join(t.TempDir(), outputFileName)
+	var runErr error
+	stdout := testutil.CaptureStdout(t, func() {
+		runErr = runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out, Validate: true, Strict: true})
+	})
+	require.NoError(t, runErr, stdout)
+	content, err := os.ReadFile(out)
+	require.NoError(t, err)
+	var spec OpenAPISpec
+	require.NoError(t, yaml.Unmarshal(content, &spec))
+
+	data := digMap(t, spec.Paths, "/id", "get", "responses", "200", "content", "application/json", "schema", "properties", "data")
+	assert.Equal(t, "#/components/schemas/UUID", data["$ref"], "the project struct is $ref'd, not inlined as a uuid string")
+	assert.NotContains(t, data, "format")
+	uuidSchema := digMap(t, spec.Components, "schemas", "UUID")
+	assert.Contains(t, digMap(t, uuidSchema, "properties"), "v", "the component is the project struct, and it is referenced")
+}
+
+// digMap walks nested YAML maps by key, failing the test on a missing level.
+func digMap(t *testing.T, m map[string]any, keys ...string) map[string]any {
+	t.Helper()
+	for _, k := range keys {
+		next, ok := m[k].(map[string]any)
+		require.True(t, ok, "missing map at key %q", k)
+		m = next
+	}
+	return m
+}
+
 // TestGoBricksVersionWarning covers generate's severity mapping over the
 // shared go-bricks verdict (resolveGoBricksStatus): a warning when the
 // dependency is missing or below the floor, silence when the floor is

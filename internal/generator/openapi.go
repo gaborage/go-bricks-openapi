@@ -882,8 +882,9 @@ func metaEnvelopeSchema() *OpenAPIProperty {
 }
 
 // responsePayloadSchema returns the bare schema for a response component: an
-// array when the payload is a slice, a $ref to the named type, or a generic
-// object when the type is unnamed.
+// array when the payload is a slice, the inline schema of a well-known or
+// builtin payload, a $ref to the named type, or a generic object when the type
+// is unnamed.
 func responsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
 	if response == nil {
 		return &OpenAPIProperty{Type: typeObject}
@@ -891,10 +892,40 @@ func responsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
 	if response.Shape != nil && response.Shape.Kind == models.ShapeSlice {
 		return sliceResponsePayloadSchema(response)
 	}
+	if prop, ok := inlinePayloadSchema(response.Shape); ok {
+		return prop
+	}
 	if response.Name == "" {
 		return &OpenAPIProperty{Type: typeObject}
 	}
 	return &OpenAPIProperty{Ref: refPath(schemaName(response))}
+}
+
+// inlinePayloadSchema types a non-slice payload that names no component from
+// its Shape, exactly as a struct field of that type is typed: a well-known
+// type (time.Time, uuid.UUID, time.Duration, json.RawMessage) or a builtin
+// (string, int64, any, interface{}). One pointer level is shed first, so
+// *json.RawMessage documents as json.RawMessage. It must run before the $ref
+// branch: a well-known payload still carries its Name, but no component is
+// ever emitted for it. Reports false for anything else (a struct name that is
+// not well-known, the untyped fallback, or no Shape at all — a payload that
+// registered as a project struct has its Shape shed by the analyzer, so a
+// project struct named like a well-known type, uuid.UUID, is still $ref'd).
+func inlinePayloadSchema(shape *models.TypeShape) (*OpenAPIProperty, bool) {
+	if shape == nil {
+		return nil, false
+	}
+	s := shapeAfterPointer(*shape)
+	prop := &OpenAPIProperty{}
+	if wk, ok := wellKnownShape(s); ok {
+		setWellKnown(prop, wk)
+		return prop, true
+	}
+	if s.Kind == models.ShapePrimitive {
+		setBasicTypeAndFormat(prop, s.Name)
+		return prop, true
+	}
+	return nil, false
 }
 
 // sliceResponsePayloadSchema builds the schema for a []T payload — `type: array`
@@ -1299,12 +1330,14 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 	out := make(map[string]bool)
 	for i := range routes {
 		r := &routes[i]
-		// Every named response is referenced, JOSE or not. A non-JOSE response is
-		// emitted as a real data.$ref (or a raw $ref). A JOSE response's wire
-		// schema is a string token rather than a $ref, but joseDescription names
-		// the plaintext component in prose ("see #/components/schemas/<Name>"), so
-		// the component must exist for that cross-reference to resolve either way.
-		if r.Response != nil && r.Response.Name != "" {
+		// A response is referenced when its payload names a component (see
+		// payloadNamesComponent). A non-JOSE one is emitted as a real data.$ref
+		// (or a raw $ref) unless its payload is well-known or builtin and typed
+		// inline. A JOSE response's wire schema is a string token rather than a
+		// $ref, but joseDescription names the plaintext component in prose ("see
+		// #/components/schemas/<Name>") whenever Name is set, so a named JOSE
+		// payload is always referenced.
+		if r.Response != nil && payloadNamesComponent(r.Response) {
 			out[schemaName(r.Response)] = true
 		}
 		// Requests, by contrast, are referenced ONLY when JOSE — for the same
@@ -1316,6 +1349,33 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 	}
 	addFieldSchemaRefs(out, types)
 	return out
+}
+
+// payloadNamesComponent reports whether a response payload points at the
+// component its Name names. A JOSE payload always does: buildResponses' JOSE
+// branch never inlines it, and successPlaintextSchema names the component in
+// prose whenever Name is set. Otherwise it mirrors responsePayloadSchema's
+// branches: a well-known payload (uuid.UUID, or a []*time.Time element) keeps
+// its Name but is documented inline, so it must not mark that name referenced
+// — a coincidental project struct of the same short name that nothing else
+// references (a params-only request type UUID) would be emitted as an orphan
+// component. A payload that registered as a project struct carries no Shape
+// (the analyzer sheds it), so it is always referenced.
+func payloadNamesComponent(ti *models.TypeInfo) bool {
+	if ti.Name == "" {
+		return false
+	}
+	if ti.JOSE || ti.Shape == nil {
+		return true
+	}
+	if ti.Shape.Kind == models.ShapeSlice {
+		if _, ok := wellKnownShape(*ti.Shape); ok {
+			return false
+		}
+		return ti.Shape.Elem == nil || !isWellKnownElem(*ti.Shape.Elem)
+	}
+	_, inline := inlinePayloadSchema(ti.Shape)
+	return !inline
 }
 
 // addFieldSchemaRefs marks every component named by a field or map-value $ref
