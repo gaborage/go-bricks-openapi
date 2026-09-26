@@ -7,9 +7,11 @@ import (
 	"maps"
 	"math"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gaborage/go-bricks-openapi/internal/models"
 	"go.yaml.in/yaml/v3"
@@ -1779,16 +1781,75 @@ func coerceExample(raw string, prop *OpenAPIProperty) any {
 	}
 }
 
-// coerceStringExample keeps raw verbatim, except under `format: byte`, where a
-// value that is not standard base64 text (see isBase64Text) is dropped. The
-// format is the property's FINAL one — a []byte field's and a validate:"base64"
-// string's alike.
+// coerceStringExample keeps raw verbatim, except under the three string
+// formats kin-openapi (v0.149.0) checks by default, where a value that fails
+// the format is dropped: `byte` (see isBase64Text), `date` (see isDateText) and
+// `date-time` (see isDateTimeText). The format is the property's FINAL one — a
+// []byte field's and a validate:"base64" string's alike, a time.Time field's
+// and a validate:"datetime=<layout>" string's alike. Examples under any other
+// format (uuid, email, …) are not checked by the validator and stay verbatim.
 func coerceStringExample(raw string, prop *OpenAPIProperty) any {
-	if prop.Format == formatByte && !isBase64Text(raw) {
+	if !stringFitsFormat(raw, prop.Format) {
 		return nil
 	}
 	return raw
 }
+
+// stringFitsFormat reports whether raw passes the check for format, or true
+// for a format the validator does not check.
+func stringFitsFormat(raw, format string) bool {
+	switch format {
+	case formatByte:
+		return isBase64Text(raw)
+	case formatDate:
+		return isDateText(raw)
+	case formatDateTime:
+		return isDateTimeText(raw)
+	default:
+		return true
+	}
+}
+
+// kinDatePattern and kinDateTimePattern compile kin-openapi's own date /
+// date-time format patterns.
+var (
+	kinDatePattern     = regexp.MustCompile(formatOfStringDate) //nolint:gocritic // regexpSimplify: kept verbatim so TestDateFormatPatternsContract can compare it to kin's string
+	kinDateTimePattern = regexp.MustCompile(formatOfStringDateTime)
+)
+
+// isDateText reports whether raw is an RFC 3339 full-date that both kin's
+// `format: date` pattern and Go's time.DateOnly parser accept. The pattern
+// alone passes impossible days such as 2024-02-31, which a go-bricks server
+// would answer with a 400.
+func isDateText(raw string) bool {
+	if !kinDatePattern.MatchString(raw) {
+		return false
+	}
+	_, err := time.Parse(time.DateOnly, raw)
+	return err == nil
+}
+
+// isDateTimeText reports whether raw is an RFC 3339 date-time that both kin's
+// `format: date-time` pattern and Go's time.RFC3339 parser accept. Neither
+// alone is enough: the pattern passes impossible days and a :60 second, which
+// Go rejects; Go passes a comma fraction separator, which the pattern (and
+// therefore document validation) rejects.
+func isDateTimeText(raw string) bool {
+	if !kinDateTimePattern.MatchString(raw) {
+		return false
+	}
+	_, err := time.Parse(time.RFC3339, raw)
+	return err == nil
+}
+
+// formatOfStringDate and formatOfStringDateTime are kin-openapi's `format:
+// date` / `format: date-time` patterns, verbatim (openapi3.FormatOfStringDate /
+// FormatOfStringDateTime). The generator does not import openapi3, so they are
+// held here; TestDateFormatPatternsContract pins them to kin's.
+const (
+	formatOfStringDate     = `^[0-9]{4}-(0[1-9]|10|11|12)-(0[1-9]|[12][0-9]|3[01])$`
+	formatOfStringDateTime = `^[0-9]{4}-(0[1-9]|10|11|12)-(0[1-9]|[12][0-9]|3[01])T([0-1][0-9]|2[0-3]):[0-5][0-9]:([0-5][0-9]|60)(\.[0-9]+)?(Z|(\+|-)[0-9]{2}:[0-9]{2})$`
+)
 
 // isBase64Text reports whether raw is standard, padded base64 (RFC 4648 §4):
 // what encoding/json decodes into a []byte, and the form go-playground's base64
