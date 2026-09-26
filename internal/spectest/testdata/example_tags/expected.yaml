@@ -19,7 +19,7 @@ paths:
           required: false
           schema:
             type: integer
-            format: int32
+            format: int64
             example: 25
           example: 25
       responses:
@@ -111,21 +111,22 @@ components:
           exclusiveMinimum: true
         bad:
           type: integer
-          format: int32
+          format: int64
         big:
           type: integer
           format: int64
           example: 3000000000
         count:
           type: integer
-          format: int32
+          format: int64
           example: 3
         flag:
           type: boolean
           example: true
         huge:
           type: integer
-          format: int32
+          format: int64
+          example: 3000000000
         kids:
           type: array
           items:
@@ -133,6 +134,9 @@ components:
         name:
           type: string
           example: bob
+        narrow:
+          type: integer
+          format: int32
         ratio:
           type: number
           format: double

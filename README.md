@@ -230,6 +230,11 @@ nested Go module, is not.
   bottoms out in the builtin `uintptr` (including `[]uintptr`); a named wrapper
   (`type Addr uintptr`) or a map value (`map[string]uintptr`) still emits
   `object` silently.
+- `int` and `uint` are documented as 64-bit (`format: int64`), which is wrong
+  for a 32-bit build, where they hold only 32 bits.
+- `uint64` is documented as `format: int64` with `minimum: 0`, so values of
+  2^63 and above exceed its declared format. No signed format holds the whole
+  range, and leaving the format off would make generated clients narrower.
 - A route path built from a `var` (including a `:=` local) is an Unresolved
   route: only `const` declarations resolve. The route is dropped from the spec
   with a warning.

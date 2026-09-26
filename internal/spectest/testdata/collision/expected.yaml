@@ -112,7 +112,7 @@ components:
       properties:
         quantity:
           type: integer
-          format: int32
+          format: int64
           minimum: 1
         sku:
           type: string
