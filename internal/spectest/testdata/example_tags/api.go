@@ -1,7 +1,7 @@
 // Package exampletags is a regression fixture for Plan 027 (coercing
 // `example:` tag values to their declared schema type). CreateItemReq exercises
-// every coercion outcome in one request type — kept (Count, Big, Ratio, Flag,
-// Name) and dropped (Bad, Huge, Kids) — and ListItemsReq's Limit exercises a
+// every coercion outcome in one request type — kept (Count, Big, Huge, Ratio,
+// Flag, Name) and dropped (Bad, Narrow, Kids) — and ListItemsReq's Limit exercises a
 // parameter-level example, which must mirror the schema's coerced value.
 package exampletags
 
@@ -29,8 +29,9 @@ type ListItemsReq struct {
 // int64 example large enough to overflow int32 (Big), a float example
 // (Ratio), a boolean example (Flag), a string example (Name, which stays a
 // string), a non-numeric example on an integer field (Bad, dropped), an
-// int-typed (int32-format) field whose example overflows that format (Huge,
-// dropped), a scalar example on a slice field (Kids, dropped), and an example
+// int-typed (int64-format) field whose example overflows int32 (Huge, kept),
+// an int32 field whose example overflows that format (Narrow, dropped), a
+// scalar example on a slice field (Kids, dropped), and an example
 // exactly at an exclusive minimum (Amount, dropped — `gt=10` emits minimum: 10
 // plus exclusiveMinimum: true, and an example of exactly 10 is invalid there).
 type CreateItemReq struct {
@@ -41,6 +42,7 @@ type CreateItemReq struct {
 	Name   string   `json:"name" example:"bob"`
 	Bad    int      `json:"bad" example:"abc"`
 	Huge   int      `json:"huge" example:"3000000000"`
+	Narrow int32    `json:"narrow" example:"3000000000"`
 	Kids   []string `json:"kids" example:"nope"`
 	Amount float64  `json:"amount" validate:"gt=10" example:"10"`
 }

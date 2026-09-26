@@ -1695,22 +1695,27 @@ func setBasicTypeAndFormat(prop *OpenAPIProperty, name string) {
 	case goTypeString:
 		prop.Type = typeString
 	// rune is Go's predeclared alias for int32.
-	case goTypeInt, goTypeInt8, goTypeInt16, goTypeInt32, goTypeRune:
+	case goTypeInt8, goTypeInt16, goTypeInt32, goTypeRune:
 		prop.Type = typeInteger
 		prop.Format = formatInt32
 	// byte is Go's predeclared alias for uint8. A bare byte reaches here; a
 	// []byte is intercepted upstream by wellKnownShape as a base64 string.
-	case goTypeUint, goTypeUint8, goTypeUint16, goTypeUint32, goTypeByte:
+	case goTypeUint8, goTypeUint16, goTypeByte:
 		prop.Type = typeInteger
 		prop.Format = formatInt32
 		prop.Minimum = floatPtr(0) // unsigned: never negative
-	case formatInt64:
+	// int is 64-bit on every 64-bit target, so it is documented as int64.
+	case goTypeInt, goTypeInt64:
 		prop.Type = typeInteger
 		prop.Format = formatInt64
-	case goTypeUint64:
+	// uint32 overflows int32, and uint is 64-bit on 64-bit targets. uint64
+	// keeps int64 too, though values of 2^63 and above exceed it: no signed
+	// format holds its whole range, and dropping the format would narrow
+	// generated clients further.
+	case goTypeUint, goTypeUint32, goTypeUint64:
 		prop.Type = typeInteger
 		prop.Format = formatInt64
-		prop.Minimum = floatPtr(0) // unsigned: never negative (and may exceed int64 max)
+		prop.Minimum = floatPtr(0) // unsigned: never negative
 	case goTypeFloat32:
 		prop.Type = typeNumber
 		prop.Format = formatFloat

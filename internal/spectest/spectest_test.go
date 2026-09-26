@@ -150,7 +150,7 @@ func TestNamedScalarBuildTaggedWidths(t *testing.T) {
 			amd64:      "type Word int64\ntype UWord uint32\n",
 			i386:       "type Word int64\ntype UWord uint32\n",
 			size:       map[string]any{"type": "integer", "format": "int64"},
-			count:      map[string]any{"type": "integer", "format": "int32", "minimum": 0},
+			count:      map[string]any{"type": "integer", "format": "int64", "minimum": 0},
 			sizesItems: map[string]any{"type": "integer", "format": "int64"},
 		},
 	}

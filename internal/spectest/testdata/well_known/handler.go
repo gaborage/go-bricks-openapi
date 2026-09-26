@@ -18,7 +18,9 @@ type Address struct {
 	City   string `json:"city"`
 }
 
-// Event exercises the well-known type formats, maps, and uint64 fidelity.
+// Event exercises the well-known type formats, maps, and uint64's mapping.
+// Count's int64 format understates uint64: values of 2^63 and above exceed
+// it (a documented Known limitation), while minimum: 0 keeps it non-negative.
 type Event struct {
 	ID        uuid.UUID            `json:"id"`        // -> {string, uuid}
 	CreatedAt time.Time            `json:"createdAt"` // -> {string, date-time}

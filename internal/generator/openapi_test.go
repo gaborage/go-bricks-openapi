@@ -1299,7 +1299,7 @@ func TestFieldInfoToProperty(t *testing.T) {
 				JSONName: "age",
 			},
 			expectedType:   "integer",
-			expectedFormat: "int32",
+			expectedFormat: formatInt64,
 		},
 		{
 			name: "int64 field",
@@ -1371,11 +1371,20 @@ func TestSetTypeAndFormat(t *testing.T) {
 	}{
 		{name: "string", shape: prim("string"), expectedType: "string"},
 		{name: "pointer string", shape: ptrOf(prim("string")), expectedType: "string"},
-		{name: "int", shape: prim("int"), expectedType: "integer", expectedFormat: "int32"},
-		{name: "int32", shape: prim("int32"), expectedType: "integer", expectedFormat: "int32"},
-		{name: "int64", shape: prim("int64"), expectedType: "integer", expectedFormat: "int64"},
-		{name: "uint", shape: prim("uint"), expectedType: "integer", expectedFormat: "int32"},
-		{name: "uint64", shape: prim("uint64"), expectedType: "integer", expectedFormat: "int64"},
+		// int and uint are 64-bit on every 64-bit target, and uint32 overflows
+		// int32, so all three take int64; only the narrower widths keep int32.
+		{name: "int", shape: prim("int"), expectedType: "integer", expectedFormat: formatInt64},
+		{name: "int8", shape: prim("int8"), expectedType: "integer", expectedFormat: formatInt32},
+		{name: "int16", shape: prim("int16"), expectedType: "integer", expectedFormat: formatInt32},
+		{name: "int32", shape: prim("int32"), expectedType: "integer", expectedFormat: formatInt32},
+		{name: "rune", shape: prim(goTypeRune), expectedType: "integer", expectedFormat: formatInt32},
+		{name: "int64", shape: prim("int64"), expectedType: "integer", expectedFormat: formatInt64},
+		{name: "uint", shape: prim("uint"), expectedType: "integer", expectedFormat: formatInt64},
+		{name: "uint8", shape: prim(goTypeUint8), expectedType: "integer", expectedFormat: formatInt32},
+		{name: "uint16", shape: prim(goTypeUint16), expectedType: "integer", expectedFormat: formatInt32},
+		{name: "byte", shape: prim(goTypeByte), expectedType: "integer", expectedFormat: formatInt32},
+		{name: "uint32", shape: prim(goTypeUint32), expectedType: "integer", expectedFormat: formatInt64},
+		{name: "uint64", shape: prim("uint64"), expectedType: "integer", expectedFormat: formatInt64},
 		{name: "float32", shape: prim("float32"), expectedType: "number", expectedFormat: "float"},
 		{name: "float64", shape: prim("float64"), expectedType: "number", expectedFormat: "double"},
 		{name: "bool", shape: prim("bool"), expectedType: "boolean"},
@@ -1449,10 +1458,11 @@ func TestSetTypeAndFormatWellKnownTypes(t *testing.T) {
 
 func TestSetTypeAndFormatUnsignedMinimum(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
-	// Unsigned integers carry minimum:0; signed integers do not.
+	// Unsigned integers carry minimum:0; signed integers do not. uint and
+	// uint32 take int64 because int32 cannot hold their range.
 	for _, ut := range []struct {
 		goType, format string
-	}{{"uint", formatInt32}, {"uint8", formatInt32}, {"uint16", formatInt32}, {"uint32", formatInt32}, {"uint64", formatInt64}} {
+	}{{"uint", formatInt64}, {"uint8", formatInt32}, {"uint16", formatInt32}, {"uint32", formatInt64}, {"uint64", formatInt64}} {
 		prop := &OpenAPIProperty{}
 		gen.setTypeAndFormat(prop, prim(ut.goType))
 		assert.Equal(t, typeInteger, prop.Type, ut.goType)
@@ -3038,12 +3048,20 @@ func TestFieldInfoToPropertyNamedScalarBoundOverFloor(t *testing.T) {
 		return &models.FieldInfo{Shape: shape, JSONName: "count", UnderlyingKind: typeInteger, UnderlyingBuiltin: goTypeUint32}
 	}
 
+	t.Run("type Count uint32 is int64 with the floor", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(count(named("Count")))
+		assert.Equal(t, typeInteger, p.Type)
+		assert.Equal(t, formatInt64, p.Format, "uint32 overflows int32")
+		require.NotNil(t, p.Minimum)
+		assert.Equal(t, 0.0, *p.Minimum)
+	})
+
 	t.Run("explicit min overwrites the floor", func(t *testing.T) {
 		f := count(named("Count"))
 		f.Constraints = map[string]string{"min": "5"}
 		p := gen.fieldInfoToProperty(f)
 		assert.Equal(t, typeInteger, p.Type)
-		assert.Equal(t, formatInt32, p.Format)
+		assert.Equal(t, formatInt64, p.Format)
 		require.NotNil(t, p.Minimum)
 		assert.Equal(t, 5.0, *p.Minimum)
 	})
@@ -3063,7 +3081,7 @@ func TestFieldInfoToPropertyNamedScalarBoundOverFloor(t *testing.T) {
 		f.ElementConstraints = map[string]string{"min": "5"}
 		p := gen.fieldInfoToProperty(f)
 		require.NotNil(t, p.Items)
-		assert.Equal(t, formatInt32, p.Items.Format)
+		assert.Equal(t, formatInt64, p.Items.Format)
 		require.NotNil(t, p.Items.Minimum)
 		assert.Equal(t, 5.0, *p.Items.Minimum)
 	})
@@ -3081,9 +3099,9 @@ func TestFieldInfoToPropertyNamedScalarExample(t *testing.T) {
 	}{
 		{name: "negative on a named byte is dropped by the floor", builtin: goTypeByte, example: "-1", want: nil},
 		{name: "overflow on a named int32 is dropped by the format", builtin: goTypeInt32, example: "3000000000", want: nil},
-		// Bare int is documented as int32 (setBasicTypeAndFormat), so a named
-		// int drops a 64-bit example exactly as a bare int field does.
-		{name: "a 64-bit value on a named int is dropped by the int32 format", builtin: goTypeInt, example: "3000000000", want: nil},
+		// Bare int is documented as int64 (setBasicTypeAndFormat), so a named
+		// int keeps a 64-bit example exactly as a bare int field does.
+		{name: "a 64-bit value on a named int is kept by the int64 format", builtin: goTypeInt, example: "3000000000", want: int64(3000000000)},
 		{name: "in-range value on a named uint32 is kept", builtin: goTypeUint32, example: "7", want: int64(7)},
 	}
 	for _, c := range cases {
