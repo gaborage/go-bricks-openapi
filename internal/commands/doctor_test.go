@@ -1316,6 +1316,46 @@ func TestCalculateProjectStats(t *testing.T) {
 			expectedTyped:      0,
 			expectedUntypedLen: 1,
 		},
+		{
+			// Non-slice payloads, in lockstep with responsePayloadSchema: a
+			// well-known type keeps its name and a builtin (pointer shed) is typed
+			// from its shape, so both count as typed. A payload whose name the
+			// analyzer cleared because it resolves to no component
+			// (decimal.Decimal, alone or as a slice element) is the untyped object
+			// fallback and must be reported untyped.
+			name: "non-slice well-known and builtin typed, unresolvable untyped",
+			project: &models.Project{
+				Modules: []models.Module{
+					{
+						Name: "api",
+						Routes: []models.Route{
+							{Method: "GET", Path: "/raw", HandlerName: "raw", Response: &models.TypeInfo{
+								Name: "RawMessage", Package: "json", Shape: ptrTo(ptrOf(named("json.RawMessage"))),
+							}},
+							{Method: "GET", Path: "/count", HandlerName: "count", Response: &models.TypeInfo{
+								Shape: ptrTo(prim("int64")),
+							}},
+							{Method: "GET", Path: "/name", HandlerName: "name", Response: &models.TypeInfo{
+								Shape: ptrTo(ptrOf(prim("string"))),
+							}},
+							{Method: "GET", Path: "/anything", HandlerName: "anything", Response: &models.TypeInfo{
+								Shape: ptrTo(prim("interface{}")),
+							}},
+							{Method: "GET", Path: "/price", HandlerName: "price", Response: &models.TypeInfo{
+								Shape: ptrTo(named("decimal.Decimal")),
+							}},
+							{Method: "GET", Path: "/prices", HandlerName: "prices", Response: &models.TypeInfo{
+								Shape: &models.TypeShape{Kind: models.ShapeSlice, Elem: ptrTo(named("decimal.Decimal"))},
+							}},
+						},
+					},
+				},
+			},
+			expectedModules:    1,
+			expectedRoutes:     6,
+			expectedTyped:      4,
+			expectedUntypedLen: 2,
+		},
 	}
 
 	for _, tt := range tests {

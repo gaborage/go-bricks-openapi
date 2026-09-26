@@ -5,7 +5,7 @@ Static analysis of a go-bricks project's source (AST only, never compiled or exe
 ## Language
 
 **Shape**:
-The syntactic container structure of a declared type — pointer, slice, map, named, primitive, or unknown — decoded once from the AST at extraction. Carried by every struct field, and by a response payload that is a container (`server.Result[[]Item]`). Purely syntactic; carries no registry knowledge.
+The syntactic container structure of a declared type — pointer, slice, map, named, primitive, or unknown — decoded once from the AST at extraction. Carried by every struct field, and by every response payload a result wrapper carries (`server.Result[[]Item]`, `server.Result[time.Time]`), so a well-known or builtin payload is typed from it rather than `$ref`'d — except a non-slice payload that registers as a project struct, which sheds its Shape so it is `$ref`'d even when its short name collides with a well-known type (`uuid.UUID`). Purely syntactic; carries no registry knowledge.
 _Avoid_: type string, kind (overloaded with OpenAPI's `type` keyword)
 
 **Resolution**:

@@ -549,17 +549,23 @@ func classifyRoute(route *models.Route) routeClassification {
 
 // isTypedPayload reports whether the analyzer resolved a payload the generator
 // documents with a RESOLVED schema — not merely a container around an untyped
-// one. Two cases qualify: a named component ($ref), and a nameless slice whose
-// element is a primitive, which the generator types from the shape alone
+// one. Two cases qualify: a named payload, and a nameless one whose base shape
+// (a slice's element, otherwise the payload itself, one pointer level shed) is
+// a builtin, which the generator types from the shape alone
 // (server.Result[[]string] -> array of strings, server.Result[[]byte] -> a
-// base64 string).
+// base64 string, server.Result[int64] -> an int64 integer, server.Result[any]
+// -> {}).
 //
-// The primitive requirement is the load-bearing part. A local named scalar
-// (`type Status string`) used as server.Result[[]Status] keeps its ShapeSlice
-// but has its Name CLEARED by the analyzer (with a warning), because the name
-// resolves to no component; the generator then emits items: {type: object}.
-// That is the untyped fallback wearing an array wrapper, so the route must be
-// reported untyped — exactly as the non-slice server.Result[Status] already is.
+// A named payload is either a registered component ($ref) or a well-known type
+// (time.Time, uuid.UUID, time.Duration, json.RawMessage) the generator
+// documents inline (see responsePayloadSchema). Any other name that resolves to
+// no component is CLEARED by the analyzer, with a warning.
+//
+// The builtin requirement is the load-bearing part. A local named scalar
+// (`type Status string`) or a third-party type (decimal.Decimal) keeps its
+// Shape but has its Name cleared, because the name resolves to no component;
+// the generator then emits {type: object} (items: {type: object} for a slice).
+// That is the untyped fallback, so the route must be reported untyped.
 func isTypedPayload(ti *models.TypeInfo) bool {
 	if ti == nil {
 		return false
@@ -567,8 +573,7 @@ func isTypedPayload(ti *models.TypeInfo) bool {
 	if ti.Name != "" {
 		return true
 	}
-	return ti.Shape != nil && ti.Shape.Kind == models.ShapeSlice &&
-		ti.Shape.Elem != nil && ti.Shape.Elem.Kind == models.ShapePrimitive
+	return ti.Shape != nil && analyzer.PayloadBaseShape(*ti.Shape).Kind == models.ShapePrimitive
 }
 
 // updateStatsForRoute updates statistics based on route classification

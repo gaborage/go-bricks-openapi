@@ -2802,6 +2802,102 @@ func TestResponsePayloadSchemaSliceWithoutElement(t *testing.T) {
 	assert.Equal(t, typeObject, got.Items.Type)
 }
 
+// payloadShape is the *TypeShape a response TypeInfo carries for a non-slice payload.
+func payloadShape(s models.TypeShape) *models.TypeShape { return &s }
+
+// TestResponsePayloadSchemaInlineScalars pins that a non-slice well-known or
+// builtin payload documents inline — never as a $ref, even when the analyzer
+// kept its Name (well-known types do), because no component is ever emitted
+// for it. One pointer level is shed, as on the field path.
+func TestResponsePayloadSchemaInlineScalars(t *testing.T) {
+	tests := []struct {
+		name       string
+		ti         *models.TypeInfo
+		wantType   string
+		wantFormat string
+		wantMin    bool
+	}{
+		{"json.RawMessage", &models.TypeInfo{Name: "RawMessage", Shape: payloadShape(named(goTypeRawMessage))}, "", "", false},
+		{"*json.RawMessage", &models.TypeInfo{Name: "RawMessage", Shape: payloadShape(ptrOf(named(goTypeRawMessage)))}, "", "", false},
+		{"time.Time", &models.TypeInfo{Name: "Time", Shape: payloadShape(named(goTypeTimeTime))}, typeString, formatDateTime, false},
+		{"*time.Time", &models.TypeInfo{Name: "Time", Shape: payloadShape(ptrOf(named(goTypeTimeTime)))}, typeString, formatDateTime, false},
+		{"time.Duration", &models.TypeInfo{Name: "Duration", Shape: payloadShape(named(goTypeTimeDuration))}, typeInteger, formatInt64, false},
+		{"uuid.UUID", &models.TypeInfo{Name: "UUID", Shape: payloadShape(named(goTypeUUID))}, typeString, formatUUID, false},
+		{"string", &models.TypeInfo{Shape: payloadShape(prim(goTypeString))}, typeString, "", false},
+		{"*string", &models.TypeInfo{Shape: payloadShape(ptrOf(prim(goTypeString)))}, typeString, "", false},
+		{"int64", &models.TypeInfo{Shape: payloadShape(prim(formatInt64))}, typeInteger, formatInt64, false},
+		{"uint64", &models.TypeInfo{Shape: payloadShape(prim(goTypeUint64))}, typeInteger, formatInt64, true},
+		{"bool", &models.TypeInfo{Shape: payloadShape(prim(goTypeBool))}, typeBoolean, "", false},
+		{"any", &models.TypeInfo{Shape: payloadShape(prim(goTypeAny))}, "", "", false},
+		{"interface{}", &models.TypeInfo{Shape: payloadShape(prim(goTypeInterface))}, "", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := responsePayloadSchema(tt.ti)
+			assert.Empty(t, got.Ref, "no component exists for this payload — a $ref would dangle")
+			assert.Equal(t, tt.wantType, got.Type)
+			assert.Equal(t, tt.wantFormat, got.Format)
+			if tt.wantMin {
+				require.NotNil(t, got.Minimum)
+				assert.InDelta(t, 0, *got.Minimum, 0)
+			} else {
+				assert.Nil(t, got.Minimum)
+			}
+			assert.Nil(t, got.Items, "a non-slice payload is never an array")
+		})
+	}
+}
+
+// TestResponsePayloadSchemaNamedShapes pins the two non-inline outcomes of a
+// shaped non-slice payload: a named shape that is not well-known keeps its
+// $ref (defensive — the analyzer sheds a registered struct's Shape, so it
+// reaches the $ref path shapeless), and a payload whose name the analyzer
+// cleared (it resolves to no component) is the untyped object fallback.
+func TestResponsePayloadSchemaNamedShapes(t *testing.T) {
+	item := responsePayloadSchema(&models.TypeInfo{Name: "Item", Shape: payloadShape(ptrOf(named("Item")))})
+	assert.Equal(t, refPath("Item"), item.Ref)
+
+	fallback := responsePayloadSchema(&models.TypeInfo{Shape: payloadShape(named("decimal.Decimal"))})
+	assert.Empty(t, fallback.Ref)
+	assert.Equal(t, typeObject, fallback.Type)
+}
+
+// TestInlinePayloadSchemaRejects covers the inputs the inline path declines.
+func TestInlinePayloadSchemaRejects(t *testing.T) {
+	for _, shape := range []*models.TypeShape{nil, payloadShape(named("Item")), payloadShape(unknownShape())} {
+		prop, ok := inlinePayloadSchema(shape)
+		assert.False(t, ok)
+		assert.Nil(t, prop)
+	}
+}
+
+// TestBuildResponsesInlineScalarPayloads covers both callers: an enveloped
+// route's data property and a WithRawResponse route's bare body, each typed
+// inline with no description (only the untyped fallback is annotated).
+func TestBuildResponsesInlineScalarPayloads(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	enveloped := gen.buildResponses(&models.Route{
+		Method:   "GET",
+		Response: &models.TypeInfo{Name: "Time", Package: "time", Shape: payloadShape(named(goTypeTimeTime))},
+	})
+	data := enveloped["200"].Content[mediaJSON].Schema.Properties[propNameData]
+	require.NotNil(t, data)
+	assert.Empty(t, data.Ref)
+	assert.Equal(t, typeString, data.Type)
+	assert.Equal(t, formatDateTime, data.Format)
+	assert.Empty(t, data.Description, "a typed payload is not the untyped 'Response data' fallback")
+
+	raw := gen.buildResponses(&models.Route{
+		Method:      "GET",
+		RawResponse: true,
+		Response:    &models.TypeInfo{Name: "RawMessage", Package: "json", Shape: payloadShape(ptrOf(named(goTypeRawMessage)))},
+	})
+	body := raw["200"].Content[mediaJSON].Schema
+	require.NotNil(t, body)
+	assert.Empty(t, body.Ref, "a raw json.RawMessage body is {} — never a $ref")
+	assert.Empty(t, body.Type)
+}
+
 func TestSuccessEnvelopeSchemaSliceData(t *testing.T) {
 	env := successEnvelopeSchema(&models.TypeInfo{
 		Name:  "Item",
@@ -3981,4 +4077,119 @@ func TestBuildResponsesDeclaredErrorStatusClashesWithSuccess(t *testing.T) {
 func TestErrorStatusDescriptionFallback(t *testing.T) {
 	assert.Equal(t, "Not Found", errorStatusDescription(404))
 	assert.Equal(t, "HTTP 599", errorStatusDescription(599))
+}
+
+// TestReferencedSchemaNamesSkipsInlinePayloads pins that a well-known payload
+// the generator documents inline (non-slice, or as a slice element) does not
+// mark its short Name referenced. The analyzer keeps a well-known payload's
+// Name (UUID for uuid.UUID), so without the guard a coincidental project
+// struct of that name that nothing references — a params-only request type —
+// would be emitted as an orphan component. A payload with no Shape still
+// references its component.
+func TestReferencedSchemaNamesSkipsInlinePayloads(t *testing.T) {
+	routes := []models.Route{
+		{Method: "GET", Path: "/id", Response: &models.TypeInfo{Name: "UUID", Package: "uuid", Shape: payloadShape(named(goTypeUUID))}},
+		{Method: "GET", Path: "/at", Response: &models.TypeInfo{Name: "Time", Package: "time", Shape: payloadShape(sliceOf(ptrOf(named(goTypeTimeTime))))}},
+		{Method: "GET", Path: "/item", Response: &models.TypeInfo{Name: "Item", Package: "shop", Shape: payloadShape(ptrOf(named("Item")))}},
+		{Method: "GET", Path: "/items", Response: &models.TypeInfo{Name: "Line", Package: "shop", Shape: payloadShape(sliceOf(named("Line")))}},
+		{Method: "GET", Path: "/legacy", Response: &models.TypeInfo{Name: "Legacy", Package: "shop"}},
+		{Method: "GET", Path: "/blob", Response: &models.TypeInfo{Name: "Blob", Package: "shop", Shape: payloadShape(sliceOf(prim(goTypeByte)))}},
+		{Method: "GET", Path: "/count", Response: &models.TypeInfo{Package: "shop", Shape: payloadShape(prim(goTypeString))}},
+	}
+
+	got := referencedSchemaNames(routes, map[string]*models.TypeInfo{})
+
+	assert.False(t, got["UUID"], "an inline uuid.UUID payload names no component")
+	assert.False(t, got["Time"], "an inline []*time.Time payload's element names no component")
+	assert.True(t, got["Item"], "a named non-well-known shape is still $ref'd")
+	assert.True(t, got["Line"], "a struct slice element is still $ref'd")
+	assert.True(t, got["Legacy"], "a payload with no Shape is still $ref'd")
+	assert.False(t, got["Blob"], "a []byte payload is a base64 string, never a component")
+	assert.False(t, got[""], "a nameless builtin payload marks nothing")
+}
+
+// TestPayloadNamesComponentJOSE pins that a JOSE payload always names its
+// component, whatever its Shape. buildResponses' JOSE branch never inlines the
+// payload: joseDescription names the plaintext component in prose whenever
+// Name is set, so a JOSE project struct whose short name collides with a
+// well-known type (package uuid, struct UUID) must still be emitted.
+func TestPayloadNamesComponentJOSE(t *testing.T) {
+	for name, shape := range map[string]*models.TypeShape{
+		"non-slice": payloadShape(named(goTypeUUID)),
+		"pointer":   payloadShape(ptrOf(named(goTypeUUID))),
+		"slice":     payloadShape(sliceOf(named(goTypeUUID))),
+		"no shape":  nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.True(t, payloadNamesComponent(&models.TypeInfo{Name: "UUID", Package: "uuid", JOSE: true, Shape: shape}))
+		})
+	}
+	assert.False(t, payloadNamesComponent(&models.TypeInfo{JOSE: true}), "a nameless JOSE payload names no component")
+}
+
+// TestGenerateJOSEPayloadNamedLikeWellKnownKeepsComponent drives the whole
+// pipeline for the JOSE case: a project struct UUID carrying only a jose tag
+// (no serializable fields, so it is emitted only when referenced) returned as
+// server.Result[[]uuid.UUID] must keep its component, because the JOSE
+// response description points at it.
+func TestGenerateJOSEPayloadNamedLikeWellKnownKeepsComponent(t *testing.T) {
+	joseUUID := &models.TypeInfo{Name: "UUID", Package: "uuid", JOSE: true}
+	project := &models.Project{
+		Name: "svc", Version: "1.0.0",
+		Modules: []models.Module{{
+			Name: "users", Package: "users",
+			Routes: []models.Route{{
+				Method: "GET", Path: "/users/ids", HandlerName: "ids", Module: "users", Package: "users",
+				Response: &models.TypeInfo{Name: "UUID", Package: "uuid", JOSE: true, Shape: payloadShape(sliceOf(named(goTypeUUID)))},
+			}},
+		}},
+		Types: map[string]*models.TypeInfo{"UUID": joseUUID},
+	}
+	spec, err := New("", "", "").Generate(project)
+	require.NoError(t, err)
+
+	assert.Contains(t, spec, "#/components/schemas/UUID", "the JOSE description names the plaintext component")
+	assert.Regexp(t, `(?m)^\s+UUID:\s*$`, spec, "the component the description names must exist")
+}
+
+// TestGenerateNoOrphanForWellKnownPayloadName drives the whole pipeline: a
+// params-only project struct named UUID (emitted only when referenced) must not
+// be emitted just because a route returns server.Result[uuid.UUID].
+func TestGenerateNoOrphanForWellKnownPayloadName(t *testing.T) {
+	localUUID := &models.TypeInfo{
+		Name: "UUID", Package: "users",
+		Fields: []models.FieldInfo{{Name: "ID", Shape: prim(goTypeString), ParamName: "id", ParamType: "path"}},
+	}
+	project := &models.Project{
+		Name: "svc", Version: "1.0.0",
+		Modules: []models.Module{{
+			Name: "users", Package: "users",
+			Routes: []models.Route{{
+				Method: "GET", Path: "/users/id", HandlerName: "id", Module: "users", Package: "users",
+				Response: &models.TypeInfo{Name: "UUID", Package: "uuid", Shape: payloadShape(named(goTypeUUID))},
+			}},
+		}},
+		Types: map[string]*models.TypeInfo{"UUID": localUUID},
+	}
+	spec, err := New("", "", "").Generate(project)
+	require.NoError(t, err)
+
+	assert.NotContains(t, spec, "#/components/schemas/UUID")
+	assert.NotRegexp(t, `(?m)^\s+UUID:\s*$`, spec, "no orphan UUID component")
+	assert.Contains(t, spec, "format: uuid", "the payload is still typed inline")
+}
+
+// TestWellKnownFormatsMatchModels pins the generator's well-known table to the
+// shared models.WellKnownTypeNames set, in both directions. The analyzer keeps
+// a payload's name only when it is in that set, trusting the generator to type
+// it inline: a key missing here would $ref a component that is never emitted,
+// and an extra key here would be warned about and left untyped by the analyzer.
+func TestWellKnownFormatsMatchModels(t *testing.T) {
+	for name := range models.WellKnownTypeNames {
+		_, ok := wellKnownFormats[name]
+		assert.True(t, ok, "models.WellKnownTypeNames has %s but wellKnownFormats does not", name)
+	}
+	for name := range wellKnownFormats {
+		assert.True(t, models.WellKnownTypeNames[name], "wellKnownFormats has %s but models.WellKnownTypeNames does not", name)
+	}
 }

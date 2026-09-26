@@ -41,3 +41,55 @@ type GetEventReq struct {
 func (h *Handler) getEvent(req GetEventReq, ctx server.HandlerContext) (server.Result[Event], server.IAPIError) {
 	return server.NewResult(http.StatusOK, Event{}), nil
 }
+
+// Non-slice well-known and builtin payloads document inline, exactly as a
+// struct field of the same type: no component is ever emitted for them, so a
+// $ref would dangle.
+
+func (h *Handler) rawPayload(ctx server.HandlerContext) (server.Result[json.RawMessage], server.IAPIError) { // data: {}
+	return server.Result[json.RawMessage]{}, nil
+}
+
+func (h *Handler) rawPointerPayload(ctx server.HandlerContext) (server.Result[*json.RawMessage], server.IAPIError) { // data: {} (pointer shed)
+	return server.Result[*json.RawMessage]{}, nil
+}
+
+func (h *Handler) createdAt(ctx server.HandlerContext) (server.Result[time.Time], server.IAPIError) { // data: {string, date-time}
+	return server.Result[time.Time]{}, nil
+}
+
+func (h *Handler) eventID(ctx server.HandlerContext) (server.Result[uuid.UUID], server.IAPIError) { // data: {string, uuid}
+	return server.Result[uuid.UUID]{}, nil
+}
+
+func (h *Handler) ttl(ctx server.HandlerContext) (server.Result[time.Duration], server.IAPIError) { // data: {integer, int64}
+	return server.Result[time.Duration]{}, nil
+}
+
+func (h *Handler) name(ctx server.HandlerContext) (server.Result[string], server.IAPIError) { // data: {string}
+	return server.Result[string]{}, nil
+}
+
+func (h *Handler) total(ctx server.HandlerContext) (server.Result[int64], server.IAPIError) { // data: {integer, int64}
+	return server.Result[int64]{}, nil
+}
+
+func (h *Handler) count(ctx server.HandlerContext) (server.Result[uint64], server.IAPIError) { // data: {integer, int64, minimum 0}
+	return server.Result[uint64]{}, nil
+}
+
+func (h *Handler) enabled(ctx server.HandlerContext) (server.Result[bool], server.IAPIError) { // data: {boolean}
+	return server.Result[bool]{}, nil
+}
+
+func (h *Handler) anything(ctx server.HandlerContext) (server.Result[any], server.IAPIError) { // data: {}
+	return server.Result[any]{}, nil
+}
+
+func (h *Handler) updatedAt(ctx server.HandlerContext) (server.ResultWithMeta[*time.Time], server.IAPIError) { // data: {string, date-time}
+	return server.ResultWithMeta[*time.Time]{}, nil
+}
+
+func (h *Handler) rawBody(ctx server.HandlerContext) (server.Result[json.RawMessage], server.IAPIError) { // raw body: {}
+	return server.Result[json.RawMessage]{}, nil
+}

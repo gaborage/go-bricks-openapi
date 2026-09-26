@@ -15,3 +15,8 @@ func sliceOf(s models.TypeShape) models.TypeShape {
 
 // ptrTo lifts a shape into the *TypeShape a container shape's Elem holds.
 func ptrTo(s models.TypeShape) *models.TypeShape { return &s }
+
+// ptrOf wraps a shape in one pointer level (a *T payload or field).
+func ptrOf(s models.TypeShape) models.TypeShape {
+	return models.TypeShape{Kind: models.ShapePointer, Elem: &s}
+}
