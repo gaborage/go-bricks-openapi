@@ -9,8 +9,12 @@ The syntactic container structure of a declared type — pointer, slice, map, na
 _Avoid_: type string, kind (overloaded with OpenAPI's `type` keyword)
 
 **Resolution**:
-The registry outcome for a field's base type: which named schema it references, or which builtin scalar underlies it (and so its kind). A distinct, later phase than Shape — resolving requires the type registry; Shape does not.
+The registry outcome for a declared type — of a field or of a payload — at any depth: which named schema a struct type references, or what a named non-struct type stands for (its underlying builtin scalar, and so its kind, or its underlying slice, map, array or pointer type). A distinct, later phase than Shape — resolving requires the type registry; Shape does not. A Marshaler type never resolves through its underlying type.
 _Avoid_: lookup, ref info
+
+**Marshaler type**:
+A type whose JSON form, in either direction, comes from its own `MarshalJSON`, `MarshalText`, `UnmarshalJSON` or `UnmarshalText` method — with the exact `encoding/json` signature, on the type or its pointer, on a type it aliases, or promoted from a struct it embeds — rather than from its underlying type. A defined type over a Marshaler type is not one; it drops the methods. Only JSON bodies are affected: parameters are bound by kind.
+_Avoid_: custom type, enum type, custom-marshaled type
 
 **Constraint set**:
 The typed image of one `validate` tag expressed in OpenAPI schema vocabulary (bounds, format, pattern, enum). One tag produces one constraint set.
