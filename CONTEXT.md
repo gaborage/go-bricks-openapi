@@ -13,7 +13,7 @@ The registry outcome for a declared type — of a field or of a payload — at a
 _Avoid_: lookup, ref info
 
 **Marshaler type**:
-A type whose JSON form, in either direction, comes from its own `MarshalJSON`, `MarshalText`, `UnmarshalJSON` or `UnmarshalText` method — with the exact `encoding/json` signature, on the type or its pointer, on a type it aliases, or promoted from a struct it embeds — rather than from its underlying type. A defined type over a Marshaler type is not one; it drops the methods. Only JSON bodies are affected: parameters are bound by kind.
+A type whose JSON form, in either direction, comes from its own `MarshalJSON`, `MarshalJSONTo`, `MarshalText`, `AppendText`, `UnmarshalJSON`, `UnmarshalJSONFrom` or `UnmarshalText` method — with the exact signature its `encoding/json` or `encoding` interface requires, on the type or its pointer, on a type it aliases, or promoted from a struct it embeds — rather than from its underlying type. A defined type over a Marshaler type is not one; it drops the methods. Only JSON bodies are affected: parameters are bound by kind.
 _Avoid_: custom type, enum type, custom-marshaled type
 
 **Constraint set**:
