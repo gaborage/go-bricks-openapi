@@ -247,7 +247,9 @@ nested Go module, is not.
   (or slice element) that resolves to none of these — a third-party type such
   as `decimal.Decimal`, an undeclared name, or a well-known type under an
   aliased import (`t "time"`) — is documented as an untyped object and reported
-  as a warning (so `--strict` fails on it).
+  as a warning (so `--strict` fails on it). A bare handler return of type `T`
+  (no wrapper, with or without `WithRawResponse()`) follows the same rules as
+  `server.Result[T]`.
 - A route path built from a `var` (including a `:=` local) is an Unresolved
   route: only `const` declarations resolve. The route is dropped from the spec
   with a warning.
