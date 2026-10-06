@@ -4162,6 +4162,9 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.GET(hr, r, "/raw", m.raw)
 	server.GET(hr, r, "/id", m.id)
 	server.GET(hr, r, "/ttl", m.ttl)
+	server.GET(hr, r, "/month", m.month)
+	server.GET(hr, r, "/workdays", m.workdays)
+	server.GET(hr, r, "/total", m.total)
 	server.GET(hr, r, "/count", m.count)
 	server.GET(hr, r, "/item", m.item)
 }
@@ -4173,6 +4176,9 @@ func (m *Module) tm(ctx server.HandlerContext) (server.Result[*time.Time], serve
 func (m *Module) raw(ctx server.HandlerContext) (server.Result[json.RawMessage], server.IAPIError) { return server.Result[json.RawMessage]{}, nil }
 func (m *Module) id(ctx server.HandlerContext) (server.Result[uuid.UUID], server.IAPIError) { return server.Result[uuid.UUID]{}, nil }
 func (m *Module) ttl(ctx server.HandlerContext) (server.Result[time.Duration], server.IAPIError) { return server.Result[time.Duration]{}, nil }
+func (m *Module) month(ctx server.HandlerContext) (server.Result[time.Month], server.IAPIError) { return server.Result[time.Month]{}, nil }
+func (m *Module) workdays(ctx server.HandlerContext) (server.Result[[]time.Weekday], server.IAPIError) { return server.Result[[]time.Weekday]{}, nil }
+func (m *Module) total(ctx server.HandlerContext) (server.ResultWithMeta[*json.Number], server.IAPIError) { return server.ResultWithMeta[*json.Number]{}, nil }
 func (m *Module) count(ctx server.HandlerContext) (server.Result[uint64], server.IAPIError) { return server.Result[uint64]{}, nil }
 func (m *Module) item(ctx server.HandlerContext) (server.Result[Item], server.IAPIError) { return server.Result[Item]{}, nil }
 `
@@ -4203,12 +4209,16 @@ func (m *Module) item(ctx server.HandlerContext) (server.Result[Item], server.IA
 
 	for path, name := range map[string]string{
 		"GET /time": "Time", "GET /raw": "RawMessage", "GET /id": "UUID", "GET /ttl": "Duration", "GET /item": "Item",
+		"GET /month": "Month", "GET /workdays": "Weekday", "GET /total": "Number",
 	} {
 		route := routeForPath(t, routes, path)
 		require.NotNil(t, route.Response, path)
 		assert.Equal(t, name, route.Response.Name, "%s: a well-known or registered payload keeps its name", path)
 	}
-	for _, typeName := range []string{models.WellKnownTimeTime, models.WellKnownRawMessage, models.WellKnownUUID, models.WellKnownTimeDuration, "Item"} {
+	for _, typeName := range []string{
+		models.WellKnownTimeTime, models.WellKnownRawMessage, models.WellKnownUUID, models.WellKnownTimeDuration,
+		models.WellKnownTimeMonth, models.WellKnownTimeWeekday, models.WellKnownJSONNumber, "Item",
+	} {
 		assert.False(t, warnedAbout(typeName), "%s must not warn: %v", typeName, warnings)
 	}
 
@@ -5627,12 +5637,18 @@ func TestPrimitiveKind(t *testing.T) {
 }
 
 // TestResolveUnderlyingBuiltin covers named-scalar classification end-to-end:
-// local `type Cents int64`, the qualified time.Duration, and a plain builtin
-// (which is NOT a named wrapper, so empty). Each resolves to the Go builtin it
-// bottoms out in, and the 3-way kind is derived from that builtin.
+// local `type Cents int64`, the qualified time.Duration, time.Month and
+// time.Weekday, and a plain builtin (which is NOT a named wrapper, so empty).
+// Each resolves to the Go builtin it bottoms out in, and the 3-way kind is
+// derived from that builtin. json.Number is deliberately unclassified: its Go
+// kind is string, but encoding/json writes it as a number, so a string kind
+// would document it as a string (with minLength from validate); the generator
+// types it from its well-known entry instead. A local wrapper of it is
+// written as a string, and stays unclassified too.
 func TestResolveUnderlyingBuiltin(t *testing.T) {
 	src := `package mod
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/gaborage/go-bricks/app"
@@ -5645,21 +5661,28 @@ func (m *Module) Shutdown() error { return nil }
 type Cents int64
 type Alias Cents
 type Timeout time.Duration
+type FiscalMonth time.Month
+type Quantity json.Number
 type Count uint32
 type Ratio float32
 type Label string
 type Inner struct{ X int }
 type Money struct {
-	Amount  Cents         ` + "`json:\"amount\"`" + `
-	Chained Alias         ` + "`json:\"chained\"`" + `
-	Wait    Timeout       ` + "`json:\"wait\"`" + `
-	TTL     time.Duration ` + "`json:\"ttl\"`" + `
-	Count   Count         ` + "`json:\"count\"`" + `
-	Counts  []Count       ` + "`json:\"counts\"`" + `
-	Ratio   Ratio         ` + "`json:\"ratio\"`" + `
-	Label   Label         ` + "`json:\"label\"`" + `
-	Plain   int           ` + "`json:\"plain\"`" + `
-	Nested  Inner         ` + "`json:\"nested\"`" + `
+	Amount   Cents          ` + "`json:\"amount\"`" + `
+	Chained  Alias          ` + "`json:\"chained\"`" + `
+	Wait     Timeout        ` + "`json:\"wait\"`" + `
+	TTL      time.Duration  ` + "`json:\"ttl\"`" + `
+	Month    time.Month     ` + "`json:\"month\"`" + `
+	Workdays []time.Weekday ` + "`json:\"workdays\"`" + `
+	Fiscal   FiscalMonth    ` + "`json:\"fiscal\"`" + `
+	Total    json.Number    ` + "`json:\"total\"`" + `
+	Qty      Quantity       ` + "`json:\"qty\"`" + `
+	Count    Count          ` + "`json:\"count\"`" + `
+	Counts   []Count        ` + "`json:\"counts\"`" + `
+	Ratio    Ratio          ` + "`json:\"ratio\"`" + `
+	Label    Label          ` + "`json:\"label\"`" + `
+	Plain    int            ` + "`json:\"plain\"`" + `
+	Nested   Inner          ` + "`json:\"nested\"`" + `
 }
 func (m *Module) g(ctx server.HandlerContext) (server.Result[Money], server.IAPIError) { return server.Created(Money{}), nil }
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
@@ -5683,6 +5706,11 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 		{"chained", goTypeInt64, "integer", "type Alias Cents -> chain to int64"},
 		{"wait", goTypeInt64, "integer", "type Timeout time.Duration (selector underlying)"},
 		{"ttl", goTypeInt64, "integer", "time.Duration marshals as its int64 ns count"},
+		{"month", goTypeInt, "integer", "time.Month is an int with no marshaler"},
+		{"workdays", goTypeInt, "integer", "[]time.Weekday carries the ELEMENT's builtin"},
+		{"fiscal", goTypeInt, "integer", "type FiscalMonth time.Month (selector underlying)"},
+		{"total", "", "", "json.Number is typed by the generator's well-known entry, never as a string"},
+		{"qty", "", "", "type Quantity json.Number is written as a string: not classified"},
 		{"count", u32, "integer", "type Count uint32"},
 		{"counts", u32, "integer", "[]Count carries the ELEMENT's builtin"},
 		{"ratio", goTypeFloat32, "number", "type Ratio float32"},

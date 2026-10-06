@@ -557,7 +557,7 @@ func classifyRoute(route *models.Route) routeClassification {
 // -> {}).
 //
 // A named payload is either a registered component ($ref) or a well-known type
-// (time.Time, uuid.UUID, time.Duration, json.RawMessage) the generator
+// (one of models.WellKnownTypeNames, such as time.Time or json.Number) the generator
 // documents inline (see responsePayloadSchema). Any other name that resolves to
 // no component is CLEARED by the analyzer, with a warning.
 //

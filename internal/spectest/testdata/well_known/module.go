@@ -30,4 +30,9 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.GET(hr, r, "/events/anything", m.h.anything, server.WithTags("events"))
 	server.GET(hr, r, "/events/updated-at", m.h.updatedAt, server.WithTags("events"))
 	server.GET(hr, r, "/events/raw-body", m.h.rawBody, server.WithTags("events"), server.WithRawResponse())
+	server.GET(hr, r, "/schedules/:month", m.h.getSchedule, server.WithTags("events"))
+	server.GET(hr, r, "/events/month", m.h.month, server.WithTags("events"))
+	server.GET(hr, r, "/events/weekday", m.h.weekday, server.WithTags("events"))
+	server.GET(hr, r, "/events/rates", m.h.rates, server.WithTags("events"))
+	server.GET(hr, r, "/events/exact-total", m.h.exactTotal, server.WithTags("events"))
 }

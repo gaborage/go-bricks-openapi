@@ -186,3 +186,79 @@ func TestNamedScalarBuildTaggedWidths(t *testing.T) {
 		})
 	}
 }
+
+// boundsModule is the module file of TestWellKnownStdlibScalarBounds.
+const boundsModule = `package cal
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "cal" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+type FiscalMonth time.Month
+
+type Plan struct {
+	Month    time.Month     ` + "`json:\"month\" validate:\"min=1,max=12\"`" + `
+	Workdays []time.Weekday ` + "`json:\"workdays\" validate:\"dive,min=0,max=6\"`" + `
+	Start    time.Month     ` + "`json:\"start\"`" + `
+	Fiscal   FiscalMonth    ` + "`json:\"fiscal\" validate:\"min=1,max=12\"`" + `
+}
+
+func (m *Module) get(ctx server.HandlerContext) (server.Result[Plan], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Plan{}), nil
+}
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/plans", m.get)
+}
+`
+
+// TestWellKnownStdlibScalarBounds runs the real analyze -> generate ->
+// validate pipeline to pin that validate bounds on time.Month and time.Weekday
+// reach the schema (#89), on the field, on dive items, and through a local
+// wrapper. The generator's well-known entry alone would type them as integers
+// but drop the bounds: they apply only because the analyzer's
+// knownUnderlyingBuiltins classifies both as named scalars over int. Without a
+// validate tag no bound appears, since nothing clamps an out-of-range value.
+func TestWellKnownStdlibScalarBounds(t *testing.T) {
+	dir := t.TempDir()
+	for name, src := range map[string]string{
+		"go.mod":    "module github.com/example/cal\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.53.0\n",
+		"module.go": boundsModule,
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(src), 0o600))
+	}
+
+	spec, err := Generate(t.Context(), dir)
+	require.NoError(t, err)
+	require.NoError(t, Validate(t.Context(), []byte(spec)))
+
+	var doc struct {
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]map[string]any `yaml:"properties"`
+			} `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(spec), &doc))
+	props := doc.Components.Schemas["Plan"].Properties
+	require.NotNil(t, props, "Plan component missing:\n%s", spec)
+
+	month := map[string]any{"type": "integer", "format": "int64", "minimum": 1, "maximum": 12}
+	assert.Equal(t, month, props["month"], "month")
+	assert.Equal(t, month, props["fiscal"], "type FiscalMonth time.Month")
+	assert.Equal(t, map[string]any{
+		"type":  "array",
+		"items": map[string]any{"type": "integer", "format": "int64", "minimum": 0, "maximum": 6},
+	}, props["workdays"], "workdays")
+	assert.Equal(t, map[string]any{"type": "integer", "format": "int64"}, props["start"], "no validate tag, no bounds")
+}

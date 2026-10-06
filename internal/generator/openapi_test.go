@@ -1444,6 +1444,14 @@ func TestSetTypeAndFormatWellKnownTypes(t *testing.T) {
 		{"byte slice not array", sliceOf(prim(goTypeByte)), typeString, formatByte},
 		// *[]byte sheds its one pointer level to the same base64 string.
 		{"pointer byte slice", ptrOf(sliceOf(prim(goTypeByte))), typeString, formatByte},
+		// encoding/json writes a json.Number as the number literal it holds, at
+		// any precision: a number with no format, never a string.
+		{"json.Number", named(goTypeJSONNumber), typeNumber, ""},
+		{"pointer json.Number", ptrOf(named(goTypeJSONNumber)), typeNumber, ""},
+		// time.Month and time.Weekday are ints with no marshaler, written as
+		// their number; int is documented as int64 (#105).
+		{"time.Month", named(goTypeTimeMonth), typeInteger, formatInt64},
+		{"time.Weekday", named(goTypeTimeWeekday), typeInteger, formatInt64},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1454,6 +1462,128 @@ func TestSetTypeAndFormatWellKnownTypes(t *testing.T) {
 			assert.Nil(t, prop.Items, "well-known types must not be modeled as arrays")
 		})
 	}
+}
+
+// TestSetTypeAndFormatWellKnownStdlibScalarPositions pins json.Number,
+// time.Month and time.Weekday (#89) in every position setTypeAndFormat types
+// from the shape alone: the same leaf schema at the end of each container
+// path, and no range bound invented for Month or Weekday (a zero Month is
+// written as 0, and nothing rejects 13).
+func TestSetTypeAndFormatWellKnownStdlibScalarPositions(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	// descend follows steps from prop: 'i' into an array's items, 'a' into an
+	// object's additionalProperties.
+	descend := func(t *testing.T, prop *OpenAPIProperty, steps string) *OpenAPIProperty {
+		t.Helper()
+		for _, step := range steps {
+			if step == 'i' {
+				require.Equal(t, typeArray, prop.Type)
+				prop = prop.Items
+			} else {
+				require.Equal(t, typeObject, prop.Type)
+				prop = prop.AdditionalProperties
+			}
+			require.NotNil(t, prop)
+		}
+		return prop
+	}
+	str := prim(goTypeString)
+	for name, want := range map[string]wellKnownType{
+		goTypeJSONNumber:  {typeNumber, ""},
+		goTypeTimeMonth:   {typeInteger, formatInt64},
+		goTypeTimeWeekday: {typeInteger, formatInt64},
+	} {
+		x := named(name)
+		for _, pos := range []struct {
+			name  string
+			shape models.TypeShape
+			steps string
+		}{
+			{"direct", x, ""},
+			{"pointer", ptrOf(x), ""},
+			{"slice item", sliceOf(x), "i"},
+			{"slice of pointers item", sliceOf(ptrOf(x)), "i"},
+			{"map value", mapOf(str, x), "a"},
+			{"nested slice item", sliceOf(sliceOf(x)), "ii"},
+			{"map of slices item", mapOf(str, sliceOf(x)), "ai"},
+		} {
+			t.Run(name+" "+pos.name, func(t *testing.T) {
+				prop := &OpenAPIProperty{}
+				gen.setTypeAndFormat(prop, pos.shape)
+				leaf := descend(t, prop, pos.steps)
+				assert.Equal(t, want.typ, leaf.Type)
+				assert.Equal(t, want.format, leaf.Format)
+				assert.Nil(t, leaf.Minimum, "no invented lower bound")
+				assert.Nil(t, leaf.Maximum, "no invented upper bound")
+			})
+		}
+	}
+}
+
+// TestFieldInfoToPropertyWellKnownStdlibScalars pins the field-level rules for
+// #89's types. json.Number is typed from its well-known entry alone (it has no
+// UnderlyingKind: its Go kind is string, but encoding/json writes a number),
+// so its example is kept as a number and a validate min/max — a string-length
+// rule to go-playground/validator — has no keyword to map to. time.Month and
+// time.Weekday reach the generator as named scalars over int (the analyzer's
+// knownUnderlyingBuiltins), so validate bounds and integer examples apply.
+func TestFieldInfoToPropertyWellKnownStdlibScalars(t *testing.T) {
+	gen := New(defaultTitle, defaultVersion, defaultDescription)
+	overInt := func(shape models.TypeShape) *models.FieldInfo {
+		return &models.FieldInfo{Shape: shape, JSONName: "v", UnderlyingKind: typeInteger, UnderlyingBuiltin: goTypeInt}
+	}
+
+	t.Run("json.Number example kept as a number", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: named(goTypeJSONNumber), JSONName: "total", Example: "42"})
+		assert.Equal(t, typeNumber, p.Type)
+		assert.Empty(t, p.Format, "json.Number holds any precision")
+		assert.Equal(t, 42.0, p.Example, "kept as a number, not the string \"42\"")
+	})
+
+	t.Run("json.Number min/max never become a string length", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: named(goTypeJSONNumber), JSONName: "total", Constraints: map[string]string{"min": "1", "max": "9"}})
+		assert.Equal(t, typeNumber, p.Type)
+		assert.Nil(t, p.MinLength)
+		assert.Nil(t, p.MaxLength)
+		assert.Nil(t, p.Minimum, "validator reads min on json.Number as a length, so no numeric bound either")
+		assert.Nil(t, p.Maximum)
+	})
+
+	t.Run("time.Month validate bounds and example", func(t *testing.T) {
+		f := overInt(named(goTypeTimeMonth))
+		f.Constraints = map[string]string{"min": "1", "max": "12"}
+		f.Example = "3"
+		p := gen.fieldInfoToProperty(f)
+		assert.Equal(t, typeInteger, p.Type)
+		assert.Equal(t, formatInt64, p.Format)
+		require.NotNil(t, p.Minimum)
+		assert.InDelta(t, 1, *p.Minimum, 0)
+		require.NotNil(t, p.Maximum)
+		assert.InDelta(t, 12, *p.Maximum, 0)
+		assert.Equal(t, int64(3), p.Example)
+	})
+
+	t.Run("[]time.Weekday dive bounds the items", func(t *testing.T) {
+		f := overInt(sliceOf(named(goTypeTimeWeekday)))
+		f.ElementConstraints = map[string]string{"min": "0", "max": "6"}
+		p := gen.fieldInfoToProperty(f)
+		assert.Equal(t, typeArray, p.Type)
+		require.NotNil(t, p.Items)
+		assert.Equal(t, formatInt64, p.Items.Format)
+		require.NotNil(t, p.Items.Minimum)
+		assert.InDelta(t, 0, *p.Items.Minimum, 0)
+		require.NotNil(t, p.Items.Maximum)
+		assert.InDelta(t, 6, *p.Items.Maximum, 0)
+	})
+
+	t.Run("no validate tag, no bounds", func(t *testing.T) {
+		for _, name := range []string{goTypeTimeMonth, goTypeTimeWeekday} {
+			p := gen.fieldInfoToProperty(overInt(named(name)))
+			assert.Equal(t, typeInteger, p.Type, name)
+			assert.Nil(t, p.Minimum, name)
+			assert.Nil(t, p.Maximum, name)
+		}
+	})
 }
 
 func TestSetTypeAndFormatUnsignedMinimum(t *testing.T) {
@@ -2823,6 +2953,10 @@ func TestResponsePayloadSchemaInlineScalars(t *testing.T) {
 		{"*time.Time", &models.TypeInfo{Name: "Time", Shape: payloadShape(ptrOf(named(goTypeTimeTime)))}, typeString, formatDateTime, false},
 		{"time.Duration", &models.TypeInfo{Name: "Duration", Shape: payloadShape(named(goTypeTimeDuration))}, typeInteger, formatInt64, false},
 		{"uuid.UUID", &models.TypeInfo{Name: "UUID", Shape: payloadShape(named(goTypeUUID))}, typeString, formatUUID, false},
+		{"json.Number", &models.TypeInfo{Name: "Number", Shape: payloadShape(named(goTypeJSONNumber))}, typeNumber, "", false},
+		{"*json.Number", &models.TypeInfo{Name: "Number", Shape: payloadShape(ptrOf(named(goTypeJSONNumber)))}, typeNumber, "", false},
+		{"time.Month", &models.TypeInfo{Name: "Month", Shape: payloadShape(named(goTypeTimeMonth))}, typeInteger, formatInt64, false},
+		{"*time.Weekday", &models.TypeInfo{Name: "Weekday", Shape: payloadShape(ptrOf(named(goTypeTimeWeekday)))}, typeInteger, formatInt64, false},
 		{"string", &models.TypeInfo{Shape: payloadShape(prim(goTypeString))}, typeString, "", false},
 		{"*string", &models.TypeInfo{Shape: payloadShape(ptrOf(prim(goTypeString)))}, typeString, "", false},
 		{"int64", &models.TypeInfo{Shape: payloadShape(prim(formatInt64))}, typeInteger, formatInt64, false},
@@ -3066,6 +3200,23 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 		assert.Equal(t, 0.0, *p.Items.Minimum)
 	})
 
+	t.Run("nested named-scalar slice: dive sizes the inner arrays", func(t *testing.T) {
+		// One dive reaches the elements of the outer slice, which are slices
+		// themselves, so dive,min=1 is their length: minItems on the inner
+		// array, and nothing on the scalars inside it.
+		p := gen.fieldInfoToProperty(&models.FieldInfo{
+			Shape: sliceOf(sliceOf(named("Cents"))), UnderlyingKind: "integer", UnderlyingBuiltin: goTypeInt64, JSONName: "grid",
+			ElementConstraints: map[string]string{"min": "1"},
+		})
+		require.NotNil(t, p.Items)
+		assert.Equal(t, typeArray, p.Items.Type)
+		require.NotNil(t, p.Items.MinItems)
+		assert.Equal(t, 1, *p.Items.MinItems)
+		require.NotNil(t, p.Items.Items)
+		assert.Equal(t, typeInteger, p.Items.Items.Type)
+		assert.Nil(t, p.Items.Items.Minimum)
+	})
+
 	t.Run("ref-slice carries minItems on the array wrapper", func(t *testing.T) {
 		p := gen.fieldInfoToProperty(&models.FieldInfo{
 			Shape: sliceOf(named("Address")), RefName: "Address", JSONName: "addrs",
@@ -3130,6 +3281,22 @@ func TestFieldInfoToPropertyNamedScalarMatchesBuiltin(t *testing.T) {
 			arr := gen.fieldInfoToProperty(namedField(sliceOf(named("N"))))
 			assert.Equal(t, typeArray, arr.Type)
 			assert.Equal(t, bare, arr.Items, "items of a named-scalar slice")
+
+			// The analyzer resolves the builtin through every slice and pointer
+			// level, so each container level must still be emitted: [][]N is
+			// an array of arrays, exactly as [][]B is, never a flat array.
+			for _, nest := range []struct {
+				name string
+				wrap func(models.TypeShape) models.TypeShape
+			}{
+				{"slice of pointers", func(s models.TypeShape) models.TypeShape { return sliceOf(ptrOf(s)) }},
+				{"pointer to slice", func(s models.TypeShape) models.TypeShape { return ptrOf(sliceOf(s)) }},
+				{"nested slice", func(s models.TypeShape) models.TypeShape { return sliceOf(sliceOf(s)) }},
+				{"slice of pointer to slice", func(s models.TypeShape) models.TypeShape { return sliceOf(ptrOf(sliceOf(s))) }},
+			} {
+				want := gen.fieldInfoToProperty(&models.FieldInfo{Shape: nest.wrap(prim(c.builtin)), JSONName: "v"})
+				assert.Equal(t, want, gen.fieldInfoToProperty(namedField(nest.wrap(named("N")))), nest.name)
+			}
 		})
 	}
 }
