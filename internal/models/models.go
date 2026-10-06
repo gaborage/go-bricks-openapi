@@ -101,12 +101,13 @@ type TypeInfo struct {
 	// no component schema is generated; later passes use this flag to emit a 204
 	// response instead of a 200 with a body.
 	NoContent bool
-	// Shape is the decoded type argument of a response payload —
-	// server.Result[T] / server.ResultWithMeta[T] — using the same vocabulary
-	// FieldInfo.Shape uses for struct fields. Nil for request types, for any
-	// response not carried by a result wrapper, and for a non-slice payload that
-	// registered as a project struct (the analyzer sheds it, so the payload is
-	// $ref'd even when its short name collides with a well-known type).
+	// Shape is the decoded type of a response payload — the T of
+	// server.Result[T] / server.ResultWithMeta[T], or of a bare handler return
+	// T, which is documented exactly alike — using the same vocabulary
+	// FieldInfo.Shape uses for struct fields. Nil for request types, for the
+	// NoContentResult marker, and for a non-slice payload that registered as a
+	// project struct (the analyzer sheds it, so the payload is $ref'd even when
+	// its short name collides with a well-known type).
 	//
 	// For a slice payload ([]Item, []string) Kind is ShapeSlice and Elem is the
 	// element's shape; Name keeps describing the ELEMENT (empty for a primitive

@@ -2355,16 +2355,25 @@ func (a *ProjectAnalyzer) handleResultWrapper(x, index ast.Expr, packageName str
 	if !a.isResultWrapper(x, serverAliases) {
 		return nil
 	}
-	if arr, ok := index.(*ast.ArrayType); ok {
-		return a.slicePayloadTypeInfo(arr, packageName, serverAliases)
-	}
-	return a.scalarPayloadTypeInfo(index, packageName, serverAliases)
+	return a.payloadTypeInfo(index, packageName, serverAliases)
 }
 
-// scalarPayloadTypeInfo resolves a non-slice type argument (server.Result[Item],
-// server.Result[time.Time], server.Result[*string]) and attaches its Shape, so
-// the generator can document a well-known or builtin payload inline instead of
-// $ref'ing a component that is never emitted.
+// payloadTypeInfo resolves a response payload type T — the type argument of
+// server.Result[T] / ResultWithMeta[T], or a handler's bare (non-wrapper) first
+// result — to a TypeInfo carrying its Shape. go-bricks sends both under the
+// same data key (or as the whole body with WithRawResponse()), so both must be
+// documented alike: a slice is an array payload, anything else a scalar one.
+func (a *ProjectAnalyzer) payloadTypeInfo(expr ast.Expr, packageName string, serverAliases map[string]struct{}) *models.TypeInfo {
+	if arr, ok := expr.(*ast.ArrayType); ok {
+		return a.slicePayloadTypeInfo(arr, packageName, serverAliases)
+	}
+	return a.scalarPayloadTypeInfo(expr, packageName, serverAliases)
+}
+
+// scalarPayloadTypeInfo resolves a non-slice payload (server.Result[Item],
+// server.Result[time.Time], server.Result[*string], or the same type as a bare
+// return) and attaches its Shape, so the generator can document a well-known or
+// builtin payload inline instead of $ref'ing a component that is never emitted.
 //
 // A builtin (one pointer level shed) names no component, so its Name is
 // cleared — the same rule slicePayloadTypeInfo applies to a primitive element.
@@ -2405,21 +2414,22 @@ func PayloadBaseShape(s models.TypeShape) models.TypeShape {
 	return s
 }
 
-// slicePayloadTypeInfo resolves a slice type argument (server.Result[[]Item],
-// server.Result[[]string]) to a TypeInfo describing the ELEMENT plus a
-// ShapeSlice marker, so the generator emits `type: array` with typed items
-// instead of the untyped-object fallback an unresolved payload produces.
+// slicePayloadTypeInfo resolves a slice payload (server.Result[[]Item],
+// server.Result[[]string], or the same slice as a bare return) to a TypeInfo
+// describing the ELEMENT plus a ShapeSlice marker, so the generator emits
+// `type: array` with typed items instead of the untyped-object fallback an
+// unresolved payload produces.
 //
 // Only a named or primitive element is modelled; a pointer element is shed
 // first, mirroring how a []*T struct field is documented as an array of the
 // value type. Anything else ([][]T, map elements, func/chan) returns nil,
 // keeping the pre-existing untyped-object output rather than guessing.
 //
-// This lives on the wrapper path rather than in typeInfoFromExpr's own switch
-// on purpose: only a Result/ResultWithMeta type argument is a response payload.
-// A handler PARAMETER of slice type must keep resolving to nil, because the
-// request-body path has no array shape to emit and would otherwise $ref the
-// element type as if the body were a single object.
+// This lives on the payload path rather than in typeInfoFromExpr's own switch
+// on purpose: only a response (a Result/ResultWithMeta type argument or a bare
+// first result) is a payload. A handler PARAMETER of slice type must keep
+// resolving to nil, because the request-body path has no array shape to emit
+// and would otherwise $ref the element type as if the body were a single object.
 func (a *ProjectAnalyzer) slicePayloadTypeInfo(
 	arr *ast.ArrayType, packageName string, serverAliases map[string]struct{},
 ) *models.TypeInfo {
@@ -2548,16 +2558,31 @@ func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName 
 	return nil
 }
 
-// extractResponseType extracts response type from handler return values.
-// Returns the first non-framework type result, or nil if none found.
+// extractResponseType extracts the response payload from a handler's first
+// result (the second is IAPIError or error), or nil if there is none.
+//
+// A generic result keeps typeInfoFromExpr's wrapper handling: server.Result[T] /
+// ResultWithMeta[T] unwraps to T, any other generic is not a payload. The
+// server.NoContentResult marker keeps its bodyless-204 meaning. Any other first
+// result is a bare payload of type T, which go-bricks sends exactly as it
+// sends server.Result[T], so it takes the same payload path (payloadTypeInfo)
+// and is documented, warned about and classified alike. That routing lives
+// here rather than in typeInfoFromExpr, which request extraction shares: a
+// request type must keep resolving as it does today.
 func (a *ProjectAnalyzer) extractResponseType(results *ast.FieldList, packageName string, serverAliases map[string]struct{}) *models.TypeInfo {
 	if results == nil || len(results.List) == 0 {
 		return nil
 	}
 
-	// First result is response type (second is IAPIError or error, filtered by typeInfoFromExpr)
-	firstResult := results.List[0]
-	return a.typeInfoFromExpr(firstResult.Type, packageName, serverAliases)
+	first := results.List[0].Type
+	switch first.(type) {
+	case *ast.IndexExpr, *ast.IndexListExpr:
+		return a.typeInfoFromExpr(first, packageName, serverAliases)
+	}
+	if a.isNoContentResultType(first, serverAliases) {
+		return a.typeInfoFromExpr(first, packageName, serverAliases)
+	}
+	return a.payloadTypeInfo(first, packageName, serverAliases)
 }
 
 // findHandlerInFile searches a single AST file for a handler method
@@ -3088,9 +3113,10 @@ func shedRegisteredPayloadShape(ti *models.TypeInfo) {
 // cleared with a warning — the untyped-object path server.Result[Status] takes —
 // and --strict fails instead of the document.
 //
-// Only a result-wrapper payload carries a Shape, so request bodies are never
-// touched here. A well-known type keeps its name: the generator documents it
-// inline from the Shape, and the doctor counts it as typed by that name.
+// Only a response payload (a result-wrapper type argument or a bare return)
+// carries a Shape, so request bodies are never touched here. A well-known type
+// keeps its name: the generator documents it inline from the Shape, and the
+// doctor counts it as typed by that name.
 func (a *ProjectAnalyzer) dropUnresolvablePayloadName(ti *models.TypeInfo) {
 	if ti.Name == "" || ti.Shape == nil {
 		return
