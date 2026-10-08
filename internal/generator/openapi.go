@@ -92,9 +92,12 @@ const (
 	goTypeUint8        = "uint8"
 	// goTypeUintptr names a machine address: it has no API contract, so it
 	// stays the object fallback and the analyzer diagnoses the field instead.
-	goTypeUintptr    = "uintptr"
-	goTypeUUID       = "uuid.UUID"
-	goTypeRawMessage = "json.RawMessage"
+	goTypeUintptr     = "uintptr"
+	goTypeUUID        = "uuid.UUID"
+	goTypeRawMessage  = "json.RawMessage"
+	goTypeJSONNumber  = "json.Number"
+	goTypeTimeMonth   = "time.Month"
+	goTypeTimeWeekday = "time.Weekday"
 )
 
 // Response/parameter description text reused across operations.
@@ -903,7 +906,7 @@ func responsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
 
 // inlinePayloadSchema types a non-slice payload that names no component from
 // its Shape, exactly as a struct field of that type is typed: a well-known
-// type (time.Time, uuid.UUID, time.Duration, json.RawMessage) or a builtin
+// type (time.Time, uuid.UUID, json.Number, ...: see wellKnownFormats) or a builtin
 // (string, int64, any, interface{}). One pointer level is shed first, so
 // *json.RawMessage documents as json.RawMessage. It must run before the $ref
 // branch: a well-known payload still carries its Name, but no component is
@@ -1558,8 +1561,7 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 	if field.UnderlyingKind != "" {
 		if unwrapped.Kind == models.ShapeSlice {
 			prop.Type = typeArray
-			prop.Items = &OpenAPIProperty{}
-			setNamedScalarType(prop.Items, field)
+			prop.Items = namedScalarItems(unwrapped.Elem, field)
 			applyValidationConstraints(prop, field) // minItems/maxItems on the array, dive rules on items
 			return prop
 		}
@@ -1667,6 +1669,17 @@ type wellKnownType struct {
 //     object fallback in setBasicTypeAndFormat, and a []json.RawMessage
 //     payload's items to a dangling element $ref. Its underlying []byte is
 //     invisible to the AST-only analyzer, so the base64 branch never sees it.
+//   - json.Number    -> number, with no format: encoding/json writes the number
+//     literal it holds, at any precision. Its Go kind is string, so it must
+//     stay out of the analyzer's knownUnderlyingBuiltins — a string kind would
+//     document it as a string. A local wrapper (type Amount json.Number) is
+//     written as a string and is not matched here.
+//   - time.Month / time.Weekday -> integer (int64): ints with no marshaler,
+//     written as their number, unclamped (a zero Month is 0), so no range
+//     bound is stamped. The analyzer also maps both to int in
+//     knownUnderlyingBuiltins, so validate bounds and local wrappers resolve;
+//     this entry types the positions that classification skips (map values,
+//     payloads).
 //
 // NOTE: matching is by the analyzer's qualified type string (pkg-local alias +
 // "." + name), so an aliased import (import t "time" -> "t.Time") is not yet
@@ -1677,12 +1690,16 @@ var wellKnownFormats = map[string]wellKnownType{
 	goTypeTimeDuration: {typeInteger, formatInt64},
 	goTypeUUID:         {typeString, formatUUID},
 	goTypeRawMessage:   {},
+	goTypeJSONNumber:   {typ: typeNumber},
+	goTypeTimeMonth:    {typeInteger, formatInt64},
+	goTypeTimeWeekday:  {typeInteger, formatInt64},
 }
 
 // wellKnownShape resolves the well-known stdlib/library schemas by shape:
 // []byte / []uint8 (matched on the element name so a []pkg.uint8 selector
 // correctly misses), and the qualified names in wellKnownFormats (time.Time,
-// time.Duration, uuid.UUID, json.RawMessage).
+// time.Duration, uuid.UUID, json.RawMessage, json.Number, time.Month,
+// time.Weekday).
 //
 // encoding/json marshals a []byte as base64 text, which OpenAPI 3.0 spells
 // `format: byte`; `binary` means raw octets, which no JSON or JOSE body carries.
@@ -1733,6 +1750,25 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, shape models.
 	}
 
 	setBasicTypeAndFormat(prop, s.Name)
+}
+
+// namedScalarItems builds the items schema of a slice of a named scalar. The
+// analyzer resolves the builtin through every slice and pointer level, so each
+// further slice level here is one more nested array ([][]Cents is an array of
+// arrays, as [][]int64 is), shedding one pointer per level exactly as
+// setTypeAndFormat's recursion does. Only the innermost schema takes the
+// builtin.
+func namedScalarItems(elem *models.TypeShape, field *models.FieldInfo) *OpenAPIProperty {
+	items := &OpenAPIProperty{}
+	if elem != nil {
+		if s := shapeAfterPointer(*elem); s.Kind == models.ShapeSlice {
+			items.Type = typeArray
+			items.Items = namedScalarItems(s.Elem, field)
+			return items
+		}
+	}
+	setNamedScalarType(items, field)
+	return items
 }
 
 // setNamedScalarType types prop for a named scalar field (UnderlyingKind set):

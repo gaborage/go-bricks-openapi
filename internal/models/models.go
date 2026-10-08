@@ -117,7 +117,7 @@ type TypeInfo struct {
 	//
 	// For any other non-slice payload Shape is the argument as written (a
 	// pointer kept; consumers shed one level). The generator documents a
-	// well-known type (time.Time, uuid.UUID, time.Duration, json.RawMessage) or
+	// well-known type (time.Time, uuid.UUID, json.Number, ...: WellKnownTypeNames) or
 	// a builtin (string, int64, any, interface{}) inline from it and never $refs
 	// it. A builtin carries no Name; a well-known type keeps its Name. Any other
 	// name that resolves to no component is cleared by the analyzer, with a
@@ -133,6 +133,9 @@ const (
 	WellKnownTimeDuration = "time.Duration"
 	WellKnownUUID         = "uuid.UUID"
 	WellKnownRawMessage   = "json.RawMessage"
+	WellKnownJSONNumber   = "json.Number"
+	WellKnownTimeMonth    = "time.Month"
+	WellKnownTimeWeekday  = "time.Weekday"
 )
 
 // WellKnownTypeNames is the set of named types the generator documents inline
@@ -146,6 +149,9 @@ var WellKnownTypeNames = map[string]bool{
 	WellKnownTimeDuration: true,
 	WellKnownUUID:         true,
 	WellKnownRawMessage:   true,
+	WellKnownJSONNumber:   true,
+	WellKnownTimeMonth:    true,
+	WellKnownTimeWeekday:  true,
 }
 
 // FieldInfo represents a struct field with validation metadata

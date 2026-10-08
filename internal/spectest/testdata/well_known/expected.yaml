@@ -205,6 +205,44 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /events/exact-total:
+    get:
+      operationId: eventsExactTotal
+      summary: GET /events/exact-total
+      tags:
+        - events
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: number
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /events/id:
     get:
       operationId: eventsEventID
@@ -244,6 +282,45 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /events/month:
+    get:
+      operationId: eventsMonth
+      summary: GET /events/month
+      tags:
+        - events
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: integer
+                    format: int64
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /events/name:
     get:
       operationId: eventsName
@@ -260,6 +337,46 @@ paths:
                 properties:
                   data:
                     type: string
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /events/rates:
+    get:
+      operationId: eventsRates
+      summary: GET /events/rates
+      tags:
+        - events
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: number
                   meta:
                     type: object
                     properties:
@@ -497,6 +614,101 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /events/weekday:
+    get:
+      operationId: eventsWeekday
+      summary: GET /events/weekday
+      tags:
+        - events
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: integer
+                    format: int64
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /schedules/{month}:
+    get:
+      operationId: eventsGetSchedule
+      summary: GET /schedules/{month}
+      tags:
+        - events
+      parameters:
+        - name: month
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: day
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+        - name: min
+          in: query
+          required: false
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Schedule'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
   schemas:
     Address:
@@ -596,6 +808,77 @@ components:
       required:
         - code
         - message
+    Schedule:
+      type: object
+      properties:
+        byRegion:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+        cap:
+          type: number
+          nullable: true
+        day:
+          type: integer
+          format: int64
+        endMonth:
+          type: integer
+          format: int64
+          nullable: true
+        fiscal:
+          type: integer
+          format: int64
+        grid:
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+        month:
+          type: integer
+          format: int64
+          example: 3
+          minimum: 1
+          maximum: 12
+        rates:
+          type: array
+          items:
+            type: number
+        rota:
+          type: array
+          items:
+            type: array
+            items:
+              type: integer
+              format: int64
+        series:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: number
+        shifts:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: integer
+              format: int64
+        total:
+          type: number
+          example: 42
+        totals:
+          type: object
+          additionalProperties:
+            type: number
+        workdays:
+          type: array
+          items:
+            type: integer
+            format: int64
+            minimum: 0
+            maximum: 6
   securitySchemes:
     TenantID:
       type: apiKey

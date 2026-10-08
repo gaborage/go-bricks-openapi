@@ -237,8 +237,9 @@ nested Go module, is not.
   range, and leaving the format off would make generated clients narrower.
 - A `server.Result[T]` payload is typed inline when `T` is a builtin (except
   `uintptr`, which stays an untyped object with no warning) or one of the
-  well-known types (`time.Time`, `time.Duration`, `uuid.UUID`,
-  `json.RawMessage`), and referenced when `T` is a struct in the project — even
+  well-known types (`time.Time`, `time.Duration`, `time.Month`,
+  `time.Weekday`, `uuid.UUID`, `json.RawMessage`, `json.Number`), and
+  referenced when `T` is a struct in the project — even
   one whose short name collides with a well-known type (a project package
   `uuid` declaring `type UUID struct`). A slice payload of such a colliding
   project struct (`server.Result[[]uuid.UUID]`) is still typed inline as the

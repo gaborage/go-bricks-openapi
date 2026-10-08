@@ -3555,10 +3555,20 @@ func isJSONExcluded(f *models.FieldInfo) bool {
 }
 
 // knownUnderlyingBuiltins maps qualified stdlib/library types with a non-struct
-// scalar underlying type to that Go builtin. (time.Time is a struct handled by
-// the generator's well-known map, so it is intentionally absent.)
+// scalar underlying type to that Go builtin, so validate bounds apply to them
+// and a local wrapper (type Timeout time.Duration) resolves through them.
+// (time.Time is a struct handled by the generator's well-known map, so it is
+// intentionally absent.)
+//
+// json.Number must stay absent: its underlying type is string, but
+// encoding/json writes it as a number. An entry would document it as a string
+// (with minLength from validate), and its local wrappers, which encoding/json
+// does write as strings, would wrongly resolve through it. The generator's
+// well-known map types it on its own.
 var knownUnderlyingBuiltins = map[string]string{
 	models.WellKnownTimeDuration: goTypeInt64, // encoding/json marshals it as its int64 ns count
+	models.WellKnownTimeMonth:    goTypeInt,   // an int with no marshaler, written as its number
+	models.WellKnownTimeWeekday:  goTypeInt,   // an int with no marshaler, written as its number
 }
 
 // scalarBuiltin is the outcome of resolving a named scalar to its builtin.

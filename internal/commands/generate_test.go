@@ -1287,6 +1287,88 @@ func TestRunGenerateUnresolvablePayloadFallsBack(t *testing.T) {
 	}
 }
 
+// wellKnownStdlibPayloadModSrc is a module whose routes return only #89's
+// well-known stdlib payloads, with no request type, so a route is typed only
+// if its payload is.
+const wellKnownStdlibPayloadModSrc = `package svc
+
+import (
+	"encoding/json"
+	"time"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "svc" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/month", m.month, server.WithTags("svc"))
+	server.GET(hr, r, "/weekday", m.weekday, server.WithTags("svc"))
+	server.GET(hr, r, "/rates", m.rates, server.WithTags("svc"))
+	server.GET(hr, r, "/total", m.total, server.WithTags("svc"))
+}
+
+func (m *Module) month(ctx server.HandlerContext) (server.Result[time.Month], server.IAPIError) {
+	return server.Result[time.Month]{}, nil
+}
+
+func (m *Module) weekday(ctx server.HandlerContext) (server.Result[*time.Weekday], server.IAPIError) {
+	return server.Result[*time.Weekday]{}, nil
+}
+
+func (m *Module) rates(ctx server.HandlerContext) (server.Result[[]json.Number], server.IAPIError) {
+	return server.Result[[]json.Number]{}, nil
+}
+
+func (m *Module) total(ctx server.HandlerContext) (server.ResultWithMeta[json.Number], server.IAPIError) {
+	return server.ResultWithMeta[json.Number]{}, nil
+}
+`
+
+// TestWellKnownStdlibPayloadsAreTyped pins #89 at the CLI: json.Number,
+// time.Month and time.Weekday payloads are documented inline with no
+// "resolves to no schema component" warning, so generate --strict succeeds,
+// and doctor counts every one of those routes as typed.
+func TestWellKnownStdlibPayloadsAreTyped(t *testing.T) {
+	goMod := "module github.com/example/svc\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks " + minGoBricksVer + "\n"
+	dir := writeProject(t, goMod, wellKnownStdlibPayloadModSrc)
+
+	out := filepath.Join(t.TempDir(), outputFileName)
+	var runErr error
+	stdout := testutil.CaptureStdout(t, func() {
+		runErr = runGenerate(context.Background(), &GenerateOptions{ProjectRoot: dir, OutputFile: out, Validate: true, Strict: true})
+	})
+	require.NoError(t, runErr, stdout)
+	assert.Contains(t, stdout, "Warnings: 0\n")
+	content, err := os.ReadFile(out)
+	require.NoError(t, err)
+	var spec OpenAPISpec
+	require.NoError(t, yaml.Unmarshal(content, &spec))
+
+	data := func(path string) map[string]any {
+		return digMap(t, spec.Paths, path, "get", "responses", "200", "content", "application/json", "schema", "properties", "data")
+	}
+	for _, path := range []string{"/month", "/weekday"} {
+		assert.Equal(t, map[string]any{"type": "integer", "format": "int64"}, data(path), path)
+	}
+	assert.Equal(t, map[string]any{"type": "number"}, data("/total"))
+	rates := data("/rates")
+	assert.Equal(t, "array", rates["type"])
+	assert.Equal(t, map[string]any{"type": "number"}, rates["items"])
+
+	doctorOut := testutil.CaptureStdout(t, func() {
+		runErr = runDoctor(t.Context(), &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion})
+	})
+	require.NoError(t, runErr, doctorOut)
+	assert.Contains(t, doctorOut, "Typed routes: 4/4")
+	assert.NotContains(t, doctorOut, "Routes without type information")
+}
+
 // TestRunGenerateProjectStructNamedLikeWellKnown pins that a project struct
 // whose short qualified name collides with a well-known type (package uuid,
 // struct UUID) is documented as a $ref to its own component, not inlined as a

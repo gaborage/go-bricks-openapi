@@ -42,6 +42,42 @@ func (h *Handler) getEvent(req GetEventReq, ctx server.HandlerContext) (server.R
 	return server.NewResult(http.StatusOK, Event{}), nil
 }
 
+// FiscalMonth wraps time.Month and resolves through it.
+type FiscalMonth time.Month
+
+// Schedule exercises json.Number, time.Month and time.Weekday in every field
+// position. encoding/json writes a json.Number as the number literal it holds
+// and Month/Weekday as their int, unclamped, so neither carries a range bound
+// unless a validate tag adds one.
+type Schedule struct {
+	Month    time.Month                `json:"month" validate:"min=1,max=12" example:"3"` // -> {integer, int64, minimum 1, maximum 12, example 3}
+	Day      time.Weekday              `json:"day"`                                       // -> {integer, int64}, no bounds
+	EndMonth *time.Month               `json:"endMonth"`                                  // -> {integer, int64, nullable}
+	Workdays []time.Weekday            `json:"workdays" validate:"dive,min=0,max=6"`      // -> items {integer, int64, minimum 0, maximum 6}
+	ByRegion map[string]time.Month     `json:"byRegion"`                                  // -> additionalProperties {integer, int64}
+	Rota     [][]time.Weekday          `json:"rota"`                                      // -> array of array of {integer, int64}
+	Shifts   map[string][]time.Weekday `json:"shifts"`                                    // -> additionalProperties array of {integer, int64}
+	Fiscal   FiscalMonth               `json:"fiscal"`                                    // -> {integer, int64}
+	Total    json.Number               `json:"total" example:"42"`                        // -> {number, example 42}
+	Cap      *json.Number              `json:"cap"`                                       // -> {number, nullable}
+	Rates    []json.Number             `json:"rates"`                                     // -> items {number}
+	Grid     [][]json.Number           `json:"grid"`                                      // -> array of array of {number}
+	Totals   map[string]json.Number    `json:"totals"`                                    // -> additionalProperties {number}
+	Series   map[string][]json.Number  `json:"series"`                                    // -> additionalProperties array of {number}
+}
+
+// GetScheduleReq selects a schedule by path and query parameters of the
+// well-known scalar types.
+type GetScheduleReq struct {
+	Month time.Month   `param:"month"`
+	Day   time.Weekday `query:"day"`
+	Min   json.Number  `query:"min"`
+}
+
+func (h *Handler) getSchedule(req GetScheduleReq, ctx server.HandlerContext) (server.Result[Schedule], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Schedule{}), nil
+}
+
 // Non-slice well-known and builtin payloads document inline, exactly as a
 // struct field of the same type: no component is ever emitted for them, so a
 // $ref would dangle.
@@ -64,6 +100,22 @@ func (h *Handler) eventID(ctx server.HandlerContext) (server.Result[uuid.UUID], 
 
 func (h *Handler) ttl(ctx server.HandlerContext) (server.Result[time.Duration], server.IAPIError) { // data: {integer, int64}
 	return server.Result[time.Duration]{}, nil
+}
+
+func (h *Handler) month(ctx server.HandlerContext) (server.Result[time.Month], server.IAPIError) { // data: {integer, int64}
+	return server.Result[time.Month]{}, nil
+}
+
+func (h *Handler) weekday(ctx server.HandlerContext) (server.Result[*time.Weekday], server.IAPIError) { // data: {integer, int64} (pointer shed)
+	return server.Result[*time.Weekday]{}, nil
+}
+
+func (h *Handler) rates(ctx server.HandlerContext) (server.Result[[]json.Number], server.IAPIError) { // data: array of {number}
+	return server.Result[[]json.Number]{}, nil
+}
+
+func (h *Handler) exactTotal(ctx server.HandlerContext) (server.ResultWithMeta[json.Number], server.IAPIError) { // data: {number}
+	return server.ResultWithMeta[json.Number]{}, nil
 }
 
 func (h *Handler) name(ctx server.HandlerContext) (server.Result[string], server.IAPIError) { // data: {string}
