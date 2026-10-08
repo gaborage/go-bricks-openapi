@@ -2362,7 +2362,8 @@ func (a *ProjectAnalyzer) handleResultWrapper(x, index ast.Expr, packageName str
 // server.Result[T] / ResultWithMeta[T], or a handler's bare (non-wrapper) first
 // result — to a TypeInfo carrying its Shape. go-bricks sends both under the
 // same data key (or as the whole body with WithRawResponse()), so both must be
-// documented alike: a slice is an array payload, anything else a scalar one.
+// documented alike: a slice or fixed-size array is an array payload, anything
+// else a scalar one.
 func (a *ProjectAnalyzer) payloadTypeInfo(expr ast.Expr, packageName string, serverAliases map[string]struct{}) *models.TypeInfo {
 	if arr, ok := expr.(*ast.ArrayType); ok {
 		return a.slicePayloadTypeInfo(arr, packageName, serverAliases)
@@ -2400,12 +2401,12 @@ func (a *ProjectAnalyzer) scalarPayloadTypeInfo(
 }
 
 // PayloadBaseShape returns the shape a payload's schema is resolved from: a
-// slice payload's element, otherwise the payload itself, with one pointer
-// level shed — the generator's uniform pointer discipline (shapeAfterPointer).
-// Exported for doctor's isTypedPayload, which must classify payloads by the
-// same base shape the analyzer screens them by.
+// slice or array payload's element, otherwise the payload itself, with one
+// pointer level shed — the generator's uniform pointer discipline
+// (shapeAfterPointer). Exported for doctor's isTypedPayload, which must
+// classify payloads by the same base shape the analyzer screens them by.
 func PayloadBaseShape(s models.TypeShape) models.TypeShape {
-	if s.Kind == models.ShapeSlice && s.Elem != nil {
+	if isSequence(s.Kind) && s.Elem != nil {
 		s = *s.Elem
 	}
 	if s.Kind == models.ShapePointer && s.Elem != nil {
@@ -2414,11 +2415,12 @@ func PayloadBaseShape(s models.TypeShape) models.TypeShape {
 	return s
 }
 
-// slicePayloadTypeInfo resolves a slice payload (server.Result[[]Item],
-// server.Result[[]string], or the same slice as a bare return) to a TypeInfo
-// describing the ELEMENT plus a ShapeSlice marker, so the generator emits
-// `type: array` with typed items instead of the untyped-object fallback an
-// unresolved payload produces.
+// slicePayloadTypeInfo resolves a slice or fixed-size array payload
+// (server.Result[[]Item], server.Result[[4]byte], or the same type as a bare
+// return) to a TypeInfo describing the ELEMENT plus a ShapeSlice or ShapeArray
+// marker (sequenceKind), so the generator emits `type: array` with typed items
+// instead of the untyped-object fallback an unresolved payload produces. The
+// marker must keep an array apart: only a byte slice is a base64 string.
 //
 // Only a named or primitive element is modelled; a pointer element is shed
 // first, mirroring how a []*T struct field is documented as an array of the
@@ -2438,7 +2440,7 @@ func (a *ProjectAnalyzer) slicePayloadTypeInfo(
 		elemExpr = star.X
 	}
 	elemShape := a.typeShape(elemExpr)
-	shape := models.TypeShape{Kind: models.ShapeSlice, Elem: &elemShape}
+	shape := models.TypeShape{Kind: sequenceKind(arr), Elem: &elemShape}
 
 	switch elemShape.Kind {
 	case models.ShapePrimitive:
@@ -3098,10 +3100,11 @@ func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile 
 // cross-package reference by its short qualified name, so a project struct
 // uuid.UUID (or time.Time) is indistinguishable there from the well-known type:
 // kept, the generator would document it inline and orphan its component. A
-// slice payload keeps its Shape — the array wrapper is built from it — so a
-// slice of such a colliding project type is still inlined by its element name.
+// slice or array payload keeps its Shape — the array wrapper is built from it —
+// so a slice of such a colliding project type is still inlined by its element
+// name.
 func shedRegisteredPayloadShape(ti *models.TypeInfo) {
-	if ti.Shape != nil && ti.Shape.Kind != models.ShapeSlice {
+	if ti.Shape != nil && !isSequence(ti.Shape.Kind) {
 		ti.Shape = nil
 	}
 }
@@ -3747,7 +3750,7 @@ func underlyingIdentString(t ast.Expr) (string, bool) {
 	return "", false
 }
 
-// shapeBaseName unwraps pointer and slice layers to any depth (mirroring the
+// shapeBaseName unwraps pointer, slice and array layers to any depth (mirroring the
 // loop the old string helper ran over "**[]*Address") and returns the terminal
 // type name. Maps and unmodeled shapes return "" — a name no declaration can
 // carry, so every registry lookup fails exactly as it did for the raw
@@ -3755,7 +3758,7 @@ func underlyingIdentString(t ast.Expr) (string, bool) {
 func shapeBaseName(s models.TypeShape) string {
 	for {
 		switch s.Kind {
-		case models.ShapePointer, models.ShapeSlice:
+		case models.ShapePointer, models.ShapeSlice, models.ShapeArray:
 			if s.Elem == nil {
 				return ""
 			}
@@ -4141,10 +4144,29 @@ func isBuiltinShapeName(name string) bool {
 	return isStringType(name) || isNumericType(name)
 }
 
+// sequenceKind classifies an *ast.ArrayType: a fixed-size array ([N]T) when it
+// has a length expression, a slice ([]T) otherwise. It tests the presence of
+// Len, never a value — [0]byte is an array, and the length of [N]byte with a
+// constant N is not readable from the AST. The two must stay apart because
+// encoding/json base64-encodes a byte slice but writes a byte array element by
+// element (#98).
+func sequenceKind(arr *ast.ArrayType) models.ShapeKind {
+	if arr.Len != nil {
+		return models.ShapeArray
+	}
+	return models.ShapeSlice
+}
+
+// isSequence reports whether kind is a slice or a fixed-size array. Every
+// consumer outside the generator's two base64 rules treats the two alike.
+func isSequence(kind models.ShapeKind) bool {
+	return kind == models.ShapeSlice || kind == models.ShapeArray
+}
+
 // typeShape decodes an AST type expression into its structural Shape. Total:
 // unmodeled nodes (chan, func, struct literals, generics) decode as
-// ShapeUnknown. A fixed-size array decodes as ShapeSlice, dropping its length —
-// the same lossiness the rendered type string it replaced always had.
+// ShapeUnknown. A fixed-size array decodes as ShapeArray, distinct from a
+// slice (see sequenceKind); its length is not recorded.
 func (a *ProjectAnalyzer) typeShape(expr ast.Expr) models.TypeShape {
 	switch t := expr.(type) {
 	case *ast.Ident:
@@ -4159,7 +4181,7 @@ func (a *ProjectAnalyzer) typeShape(expr ast.Expr) models.TypeShape {
 
 	case *ast.ArrayType:
 		elem := a.typeShape(t.Elt)
-		return models.TypeShape{Kind: models.ShapeSlice, Elem: &elem}
+		return models.TypeShape{Kind: sequenceKind(t), Elem: &elem}
 
 	case *ast.MapType:
 		key := a.typeShape(t.Key)

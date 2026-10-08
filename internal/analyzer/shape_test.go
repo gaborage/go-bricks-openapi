@@ -16,6 +16,9 @@ func renderShape(s models.TypeShape) string {
 		return "*" + renderShapePtr(s.Elem)
 	case models.ShapeSlice:
 		return "[]" + renderShapePtr(s.Elem)
+	case models.ShapeArray:
+		// Shape keeps no length (nothing emits one), so every array renders as [N].
+		return "[N]" + renderShapePtr(s.Elem)
 	case models.ShapeMap:
 		return "map[" + renderShapePtr(s.Key) + "]" + renderShapePtr(s.Elem)
 	case models.ShapeNamed, models.ShapePrimitive:
@@ -43,8 +46,10 @@ func mustParse(t *testing.T, src string) ast.Expr {
 
 // shapeParityCorpus pins the decoder against the rendered strings the retired
 // typeToString produced for the same expressions — including its lossiness:
-// a fixed-size array rendered as a slice, and chan/func/struct literals as
-// "unknown". renderShape is the test-only inverse; production never renders.
+// chan/func/struct literals render as "unknown". One row diverges on purpose
+// (#98): typeToString rendered a fixed-size array as a slice, but Shape keeps
+// an array apart (encoding/json base64-encodes only a byte slice), so arrays
+// render as [N]. renderShape is the test-only inverse; production never renders.
 var shapeParityCorpus = map[string]string{
 	"string": "string", "int": "int", "int64": "int64", "uint8": "uint8",
 	"byte": "byte", "bool": "bool", "float64": "float64", "any": "any",
@@ -65,7 +70,13 @@ var shapeParityCorpus = map[string]string{
 	"chan int":                  "unknown",
 	"func()":                    "unknown",
 	"struct{}":                  "unknown",
-	"[3]int":                    "[]int", // typeToString dropped the length too
+	"[3]int":                    "[N]int", // typeToString rendered "[]int"; see above
+	"[0]byte":                   "[N]byte",
+	"[N]byte":                   "[N]byte",
+	"*[4]byte":                  "*[N]byte",
+	"[][4]byte":                 "[][N]byte",
+	"[2][]byte":                 "[N][]byte",
+	"map[string][4]byte":        "map[string][N]byte",
 }
 
 func TestTypeShapeParity(t *testing.T) {
@@ -116,6 +127,9 @@ func TestShapeBaseName(t *testing.T) {
 		"**[]*Address":       "Address",
 		"*[]Address":         "Address",
 		"[][]Address":        "Address",
+		"[2]Address":         "Address",
+		"*[2]*Address":       "Address",
+		"[2][]Address":       "Address",
 		"**Address":          "Address",
 		"[]string":           "string",
 		"time.Time":          "time.Time",
@@ -144,16 +158,17 @@ func TestShapeMapValueBase(t *testing.T) {
 		isMap bool
 	}
 	cases := map[string]result{
-		"map[string]Address":   {"Address", true},
-		"map[string]string":    {"string", true},
-		"*map[string]Address":  {"Address", true},
-		"**map[string]Address": {"", false}, // one-level unwrap only
-		"map[string][]Address": {"Address", true},
-		"map[string]*Address":  {"Address", true},
-		"[]Address":            {"", false},
-		"Address":              {"", false},
-		"*Address":             {"", false},
-		"string":               {"", false},
+		"map[string]Address":    {"Address", true},
+		"map[string]string":     {"string", true},
+		"*map[string]Address":   {"Address", true},
+		"**map[string]Address":  {"", false}, // one-level unwrap only
+		"map[string][]Address":  {"Address", true},
+		"map[string][2]Address": {"Address", true},
+		"map[string]*Address":   {"Address", true},
+		"[]Address":             {"", false},
+		"Address":               {"", false},
+		"*Address":              {"", false},
+		"string":                {"", false},
 	}
 	for src, want := range cases {
 		name, isMap := shapeMapValueBase(a.typeShape(mustParse(t, src)))

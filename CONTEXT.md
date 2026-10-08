@@ -5,7 +5,7 @@ Static analysis of a go-bricks project's source (AST only, never compiled or exe
 ## Language
 
 **Shape**:
-The syntactic container structure of a declared type — pointer, slice, map, named, primitive, or unknown — decoded once from the AST at extraction. Carried by every struct field, and by every response payload (a result wrapper's type argument, as in `server.Result[[]Item]` or `server.Result[time.Time]`, or a handler's bare first result of the same type), so a well-known or builtin payload is typed from it rather than `$ref`'d — except a non-slice payload that registers as a project struct, which sheds its Shape so it is `$ref`'d even when its short name collides with a well-known type (`uuid.UUID`). Purely syntactic; carries no registry knowledge.
+The syntactic container structure of a declared type — pointer, slice, array, map, named, primitive, or unknown — decoded once from the AST at extraction. A fixed-size array (`[N]T`, its length not recorded) is a container kind distinct from a slice, because `encoding/json` base64-encodes a `[]byte` but writes a `[N]byte` as numbers; every rule other than that base64 one treats the two alike. Carried by every struct field, and by every response payload (a result wrapper's type argument, as in `server.Result[[]Item]` or `server.Result[time.Time]`, or a handler's bare first result of the same type), so a well-known or builtin payload is typed from it rather than `$ref`'d — except a non-slice payload that registers as a project struct, which sheds its Shape so it is `$ref`'d even when its short name collides with a well-known type (`uuid.UUID`). Purely syntactic; carries no registry knowledge.
 _Avoid_: type string, kind (overloaded with OpenAPI's `type` keyword)
 
 **Resolution**:
