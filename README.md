@@ -226,10 +226,39 @@ nested Go module, is not.
   as a number, but a machine address carries no meaningful API contract. It is
   documented as an untyped object and reported as a warning (so `--strict`
   fails on it). Use a sized integer type, or exclude the field with `json:"-"`,
-  which also silences the warning. The diagnostic only covers fields whose type
-  bottoms out in the builtin `uintptr` (including `[]uintptr`); a named wrapper
-  (`type Addr uintptr`) or a map value (`map[string]uintptr`) still emits
-  `object` silently.
+  which also silences the warning. The diagnostic covers every field whose type
+  holds a `uintptr` at any depth — `[]uintptr`, a map value
+  (`map[string]uintptr`) and a named wrapper (`type Addr uintptr`) alike.
+- A field whose type has its own `MarshalJSON`, `MarshalJSONTo`, `MarshalText`,
+  `AppendText`, `UnmarshalJSON`, `UnmarshalJSONFrom` or `UnmarshalText` method
+  (with the exact `encoding/json` signature, on the type or its pointer, or on
+  a type it aliases) is documented as `{}` (any JSON value), with a warning,
+  and its `validate` keywords are dropped: `encoding/json` writes it through
+  that method, not through its underlying type. A defined type over it drops
+  the methods and is documented from the underlying type. A path, query or
+  header parameter of such a type is bound by kind, so it keeps the underlying
+  type's schema and does not warn. A slice of a byte-sized type that only
+  decodes through such a method stays a base64 string. There is no per-field
+  override yet. A method declared with an alias as its receiver
+  (`type SA = Status; func (SA) MarshalText() ...`) is seen only where the
+  alias name is used: a `Status` field is still documented from its
+  underlying type, with no warning.
+- A named type that contains itself through a slice or map
+  (`type Tree map[string]Tree`), or that nests more than nine named types
+  deep, is documented down to the point where it recurs or the nine-deep cap
+  cuts it, which becomes `{}`, with a warning (the cap's warning does not
+  claim the type recurs).
+- A field whose type holds the builtin `error`, `complex64` or `complex128` at
+  any depth — directly, in a slice or map, or through a local named type
+  (`type C complex128`) — has no JSON schema. It is documented as an untyped
+  object and reported as a warning (so `--strict` fails on it). Exclude the
+  field with `json:"-"`, which also silences the warning.
+- A field type that resolves to no schema — a third-party type
+  (`decimal.Decimal`), a well-known type under an aliased import (`t.Time`,
+  `j.RawMessage`), a named non-struct type from another package of the project
+  (`b.Cents`), or a defined type over a well-known struct
+  (`type Stamp time.Time`, `type ID uuid.UUID`) — is documented as an untyped
+  object with a warning (so `--strict` fails on it).
 - `int` and `uint` are documented as 64-bit (`format: int64`), which is wrong
   for a 32-bit build, where they hold only 32 bits.
 - `uint64` is documented as `format: int64` with `minimum: 0`, so values of
@@ -314,7 +343,11 @@ nested Go module, is not.
   and no unsigned `minimum: 0`; `byte` and `uint8`, or `rune` and `int32`, are
   one width. When the copies also disagree on kind (`type Word string` in one),
   the type comes from the first scalar copy: the one in the field's own file,
-  otherwise the one in the first file by name.
+  otherwise the one in the first file by name. The same applies wherever such
+  a type appears: slice items, map values and nested containers. Copies with
+  no scalar to fall back on and no common container shape (`type W []string`
+  in one, `type W []int` in another) are documented as an untyped object, with
+  a warning.
 
 ## Development
 

@@ -176,15 +176,12 @@ func copyInt(dst **int, src *int) {
 func boolPtr(b bool) *bool { return &b }
 
 // constraintsFor converts validation constraints to a typed constraintSet.
-// Takes the field type and constraints map, returns the OpenAPI-compatible set.
-func constraintsFor(shape models.TypeShape, underlyingKind string, constraints map[string]string) *constraintSet {
+// Takes the field's resolved type and constraints map, returns the
+// OpenAPI-compatible set. Every pointer level is shed (stripPointers).
+func constraintsFor(shape models.TypeShape, constraints map[string]string) *constraintSet {
 	var set constraintSet
 
-	// The old string form stripped exactly ONE leading "*" (TrimPrefix) — mirror it.
-	base := shape
-	if base.Kind == models.ShapePointer && base.Elem != nil {
-		base = *base.Elem
-	}
+	base := stripPointers(shape)
 	// []byte/[]uint8 are well-known base64 string types, not arrays — treat them as
 	// scalars (the well-known mapper already types them string/byte), not slices.
 	// Their min/max are byte counts, which do NOT equal the base64-encoded character
@@ -201,7 +198,7 @@ func constraintsFor(shape models.TypeShape, underlyingKind string, constraints m
 	// base.Name is "" for every container, which effectiveKind classifies as
 	// neither string nor numeric — exactly what the "[]string"/"map[..." strings
 	// it used to receive did.
-	effKind := effectiveKind(base.Name, underlyingKind)
+	effKind := effectiveKind(base)
 
 	// Iterate keys in sorted order so the emitted constraints are deterministic.
 	// Go map iteration is randomized, and distinct validator keys can collapse to
@@ -240,24 +237,33 @@ func constraintsFor(shape models.TypeShape, underlyingKind string, constraints m
 //
 // Element rules apply only when prop is an array whose items are an inline
 // schema. A $ref must stand alone (OpenAPI 3.0 ignores its siblings), so
-// element rules on a slice-of-struct have nowhere valid to go and drop — the
-// rule refProperty used to enforce by not calling the element path at all.
+// element rules on a slice-of-struct have nowhere valid to go and drop.
+//
+// No rule lands on a Marshaler leaf (the field itself, or its element): it is
+// written through its own method, so its underlying kind says nothing, and
+// format/enum/pattern would apply regardless of kind (#88).
 func applyValidationConstraints(prop *OpenAPIProperty, field *models.FieldInfo) {
-	if len(field.Constraints) > 0 {
-		constraintsFor(field.Shape, field.UnderlyingKind, field.Constraints).applyTo(prop)
+	resolved := field.ResolvedShape()
+	if len(field.Constraints) > 0 && !isMarshalerLeaf(resolved) {
+		constraintsFor(resolved, field.Constraints).applyTo(prop)
 	}
 	if len(field.ElementConstraints) == 0 || prop.Items == nil || prop.Items.Ref != "" {
 		return
 	}
-	// Element shape: unwrap ONE pointer then ONE slice or array layer ("*[]Address" -> "Address").
-	elem := field.Shape
-	if elem.Kind == models.ShapePointer && elem.Elem != nil {
-		elem = *elem.Elem
-	}
+	// Element shape: shed every pointer, then ONE slice or array layer ("*[]Address" -> "Address").
+	elem := stripPointers(resolved)
 	if isSequence(elem) && elem.Elem != nil {
 		elem = *elem.Elem
 	}
-	constraintsFor(elem, field.UnderlyingKind, field.ElementConstraints).applyTo(prop.Items)
+	if isMarshalerLeaf(elem) {
+		return
+	}
+	constraintsFor(elem, field.ElementConstraints).applyTo(prop.Items)
+}
+
+// isMarshalerLeaf reports whether s, after every pointer, is a Marshaler leaf.
+func isMarshalerLeaf(s models.TypeShape) bool {
+	return stripPointers(s).Kind == models.ShapeMarshaler
 }
 
 // sortedKeys returns the keys of m in lexicographic order so callers can iterate
@@ -295,13 +301,14 @@ func applyScalarRule(s *constraintSet, key, value, effKind string) {
 }
 
 // effectiveKind resolves the OpenAPI 3-way kind to drive string-vs-numeric
-// decisions: the analyzer-resolved UnderlyingKind (for named scalars like
-// `type Cents int64` / time.Duration) wins; otherwise it is derived from the
-// builtin base type. Empty when the type is neither string nor numeric.
-func effectiveKind(baseType, underlyingKind string) string {
-	if underlyingKind != "" {
-		return underlyingKind
+// decisions: a kind-only leaf (#92) names it; otherwise it is derived from the
+// builtin leaf name. Named scalars arrive already resolved to their builtin.
+// Empty when the type is neither string nor numeric.
+func effectiveKind(base models.TypeShape) string {
+	if base.Kind == models.ShapeKindOnly {
+		return base.Name
 	}
+	baseType := base.Name
 	switch {
 	case isStringType(baseType):
 		return goTypeString

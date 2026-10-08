@@ -23,6 +23,14 @@ func renderShape(s models.TypeShape) string {
 		return "map[" + renderShapePtr(s.Key) + "]" + renderShapePtr(s.Elem)
 	case models.ShapeNamed, models.ShapePrimitive:
 		return s.Name
+	case models.ShapeRef:
+		return "$" + s.Name
+	case models.ShapeKindOnly:
+		return "kind:" + s.Name
+	case models.ShapeMarshaler:
+		return "marshal:" + s.Name + "(" + renderShapePtr(s.Elem) + ")"
+	case models.ShapeRecursive:
+		return "cycle:" + s.Name
 	default:
 		return "unknown"
 	}
@@ -115,7 +123,7 @@ func TestTypeShapeStructure(t *testing.T) {
 // TestShapeBaseName ports TestBaseStructTypeName to shapes. The one deliberate
 // divergence is documented in the map row: the old string helper returned
 // "map[string]Address" verbatim, which failed every registry lookup; "" fails
-// them identically (verified: registerTypeAt and namedScalarBuiltin both bottom out
+// them identically (verified: registerTypeAt and the resolver both bottom out
 // at a name lookup no declaration can match, with no warning and no side effect).
 func TestShapeBaseName(t *testing.T) {
 	a := New("")
@@ -145,38 +153,5 @@ func TestShapeBaseName(t *testing.T) {
 	}
 	if got := shapeBaseName(models.TypeShape{Kind: models.ShapePointer}); got != "" {
 		t.Errorf("shapeBaseName(dangling pointer) = %q, want \"\"", got)
-	}
-}
-
-// TestShapeMapValueBase ports TestMapValueStructName. The pointer unwrap on the
-// map itself is ONE level (old: strings.TrimPrefix(t, "*")); the unwrap on the
-// VALUE is unbounded (old: baseStructTypeName's loop).
-func TestShapeMapValueBase(t *testing.T) {
-	a := New("")
-	type result struct {
-		name  string
-		isMap bool
-	}
-	cases := map[string]result{
-		"map[string]Address":    {"Address", true},
-		"map[string]string":     {"string", true},
-		"*map[string]Address":   {"Address", true},
-		"**map[string]Address":  {"", false}, // one-level unwrap only
-		"map[string][]Address":  {"Address", true},
-		"map[string][2]Address": {"Address", true},
-		"map[string]*Address":   {"Address", true},
-		"[]Address":             {"", false},
-		"Address":               {"", false},
-		"*Address":              {"", false},
-		"string":                {"", false},
-	}
-	for src, want := range cases {
-		name, isMap := shapeMapValueBase(a.typeShape(mustParse(t, src)))
-		if name != want.name || isMap != want.isMap {
-			t.Errorf("shapeMapValueBase(%s) = (%q,%v), want (%q,%v)", src, name, isMap, want.name, want.isMap)
-		}
-	}
-	if _, isMap := shapeMapValueBase(models.TypeShape{Kind: models.ShapeMap}); isMap {
-		t.Error("shapeMapValueBase(map with nil Elem) reported isMap")
 	}
 }

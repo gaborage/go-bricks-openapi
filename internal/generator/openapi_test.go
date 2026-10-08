@@ -935,7 +935,7 @@ func TestReferencedSchemaNamesJOSE(t *testing.T) {
 func TestReferencedSchemaNamesNilTypeEntry(t *testing.T) {
 	withRef := &models.TypeInfo{
 		Name: "Order", Package: "orders",
-		Fields: []models.FieldInfo{{Name: "Customer", Shape: named("Customer"), RefName: "Customer"}},
+		Fields: []models.FieldInfo{*resolvedTo(&models.FieldInfo{Name: "Customer", Shape: named("Customer")}, refTo("Customer"))},
 	}
 	types := map[string]*models.TypeInfo{
 		"X":     nil,
@@ -1202,29 +1202,29 @@ func TestFieldInfoToPropertyRef(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
 	t.Run("struct_field_is_ref", func(t *testing.T) {
-		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Addr", Shape: named("Address"), RefName: "Address"})
+		prop := gen.fieldInfoToProperty(resolvedTo(&models.FieldInfo{Name: "Addr", Shape: named("Address")}, refTo("Address")))
 		assert.Equal(t, refPath("Address"), prop.Ref)
 		assert.Empty(t, prop.Type, "a $ref must not carry a sibling type")
 		assert.Nil(t, prop.Items)
 	})
 	t.Run("slice_of_struct_is_items_ref", func(t *testing.T) {
-		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Addrs", Shape: sliceOf(named("Address")), RefName: "Address"})
+		prop := gen.fieldInfoToProperty(resolvedTo(&models.FieldInfo{Name: "Addrs", Shape: sliceOf(named("Address"))}, refTo("Address")))
 		assert.Equal(t, typeArray, prop.Type)
 		require.NotNil(t, prop.Items)
 		assert.Equal(t, refPath("Address"), prop.Items.Ref)
 		assert.Empty(t, prop.Ref)
 	})
 	t.Run("slice_of_pointer_struct_is_items_ref", func(t *testing.T) {
-		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Reports", Shape: sliceOf(ptrOf(named("User"))), RefName: "User"})
+		prop := gen.fieldInfoToProperty(resolvedTo(&models.FieldInfo{Name: "Reports", Shape: sliceOf(ptrOf(named("User")))}, refTo("User")))
 		assert.Equal(t, typeArray, prop.Type)
 		require.NotNil(t, prop.Items)
 		assert.Equal(t, refPath("User"), prop.Items.Ref)
 	})
 	t.Run("slice_of_ref_keeps_array_level_docs", func(t *testing.T) {
-		prop := gen.fieldInfoToProperty(&models.FieldInfo{
-			Name: "Addrs", Shape: sliceOf(named("Address")), RefName: "Address",
+		prop := gen.fieldInfoToProperty(resolvedTo(&models.FieldInfo{
+			Name: "Addrs", Shape: sliceOf(named("Address")),
 			Description: "the user's addresses", Example: "n/a",
-		})
+		}, refTo("Address")))
 		assert.Equal(t, typeArray, prop.Type)
 		assert.Equal(t, "the user's addresses", prop.Description, "array wrapper keeps the field description")
 		assert.Nil(t, prop.Example, "a scalar tag value is not a valid array example")
@@ -1522,15 +1522,16 @@ func TestSetTypeAndFormatWellKnownStdlibScalarPositions(t *testing.T) {
 
 // TestFieldInfoToPropertyWellKnownStdlibScalars pins the field-level rules for
 // #89's types. json.Number is typed from its well-known entry alone (it has no
-// UnderlyingKind: its Go kind is string, but encoding/json writes a number),
-// so its example is kept as a number and a validate min/max — a string-length
-// rule to go-playground/validator — has no keyword to map to. time.Month and
-// time.Weekday reach the generator as named scalars over int (the analyzer's
-// knownUnderlyingBuiltins), so validate bounds and integer examples apply.
+// kind-backed Resolution: its Go kind is string, but encoding/json writes a
+// number), so its example is kept as a number and a validate min/max — a
+// string-length rule to go-playground/validator — has no keyword to map to.
+// time.Month and time.Weekday reach the generator resolved to int (the
+// analyzer's knownUnderlyingBuiltins), so validate bounds and integer examples
+// apply.
 func TestFieldInfoToPropertyWellKnownStdlibScalars(t *testing.T) {
 	gen := New(defaultTitle, defaultVersion, defaultDescription)
 	overInt := func(shape models.TypeShape) *models.FieldInfo {
-		return &models.FieldInfo{Shape: shape, JSONName: "v", UnderlyingKind: typeInteger, UnderlyingBuiltin: goTypeInt}
+		return resolvedTo(&models.FieldInfo{Shape: shape, JSONName: "v"}, prim(goTypeInt))
 	}
 
 	t.Run("json.Number example kept as a number", func(t *testing.T) {
@@ -1652,10 +1653,10 @@ func TestFieldInfoToPropertyMapValueRef(t *testing.T) {
 
 	t.Run("struct value", func(t *testing.T) {
 		// object + additionalProperties.$ref (NOT a bare $ref for the whole field,
-		// which is the RefName path).
-		prop := gen.fieldInfoToProperty(&models.FieldInfo{
-			Name: "Addrs", Shape: mapOf(prim("string"), named("Address")), JSONName: "addrs", MapValueRefName: "Address",
-		})
+		// which is the struct-field path).
+		prop := gen.fieldInfoToProperty(resolvedTo(&models.FieldInfo{
+			Name: "Addrs", Shape: mapOf(prim("string"), named("Address")), JSONName: "addrs",
+		}, refTo("Address")))
 		assert.Equal(t, typeObject, prop.Type)
 		assert.Empty(t, prop.Ref, "a map field must not be a whole-field $ref")
 		require.NotNil(t, prop.AdditionalProperties)
@@ -1665,9 +1666,9 @@ func TestFieldInfoToPropertyMapValueRef(t *testing.T) {
 	t.Run("slice-of-struct value wraps in array", func(t *testing.T) {
 		// map[string][]Address -> additionalProperties is an ARRAY of $ref, not a
 		// bare $ref (the array layer must survive).
-		prop := gen.fieldInfoToProperty(&models.FieldInfo{
-			Name: "History", Shape: mapOf(prim("string"), sliceOf(named("Address"))), JSONName: "history", MapValueRefName: "Address",
-		})
+		prop := gen.fieldInfoToProperty(resolvedTo(&models.FieldInfo{
+			Name: "History", Shape: mapOf(prim("string"), sliceOf(named("Address"))), JSONName: "history",
+		}, refTo("Address")))
 		assert.Equal(t, typeObject, prop.Type)
 		require.NotNil(t, prop.AdditionalProperties)
 		assert.Equal(t, typeArray, prop.AdditionalProperties.Type)
@@ -3142,8 +3143,8 @@ func TestAssignOperationIDsDedup(t *testing.T) {
 }
 
 // TestFieldInfoToPropertyConstraintsPR11 covers PR11's constraint additions:
-// numeric exclusive bounds, string length comparisons, named-numeric via
-// UnderlyingKind, slice cardinality, and dive element constraints.
+// numeric exclusive bounds, string length comparisons, named numerics (by
+// their Resolution), slice cardinality, and dive element constraints.
 func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
@@ -3162,8 +3163,8 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 		assert.Nil(t, p.Minimum, "a string gt must not leak a numeric minimum")
 	})
 
-	t.Run("named numeric via UnderlyingKind -> minimum/maximum", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: named("Cents"), UnderlyingKind: "integer", UnderlyingBuiltin: goTypeInt64, JSONName: "amt", Constraints: map[string]string{"min": "1", "max": "100"}})
+	t.Run("named numeric via its Resolution -> minimum/maximum", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(resolvedTo(&models.FieldInfo{Shape: named("Cents"), JSONName: "amt", Constraints: map[string]string{"min": "1", "max": "100"}}, prim(goTypeInt64)))
 		assert.Equal(t, typeInteger, p.Type)
 		assert.Equal(t, formatInt64, p.Format, "type Cents int64 keeps the builtin's format")
 		require.NotNil(t, p.Minimum)
@@ -3188,12 +3189,12 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 	})
 
 	t.Run("named-scalar slice element keeps numeric kind (dive)", func(t *testing.T) {
-		// []Cents -> field.UnderlyingKind=="integer" (analyzer strips the slice), so
-		// dive,gte=0 maps to a numeric minimum on the items, not a dropped constraint.
-		p := gen.fieldInfoToProperty(&models.FieldInfo{
-			Shape: sliceOf(named("Cents")), UnderlyingKind: "integer", UnderlyingBuiltin: goTypeInt64, JSONName: "amounts",
+		// []Cents resolves to []int64, so dive,gte=0 maps to a numeric minimum on
+		// the items, not a dropped constraint.
+		p := gen.fieldInfoToProperty(resolvedTo(&models.FieldInfo{
+			Shape: sliceOf(named("Cents")), JSONName: "amounts",
 			ElementConstraints: map[string]string{"gte": "0"},
-		})
+		}, prim(goTypeInt64)))
 		assert.Equal(t, typeArray, p.Type)
 		require.NotNil(t, p.Items)
 		require.NotNil(t, p.Items.Minimum, "element gte must map to a numeric minimum on items")
@@ -3204,10 +3205,10 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 		// One dive reaches the elements of the outer slice, which are slices
 		// themselves, so dive,min=1 is their length: minItems on the inner
 		// array, and nothing on the scalars inside it.
-		p := gen.fieldInfoToProperty(&models.FieldInfo{
-			Shape: sliceOf(sliceOf(named("Cents"))), UnderlyingKind: "integer", UnderlyingBuiltin: goTypeInt64, JSONName: "grid",
+		p := gen.fieldInfoToProperty(resolvedTo(&models.FieldInfo{
+			Shape: sliceOf(sliceOf(named("Cents"))), JSONName: "grid",
 			ElementConstraints: map[string]string{"min": "1"},
-		})
+		}, prim(goTypeInt64)))
 		require.NotNil(t, p.Items)
 		assert.Equal(t, typeArray, p.Items.Type)
 		require.NotNil(t, p.Items.MinItems)
@@ -3218,10 +3219,10 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 	})
 
 	t.Run("ref-slice carries minItems on the array wrapper", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{
-			Shape: sliceOf(named("Address")), RefName: "Address", JSONName: "addrs",
+		p := gen.fieldInfoToProperty(resolvedTo(&models.FieldInfo{
+			Shape: sliceOf(named("Address")), JSONName: "addrs",
 			Constraints: map[string]string{"min": "1"},
-		})
+		}, refTo("Address")))
 		assert.Equal(t, typeArray, p.Type)
 		require.NotNil(t, p.Items)
 		assert.Equal(t, refPath("Address"), p.Items.Ref, "$ref element stands alone")
@@ -3247,8 +3248,14 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 // TestFieldInfoToPropertyNamedScalarMatchesBuiltin locks #78: a named scalar
 // over builtin B (`type Cents int64`, `type Flag byte`) emits exactly the schema
 // a bare B field emits — type, format, and the unsigned minimum: 0 floor —
-// directly, behind a pointer, and as the items of a slice. The bare builtin's
-// own output is the oracle, so the two paths cannot drift apart.
+// directly, behind a pointer, and in every container, a []Flag being the same
+// base64 string a []byte is. The bare builtin's own output is the oracle.
+//
+// The named field carries the Resolution the analyzer stamps, which IS the
+// hand-expanded shape, so this comparison is tautological by construction; it
+// still pins that the generator types a field from its Resolution, not its
+// Shape. The real named-vs-expanded guard is the analyzer-plus-generator
+// TestNamedResolutionOracle in internal/spectest.
 func TestFieldInfoToPropertyNamedScalarMatchesBuiltin(t *testing.T) {
 	gen := New(defaultTitle, defaultVersion, defaultDescription)
 	cases := []struct{ builtin, kind string }{
@@ -3262,7 +3269,7 @@ func TestFieldInfoToPropertyNamedScalarMatchesBuiltin(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.builtin, func(t *testing.T) {
 			namedField := func(shape models.TypeShape) *models.FieldInfo {
-				return &models.FieldInfo{Shape: shape, JSONName: "v", UnderlyingKind: c.kind, UnderlyingBuiltin: c.builtin}
+				return resolvedTo(&models.FieldInfo{Shape: shape, JSONName: "v"}, prim(c.builtin))
 			}
 			bare := gen.fieldInfoToProperty(&models.FieldInfo{Shape: prim(c.builtin), JSONName: "v"})
 			require.Equal(t, c.kind, bare.Type, "oracle sanity: the bare builtin is typed")
@@ -3272,16 +3279,6 @@ func TestFieldInfoToPropertyNamedScalarMatchesBuiltin(t *testing.T) {
 			barePtr := gen.fieldInfoToProperty(&models.FieldInfo{Shape: ptrOf(prim(c.builtin)), JSONName: "v"})
 			assert.Equal(t, barePtr, gen.fieldInfoToProperty(namedField(ptrOf(named("N")))), "pointer to named scalar")
 
-			// A slice of byte/uint8 elements is skipped: encoding/json marshals
-			// any slice whose element kind is uint8 as a base64 string, a
-			// separate gap this test must not lock in.
-			if c.builtin == goTypeByte || c.builtin == goTypeUint8 {
-				return
-			}
-			arr := gen.fieldInfoToProperty(namedField(sliceOf(named("N"))))
-			assert.Equal(t, typeArray, arr.Type)
-			assert.Equal(t, bare, arr.Items, "items of a named-scalar slice")
-
 			// The analyzer resolves the builtin through every slice and pointer
 			// level, so each container level must still be emitted: [][]N is
 			// an array of arrays, exactly as [][]B is, never a flat array.
@@ -3289,6 +3286,7 @@ func TestFieldInfoToPropertyNamedScalarMatchesBuiltin(t *testing.T) {
 				name string
 				wrap func(models.TypeShape) models.TypeShape
 			}{
+				{"slice", sliceOf},
 				{"slice of pointers", func(s models.TypeShape) models.TypeShape { return sliceOf(ptrOf(s)) }},
 				{"pointer to slice", func(s models.TypeShape) models.TypeShape { return ptrOf(sliceOf(s)) }},
 				{"nested slice", func(s models.TypeShape) models.TypeShape { return sliceOf(sliceOf(s)) }},
@@ -3308,7 +3306,7 @@ func TestFieldInfoToPropertyNamedScalarMatchesBuiltin(t *testing.T) {
 func TestFieldInfoToPropertyNamedScalarBoundOverFloor(t *testing.T) {
 	gen := New(defaultTitle, defaultVersion, defaultDescription)
 	count := func(shape models.TypeShape) *models.FieldInfo {
-		return &models.FieldInfo{Shape: shape, JSONName: "count", UnderlyingKind: typeInteger, UnderlyingBuiltin: goTypeUint32}
+		return resolvedTo(&models.FieldInfo{Shape: shape, JSONName: "count"}, prim(goTypeUint32))
 	}
 
 	t.Run("type Count uint32 is int64 with the floor", func(t *testing.T) {
@@ -3370,10 +3368,9 @@ func TestFieldInfoToPropertyNamedScalarExample(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			bare := gen.fieldInfoToProperty(&models.FieldInfo{Shape: prim(c.builtin), JSONName: "v", Example: c.example})
-			p := gen.fieldInfoToProperty(&models.FieldInfo{
+			p := gen.fieldInfoToProperty(resolvedTo(&models.FieldInfo{
 				Shape: named("N"), JSONName: "v", Example: c.example,
-				UnderlyingKind: typeInteger, UnderlyingBuiltin: c.builtin,
-			})
+			}, prim(c.builtin)))
 			assert.Equal(t, c.want, p.Example)
 			assert.Equal(t, bare.Example, p.Example, "a named scalar keeps or drops an example exactly as its bare builtin does")
 		})
@@ -3383,14 +3380,14 @@ func TestFieldInfoToPropertyNamedScalarExample(t *testing.T) {
 // TestFieldInfoToPropertyNamedScalarKindOnly locks the fallback for a named
 // scalar the analyzer resolved to a kind but no builtin — its build-tagged
 // declarations disagree on width (type Word int64 / type Word int32), so no
-// single format holds on every target. The property is typed from
-// UnderlyingKind alone, with no format and no unsigned floor, directly, behind
+// single format holds on every target. The property is typed from the
+// kind-only leaf alone, with no format and no unsigned floor, directly, behind
 // a pointer and as slice items; constraints and example coercion then apply
 // to that kind-only schema exactly as they always have.
 func TestFieldInfoToPropertyNamedScalarKindOnly(t *testing.T) {
 	gen := New(defaultTitle, defaultVersion, defaultDescription)
 	kindOnly := func(shape models.TypeShape, kind string) *models.FieldInfo {
-		return &models.FieldInfo{Shape: shape, JSONName: "v", UnderlyingKind: kind}
+		return resolvedTo(&models.FieldInfo{Shape: shape, JSONName: "v"}, kindOnlyLeaf(kind))
 	}
 	for _, kind := range []string{typeInteger, typeNumber, typeString} {
 		t.Run(kind, func(t *testing.T) {
@@ -3463,7 +3460,7 @@ func TestFieldInfoToPropertyNullable(t *testing.T) {
 	})
 
 	t.Run("pointer to struct wraps the $ref in allOf with nullable", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: ptrOf(named("User")), RefName: "User", JSONName: "manager"})
+		p := gen.fieldInfoToProperty(resolvedTo(&models.FieldInfo{Shape: ptrOf(named("User")), JSONName: "manager"}, refTo("User")))
 		assert.Empty(t, p.Ref, "a pointer-to-struct must not emit a bare top-level $ref")
 		assert.Equal(t, typeObject, p.Type)
 		require.Len(t, p.AllOf, 1)
@@ -3472,7 +3469,7 @@ func TestFieldInfoToPropertyNullable(t *testing.T) {
 	})
 
 	t.Run("value struct (non-pointer) keeps a bare ref, not nullable", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: named("User"), RefName: "User", JSONName: "profile"})
+		p := gen.fieldInfoToProperty(resolvedTo(&models.FieldInfo{Shape: named("User"), JSONName: "profile"}, refTo("User")))
 		assert.Equal(t, refPath("User"), p.Ref)
 		assert.Nil(t, p.AllOf)
 		assert.False(t, p.Nullable)
@@ -3504,7 +3501,7 @@ func TestFieldInfoToPropertyNullable(t *testing.T) {
 	})
 
 	t.Run("pointer-to-struct parameter keeps a bare ref, no allOf, no nullable (RULING 1)", func(t *testing.T) {
-		p := gen.fieldInfoToProperty(&models.FieldInfo{Shape: ptrOf(named("User")), RefName: "User", ParamType: "query", ParamName: "filter"})
+		p := gen.fieldInfoToProperty(resolvedTo(&models.FieldInfo{Shape: ptrOf(named("User")), ParamType: "query", ParamName: "filter"}, refTo("User")))
 		assert.Equal(t, refPath("User"), p.Ref)
 		assert.Nil(t, p.AllOf)
 		assert.False(t, p.Nullable)

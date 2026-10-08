@@ -37,8 +37,8 @@ var (
 
 // fixedArrayField is one CreateReq field: its Go type and extra struct tags,
 // and the exact property schema it must emit. Rows marked "must not move" pin
-// the schema main already emitted, not the field's slice form — #97 will make
-// []Flag base64 while [4]Flag stays an integer array.
+// the schema main already emitted, not the field's slice form — []Flag is
+// base64 (#97) while [4]Flag stays an integer array.
 type fixedArrayField struct {
 	json   string
 	goType string
@@ -152,7 +152,7 @@ func TestRunGenerateFixedArrayFields(t *testing.T) {
 	require.NoError(t, err)
 	warnings := a.Warnings(t.Context())
 	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "is a uintptr")
+	assert.Contains(t, warnings[0], "holds a uintptr")
 
 	out := filepath.Join(t.TempDir(), outputFileName)
 	var runErr error

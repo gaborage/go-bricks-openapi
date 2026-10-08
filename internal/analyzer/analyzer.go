@@ -106,7 +106,7 @@ const (
 // deep chain of DISTINCT types (which the identity cycle guard cannot stop)
 // cannot exhaust the stack. Set far above any realistic schema nesting; a chain
 // deeper than this is treated as pathological input and truncated with a
-// warning. Mirrors the alias-chain cap pattern (namedScalarBuiltin /
+// warning. Mirrors the alias-chain cap pattern (maxNamedResolutionDepth /
 // resolveTypeSpecChain), applied to both the field-ref and embedded-promotion
 // recursion cycles.
 const maxTypeRegistrationDepth = 1000
@@ -128,6 +128,8 @@ type ProjectAnalyzer struct {
 	depthWarned      bool                               // once-latch: registration-depth cap already warned this run
 	tagWarned        map[string]struct{}                // dedupes malformed-struct-tag warnings by "file:line:col"
 	uintptrWarned    map[string]struct{}                // dedupes uintptr-field warnings by "file:line:col"
+	fieldWarned      map[string]struct{}                // dedupes field fallback warnings by "file:line:col"
+	fieldSites       map[*models.TypeShape]fieldSite    // field Resolution root -> where its ref leaves register
 }
 
 // New creates a new project analyzer
@@ -149,6 +151,9 @@ func New(projectRoot string) *ProjectAnalyzer {
 		usedNames:      make(map[string]struct{}),
 		directives:     map[string]map[int]*directiveGroup{},
 		directiveFiles: map[string]struct{}{},
+		uintptrWarned:  make(map[string]struct{}),
+		fieldWarned:    make(map[string]struct{}),
+		fieldSites:     make(map[*models.TypeShape]fieldSite),
 	}
 }
 
@@ -243,7 +248,9 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	a.usedNames = make(map[string]struct{})
 	a.depthWarned = false
 	a.tagWarned = nil
-	a.uintptrWarned = nil
+	a.uintptrWarned = make(map[string]struct{})
+	a.fieldWarned = make(map[string]struct{})
+	a.fieldSites = make(map[*models.TypeShape]fieldSite)
 
 	// Discover project metadata from go.mod
 	a.discoverProjectMetadata(project)
@@ -3244,11 +3251,14 @@ func (a *ProjectAnalyzer) registerTypeAt(name, pkg string, astFile *ast.File, fi
 	if pkg != "" && pkg != astFile.Name.Name {
 		return a.registerQualifiedTypeAt(pkg+"."+name, astFile, depth)
 	}
-	structType, err := a.findStructDefinition(astFile, filePath, name)
-	if err != nil {
+	// Extract the struct in the file that DECLARES it, so its qualified field
+	// types and embeds resolve against that file's imports, not the
+	// referencing file's.
+	structType, declFile, declPath, ok := a.structDeclSite(astFile, filePath, name)
+	if !ok {
 		return a.registerViaTypeSpecAt(name, pkg, astFile, filePath, depth)
 	}
-	return a.registerStructAt(name, pkg, structType, astFile, filePath, depth)
+	return a.registerStructAt(name, pkg, structType, declFile, declPath, depth)
 }
 
 // registerViaTypeSpecAt resolves a named non-struct declaration (alias `type X =
@@ -3281,14 +3291,15 @@ func (a *ProjectAnalyzer) registerViaTypeSpecAt(name, pkg string, astFile *ast.F
 // another local named type (recurse in the same package); and `type X = q.T`
 // (resolve the qualified struct in its own package). Returns ok=false when the
 // chain bottoms out at a non-struct (slice/map/interface/func) or cannot be
-// resolved. depth bounds pathological chains (same cap as namedScalarBuiltin).
+// resolved. depth bounds pathological chains (same cap as maxNamedResolutionDepth).
 func (a *ProjectAnalyzer) resolveTypeSpecChain(astFile *ast.File, filePath, name string, depth int) (st *ast.StructType, pkg string, file *ast.File, path string, ok bool) {
 	if depth > 8 {
 		return nil, "", nil, "", false
 	}
-	// Base case: a struct literally named `name` in this package.
-	if s, err := a.findStructDefinition(astFile, filePath, name); err == nil {
-		return s, astFile.Name.Name, astFile, filePath, true
+	// Base case: a struct literally named `name` in this package, returned
+	// with the file that declares it.
+	if s, declFile, declPath, found := a.structDeclSite(astFile, filePath, name); found {
+		return s, declFile.Name.Name, declFile, declPath, true
 	}
 	ts, tsFile, tsPath, found := a.resolveLocalTypeSpec(astFile, filePath, name)
 	if !found {
@@ -3333,8 +3344,14 @@ func (a *ProjectAnalyzer) registerStructAt(typeName, pkg string, structType *ast
 	ti.Fields = a.extractStructFields(structType, pkg, astFile, filePath, map[string]struct{}{typeName: {}}, depth)
 	ti.JOSE = hasJOSETag(structType)
 
+	// Warn only now that the field list is final: a promoted field shadowed
+	// by an outer one never reaches the document. Warnings precede ref
+	// registration, which shares the fieldWarned dedupe.
 	for i := range ti.Fields {
-		a.registerFieldRefAt(&ti.Fields[i], pkg, astFile, filePath, depth+1)
+		a.warnResolvedField(&ti.Fields[i])
+	}
+	for i := range ti.Fields {
+		a.registerFieldRefAt(&ti.Fields[i], astFile, filePath, depth+1)
 	}
 	return ti
 }
@@ -3349,8 +3366,8 @@ func (a *ProjectAnalyzer) registerStructAt(typeName, pkg string, structType *ast
 // first; which one that is follows discovery order. Discovery walks the project
 // deterministically, so a given source tree yields a stable assignment, but the
 // emitted spec is always valid either way — every $ref resolves to the component
-// the field/response actually carries (RefName / TypeInfo.Name are the final
-// key). A future enhancement could make the choice order-independent (e.g. always
+// the field/response actually carries (a ShapeRef leaf's Name / TypeInfo.Name
+// are the final key). A future enhancement could make the choice order-independent (e.g. always
 // qualify by package), but that is a naming-policy change, not a correctness fix.
 func (a *ProjectAnalyzer) schemaKey(typeName, pkg string) string {
 	k := pkg + "\x00" + typeName
@@ -3577,55 +3594,36 @@ func exportedPkgName(pkg string) string {
 	return strings.ToUpper(pkg[:1]) + pkg[1:]
 }
 
-// registerFieldRefAt registers the named struct type(s) a field references and
-// stamps the matching (final, collision-qualified) ref name onto the field. A map
-// field refs its value struct via MapValueRefName (a map is never itself a $ref);
-// any other field refs its underlying struct (after pointer/slice unwrap) via
-// RefName. Fields excluded from JSON (json:"-") are skipped so a type reachable
-// only through them is not registered as an orphan component. depth is the
-// current registration depth, passed on to registerTypeAt so the field-ref cycle
-// (Cycle A) stays bounded.
-func (a *ProjectAnalyzer) registerFieldRefAt(f *models.FieldInfo, pkg string, astFile *ast.File, filePath string, depth int) {
+// registerFieldRefAt registers every struct a field's Resolution references,
+// at any depth, and stamps each ShapeRef leaf with its final
+// (collision-qualified) component name. Fields excluded from JSON (json:"-")
+// are skipped so a type reachable only through them is not registered as an
+// orphan component. depth is the current registration depth, passed on to
+// registerTypeAt so the field-ref cycle (Cycle A) stays bounded.
+func (a *ProjectAnalyzer) registerFieldRefAt(f *models.FieldInfo, astFile *ast.File, filePath string, depth int) {
 	if isJSONExcluded(f) {
 		return
 	}
-	if vName, isMap := shapeMapValueBase(f.Shape); isMap {
-		if reg := a.registerTypeAt(vName, pkg, astFile, filePath, depth); reg != nil {
-			f.MapValueRefName = reg.Name
-		}
-		return
-	}
-	if reg := a.registerTypeAt(shapeBaseName(f.Shape), pkg, astFile, filePath, depth); reg != nil {
-		f.RefName = reg.Name
-		// A struct ref carries no scalar underlying builtin, even when a
-		// build-tagged variant declares the same name as a scalar (see
-		// resolveNamedScalars, which classified the field at extraction).
-		f.UnderlyingKind, f.UnderlyingBuiltin = "", ""
-	}
+	a.registerResolutionRefs(f, astFile, filePath, depth)
 }
 
-// resolveNamedScalars classifies each named, non-struct scalar field by the
-// builtin it bottoms out in (Cents -> int64) and derives its 3-way kind from
-// that. It runs at extraction, where astFile/filePath are those of the struct
-// that declares the fields, so a field promoted from an embedded struct in
-// another package resolves its type in that package rather than in the
-// embedding one. The builtin itself is kept only when every declaration agrees
-// on it: build constraints are not evaluated, so a type declared at different
-// widths in build-tagged files (word_amd64.go / word_386.go) has no single
-// width to advertise and is typed from its kind alone. Fields excluded from
-// JSON and map fields are skipped: neither ever carries a scalar kind.
-func (a *ProjectAnalyzer) resolveNamedScalars(fields []models.FieldInfo, astFile *ast.File, filePath string) {
-	for i := range fields {
-		f := &fields[i]
-		if _, isMap := shapeMapValueBase(f.Shape); isMap || isJSONExcluded(f) {
-			continue
+// registerResolutionRefs registers every ShapeRef leaf of f's Resolution in
+// the file its name was written in (the site resolveField recorded),
+// defaulting to astFile/filePath for a leaf with no record. Each Resolution
+// is registered exactly once: registerStructAt returns a cached TypeInfo
+// before re-extracting.
+func (a *ProjectAnalyzer) registerResolutionRefs(f *models.FieldInfo, astFile *ast.File, filePath string, depth int) {
+	sites := a.fieldSites[f.Resolution].refSites
+	walkResolvedLeaves(f.Resolution, func(leaf *models.TypeShape) {
+		if leaf.Kind != models.ShapeRef {
+			return
 		}
-		b := a.resolveUnderlyingBuiltin(shapeBaseName(f.Shape), astFile, filePath)
-		f.UnderlyingKind = primitiveKind(b.name)
-		if b.agreed {
-			f.UnderlyingBuiltin = b.name
+		site, ok := sites[leaf.Name]
+		if !ok {
+			site = pkgFile{file: astFile, path: filePath}
 		}
-	}
+		a.registerRefLeaf(leaf, f, site, depth)
+	})
 }
 
 // isJSONExcluded reports whether a field never reaches the emitted document:
@@ -3641,73 +3639,16 @@ func isJSONExcluded(f *models.FieldInfo) bool {
 // intentionally absent.)
 //
 // json.Number must stay absent: its underlying type is string, but
-// encoding/json writes it as a number. An entry would document it as a string
-// (with minLength from validate), and its local wrappers, which encoding/json
-// does write as strings, would wrongly resolve through it. The generator's
-// well-known map types it on its own.
+// encoding/json writes it as a number. An entry would document a direct use
+// as a string (with minLength from validate). Its local defined wrappers
+// (type Amount json.Number), which encoding/json does write as strings,
+// resolve to string through kindBackedUnderlying instead, which applies only
+// at the end of a defined chain. The generator's well-known map types a direct
+// use on its own.
 var knownUnderlyingBuiltins = map[string]string{
 	models.WellKnownTimeDuration: goTypeInt64, // encoding/json marshals it as its int64 ns count
 	models.WellKnownTimeMonth:    goTypeInt,   // an int with no marshaler, written as its number
 	models.WellKnownTimeWeekday:  goTypeInt,   // an int with no marshaler, written as its number
-}
-
-// scalarBuiltin is the outcome of resolving a named scalar to its builtin.
-// name is the builtin reached by following each type's first SCALAR
-// declaration (the field's own file, then sibling files in sorted path order;
-// a declaration over a struct/slice/map/etc. is skipped) — "" when that chain
-// is unresolved — and is what the 3-way kind derives from. agreed reports
-// whether every declaration of every type along the chain bottoms out in that
-// same builtin (byte and uint8, or rune and int32, are one builtin: see
-// sameBuiltin); it is false when build-tagged variants disagree (type Word
-// int64 in one file, type Word int32 in another), or when one variant is not a
-// scalar at all.
-type scalarBuiltin struct {
-	name   string
-	agreed bool
-}
-
-// resolveUnderlyingBuiltin resolves the Go builtin scalar ("int64", "byte",
-// "float32", "string", ...) a named, non-struct scalar type bottoms out in. The
-// name is "" when the type is a builtin primitive (handled directly), a struct,
-// or unresolved. base is the already unwrapped terminal name (see
-// shapeBaseName); this recognizes a small set of qualified stdlib types and
-// resolves local `type X <primitive>` declarations to their underlying builtin.
-func (a *ProjectAnalyzer) resolveUnderlyingBuiltin(base string, astFile *ast.File, filePath string) scalarBuiltin {
-	if b, ok := knownUnderlyingBuiltins[base]; ok {
-		return scalarBuiltin{name: b, agreed: true}
-	}
-	if strings.Contains(base, ".") || primitiveKind(base) != "" {
-		// Other qualified types are not classified here, and a builtin used
-		// directly is not a named wrapper.
-		return scalarBuiltin{agreed: true}
-	}
-	return a.namedScalarBuiltin(base, astFile, filePath, 0)
-}
-
-// namedScalarBuiltin resolves a LOCAL named type to the builtin scalar it
-// bottoms out in, following alias chains (type Cents int64 -> int64; type A B;
-// type B int -> A resolves to int). Every declaration of the type is resolved,
-// not just the first: the first scalar one names the builtin, and any other
-// that bottoms out elsewhere, or in no scalar, clears agreed. depth bounds
-// pathological chains.
-func (a *ProjectAnalyzer) namedScalarBuiltin(name string, astFile *ast.File, filePath string, depth int) scalarBuiltin {
-	res := scalarBuiltin{agreed: true}
-	if depth > 8 {
-		return res
-	}
-	first := true
-	for _, u := range a.localTypeUnderlyings(name, astFile, filePath) {
-		if u == "" {
-			res.agreed = false // a non-scalar variant has no builtin to agree on
-			continue
-		}
-		r := a.underlyingScalarBuiltin(u, astFile, filePath, depth)
-		if first {
-			res.name, first = r.name, false
-		}
-		res.agreed = res.agreed && r.agreed && sameBuiltin(r.name, res.name)
-	}
-	return res
 }
 
 // sameBuiltin reports whether two builtin names denote one Go type. byte and
@@ -3727,23 +3668,8 @@ func sameBuiltin(x, y string) bool {
 	return canonical(x) == canonical(y)
 }
 
-// underlyingScalarBuiltin resolves one declaration's underlying identifier u
-// (the "int64" of `type Cents int64`) for namedScalarBuiltin.
-func (a *ProjectAnalyzer) underlyingScalarBuiltin(u string, astFile *ast.File, filePath string, depth int) scalarBuiltin {
-	if b, known := knownUnderlyingBuiltins[u]; known {
-		return scalarBuiltin{name: b, agreed: true} // e.g. `type Timeout time.Duration` -> int64
-	}
-	if primitiveKind(u) != "" {
-		return scalarBuiltin{name: u, agreed: true} // underlying is a builtin scalar
-	}
-	if strings.Contains(u, ".") {
-		return scalarBuiltin{agreed: true} // unknown qualified underlying — not classified
-	}
-	return a.namedScalarBuiltin(u, astFile, filePath, depth+1) // chained named type
-}
-
-// primitiveKind maps a Go builtin scalar type name to its OpenAPI 3-way kind, or
-// "" if it is not one of them. It reuses the constraint mapper's type classifiers
+// primitiveKind maps a Go builtin scalar type name to its OpenAPI kind (integer,
+// number, string or boolean), or "" if it is not one of them. It reuses the constraint mapper's type classifiers
 // so the integer/float/string sets live in one place.
 func primitiveKind(goType string) string {
 	switch {
@@ -3753,78 +3679,10 @@ func primitiveKind(goType string) string {
 		return "number"
 	case isStringType(goType):
 		return goTypeString
+	case goType == goTypeBool:
+		return kindBoolean
 	}
 	return ""
-}
-
-// localTypeUnderlyings returns the underlying identifier of every local
-// `type Name ...` declaration (e.g. Cents -> ["int64"]), without duplicates, in
-// a stable search order: the current file first, then sibling files in the
-// same package (via the cached per-dir parse; files of another package in the
-// directory are skipped) in sorted path order. Build constraints are not
-// evaluated, so a type declared at different widths in build-tagged variants
-// (word_amd64.go / word_386.go) yields one entry per width, and the caller
-// decides what a disagreement means. A declaration whose
-// underlying type is not a bare or qualified identifier (a struct/slice/map/
-// etc.) contributes "". The result is empty when Name is not declared locally.
-func (a *ProjectAnalyzer) localTypeUnderlyings(name string, astFile *ast.File, filePath string) []string {
-	var decls []string
-	add := func(file *ast.File) {
-		if u, declared := namedTypeUnderlyingInFile(file, name); declared && !slices.Contains(decls, u) {
-			decls = append(decls, u)
-		}
-	}
-	add(astFile)
-	files, err := a.parsePackageDir(filepath.Dir(filePath))
-	if err != nil {
-		return decls
-	}
-	for _, p := range slices.Sorted(maps.Keys(files)) {
-		if files[p].Name.Name != astFile.Name.Name {
-			continue // another package in the directory, e.g. a //go:build ignore generator
-		}
-		add(files[p]) // the current file's own on-disk parse repeats, deduplicated
-	}
-	return decls
-}
-
-// namedTypeUnderlyingInFile reports whether file declares `type Name ...`, and
-// if so returns the underlying identifier — "" when the underlying type is not
-// a bare or qualified identifier (a struct/slice/map/etc.).
-func namedTypeUnderlyingInFile(file *ast.File, name string) (underlying string, declared bool) {
-	for _, decl := range file.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.TYPE {
-			continue
-		}
-		for _, spec := range gen.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok || ts.Name.Name != name {
-				continue
-			}
-			u, _ := underlyingIdentString(ts.Type)
-			return u, true
-		}
-	}
-	return "", false
-}
-
-// underlyingIdentString returns the identifier text of a type expression that is
-// a bare identifier (a `type Cents int64` underlying yields "int64") or a
-// qualified identifier (a `type T pkg.Name` underlying yields "pkg.Name"). It
-// reports ok=false for any composite underlying type (struct/slice/map/etc.) or
-// a selector whose base is not a plain package identifier, mirroring the
-// "scalar named type only" contract of its caller namedTypeUnderlyingInFile.
-func underlyingIdentString(t ast.Expr) (string, bool) {
-	switch u := t.(type) {
-	case *ast.Ident:
-		return u.Name, true
-	case *ast.SelectorExpr:
-		if pkg, isIdent := u.X.(*ast.Ident); isIdent {
-			return pkg.Name + "." + u.Sel.Name, true
-		}
-	}
-	return "", false
 }
 
 // shapeBaseName unwraps pointer, slice and array layers to any depth (mirroring the
@@ -3846,21 +3704,6 @@ func shapeBaseName(s models.TypeShape) string {
 			return ""
 		}
 	}
-}
-
-// shapeMapValueBase reports whether s is a map after ONE optional leading
-// pointer — the exact depth of the old strings.TrimPrefix(goType, "*"), so
-// **map[string]T is not a map here — and returns the base name of its value
-// shape. For map[string]string it returns ("string", true), where the caller's
-// registry lookup then fails for the primitive, leaving MapValueRefName empty.
-func shapeMapValueBase(s models.TypeShape) (string, bool) {
-	if s.Kind == models.ShapePointer && s.Elem != nil {
-		s = *s.Elem
-	}
-	if s.Kind != models.ShapeMap || s.Elem == nil {
-		return "", false
-	}
-	return shapeBaseName(*s.Elem), true
 }
 
 // unquoteLiteral decodes a Go string literal's source text into its value.
@@ -3919,22 +3762,32 @@ func (a *ProjectAnalyzer) findStructDefinition(
 	filePath string,
 	typeName string,
 ) (*ast.StructType, error) {
-	// Search current file first
-	if structType := a.findStructInFile(astFile, typeName); structType != nil {
+	if structType, _, _, ok := a.structDeclSite(astFile, filePath, typeName); ok {
 		return structType, nil
 	}
+	return nil, fmt.Errorf("struct %s not found", typeName)
+}
 
-	// Try other files in the package
+// structDeclSite finds the struct declared as name in astFile's package (the
+// current file first, then sibling files in sorted path order) and returns it
+// with the file and path that DECLARE it. Extracting a struct's fields in that
+// file is what lets its qualified field types resolve against the imports
+// they were written under. ok is false when no struct of that name exists or
+// the directory cannot be read.
+func (a *ProjectAnalyzer) structDeclSite(astFile *ast.File, filePath, name string) (st *ast.StructType, file *ast.File, path string, ok bool) {
+	if s := a.findStructInFile(astFile, name); s != nil {
+		return s, astFile, filePath, true
+	}
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
-	if err == nil && files != nil {
-		for _, file := range files {
-			if structType := a.findStructInFile(file, typeName); structType != nil {
-				return structType, nil
-			}
+	if err != nil {
+		return nil, nil, "", false
+	}
+	for _, p := range slices.Sorted(maps.Keys(files)) {
+		if s := a.findStructInFile(files[p], name); s != nil {
+			return s, files[p], p, true
 		}
 	}
-
-	return nil, fmt.Errorf("struct %s not found", typeName)
+	return nil, nil, "", false
 }
 
 // findStructInFile searches a single AST file for a struct type definition,
@@ -4030,25 +3883,21 @@ func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, pkg st
 			}
 			continue
 		}
-		shallow = append(shallow, a.namedFields(field)...)
+		shallow = append(shallow, a.namedFields(field, astFile, filePath)...)
 	}
-	// Promoted fields were classified by their own extraction, in the context
-	// of the struct that declares them (another package, for a cross-package
-	// embed); only this struct's own fields are classified here.
-	a.resolveNamedScalars(shallow, astFile, filePath)
 
 	return mergeFieldsByPrecedence(shallow, promoted)
 }
 
 // namedFields builds FieldInfo entries for a single non-anonymous AST field
 // (one per exported name; unexported names are skipped).
-func (a *ProjectAnalyzer) namedFields(field *ast.Field) []models.FieldInfo {
+func (a *ProjectAnalyzer) namedFields(field *ast.Field, astFile *ast.File, filePath string) []models.FieldInfo {
 	out := make([]models.FieldInfo, 0, len(field.Names))
 	for _, fieldName := range field.Names {
 		if !fieldName.IsExported() {
 			continue
 		}
-		out = append(out, a.buildFieldInfo(fieldName.Name, field))
+		out = append(out, a.buildFieldInfo(fieldName.Name, field, astFile, filePath))
 	}
 	return out
 }
@@ -4113,7 +3962,7 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *
 		case "":
 			// no explicit name — fall through to promotion
 		default:
-			return []models.FieldInfo{a.buildFieldInfo(typeName, field)}, false
+			return []models.FieldInfo{a.buildFieldInfo(typeName, field, astFile, filePath)}, false
 		}
 	}
 
@@ -4122,9 +3971,9 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *
 	}
 	// Local embed: promote the struct's fields from this package. depth+1 is the
 	// increment edge for the embedded-promotion cycle (Cycle B).
-	if embedded, err := a.findStructDefinition(astFile, filePath, typeName); err == nil {
+	if embedded, eFile, ePath, ok := a.structDeclSite(astFile, filePath, typeName); ok {
 		visited[typeName] = struct{}{}
-		fields = a.extractStructFields(embedded, pkg, astFile, filePath, visited, depth+1)
+		fields = a.extractStructFields(embedded, pkg, eFile, ePath, visited, depth+1)
 		delete(visited, typeName) // backtrack: keep visited scoped to the current chain
 		return fields, true
 	}
@@ -4139,8 +3988,9 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *
 	return nil, false // unresolvable (stdlib/third-party or non-struct) — skip, never crash
 }
 
-// buildFieldInfo creates a FieldInfo from a field name and AST field
-func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field) models.FieldInfo {
+// buildFieldInfo creates a FieldInfo from a field name and AST field, and
+// resolves it in astFile/filePath, the file that declares the field's struct.
+func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field, astFile *ast.File, filePath string) models.FieldInfo {
 	fieldInfo := models.FieldInfo{
 		Name:        name,
 		Shape:       a.typeShape(field.Type),
@@ -4152,35 +4002,26 @@ func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field) models.F
 		a.parseFieldTags(&fieldInfo, field.Tag)
 	}
 
-	// After tag parsing, so json:"-" (the documented escape hatch) silences it.
-	a.warnUintptrField(&fieldInfo, field)
+	// After tag parsing: json:"-" (the documented escape hatch) skips the
+	// resolution and its diagnostics, and a param tag exempts Marshaler types.
+	a.resolveField(&fieldInfo, field, astFile, filePath)
 
 	return fieldInfo
 }
 
-// warnUintptrField reports a field whose type bottoms out in uintptr. Unlike
+// warnUintptrField reports a field, declared at loc, whose type holds a
+// uintptr at any depth (its caller decides, from the field's Resolution). Unlike
 // every other Go integer, uintptr names a machine address: it carries no API
 // contract, so the field is documented as an object rather than as a number and
 // this diagnostic says why. It feeds --strict like every other warning.
 // Deduped by source position so a struct reached from more than one route warns
-// once.
-func (a *ProjectAnalyzer) warnUintptrField(fieldInfo *models.FieldInfo, field *ast.Field) {
-	if field == nil || shapeBaseName(fieldInfo.Shape) != goTypeUintptr {
+// once. A json:"-" field never gets here: resolveField skips it, since it never
+// reaches the spec, and so does a promoted field shadowed by an outer one.
+func (a *ProjectAnalyzer) warnUintptrField(fieldInfo *models.FieldInfo, loc string) {
+	if !markOnce(a.uintptrWarned, loc) {
 		return
 	}
-	if isJSONExcluded(fieldInfo) {
-		return // json:"-" — the field never reaches the spec, so there is nothing to report
-	}
-	pos := a.fileSet.Position(field.Pos())
-	loc := fmt.Sprintf("%s:%d:%d", relToRoot(a.projectRoot, pos.Filename), pos.Line, pos.Column)
-	if a.uintptrWarned == nil {
-		a.uintptrWarned = make(map[string]struct{})
-	}
-	if _, seen := a.uintptrWarned[loc]; seen {
-		return
-	}
-	a.uintptrWarned[loc] = struct{}{}
-	a.addWarningf("field %s at %s is a uintptr, a machine address with no meaningful API contract "+
+	a.addWarningf("field %s at %s holds a uintptr, a machine address with no meaningful API contract "+
 		"— emitting an untyped schema "+
 		"(use a sized integer type, or exclude the field with json:\"-\")", fieldInfo.Name, loc)
 }
@@ -4215,7 +4056,7 @@ func (a *ProjectAnalyzer) parseFieldTags(fieldInfo *models.FieldInfo, tag *ast.B
 // (behavior keys on TypeShape.Name and on container kinds).
 func isBuiltinShapeName(name string) bool {
 	switch name {
-	case goTypeBool, goTypeByte, goTypeAny, goTypeRune, frameworkTypeError, goTypeUintptr, "complex64", "complex128":
+	case goTypeBool, goTypeByte, goTypeAny, goTypeRune, frameworkTypeError, goTypeUintptr, goTypeComplex64, goTypeComplex128:
 		return true
 	}
 	return isStringType(name) || isNumericType(name)

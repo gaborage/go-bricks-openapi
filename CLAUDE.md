@@ -87,7 +87,7 @@ Token rules:
 - CI's Unix leg uses the byte-identical filter, so `make test` and CI's Unix leg agree on which packages run.
 - CI's Windows leg does **not** filter — it runs all 8 packages.
 - A test added under `internal/models` is not run by `make test`, `make check`, or either Unix leg — but runs on Windows, where it can fail alone.
-- `internal/models` is intentionally test-free (struct-only); it reports `[no test files]`.
+- `internal/models` is intentionally test-free (structs and trivial accessors, such as `FieldInfo.ResolvedShape`); it reports `[no test files]`.
 - There is zero `t.Parallel()` in `internal/` or `cmd/`, deliberately.
 - `internal/testutil`'s stdout-capture helper swaps the global `os.Stdout`; its doc says not to call it from parallel tests.
 - The Windows leg forgives nothing by design — a pattern-based failure allowlist was deleted on purpose; don't reintroduce one.

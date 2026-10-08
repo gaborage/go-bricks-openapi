@@ -68,7 +68,7 @@ func TestIsIntegerTypePredeclaredAliases(t *testing.T) {
 		{"byte", true},
 		{"rune", true},
 		{"uintptr", false},
-		{"complex64", false},
+		{goTypeComplex64, false},
 		{"error", false},
 	}
 

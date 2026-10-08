@@ -40,7 +40,8 @@ SPEC_FIXTURE := internal/spectest/testdata/nested_schema
 SPEC_TMP := $(CURDIR)/.openapi-fixture-spec.yaml
 
 # Test package set — mirror CI (.github/workflows/ci.yml): every package except
-# internal/models, which is struct-only (no tests) and would drag coverage down.
+# internal/models, which is test-free (structs and trivial accessors) and would
+# drag coverage down.
 # Deriving this from `go list` keeps the local gate and CI on the same set and
 # picks up new packages automatically.
 TEST_PACKAGES := $(shell go list ./... | grep -vE '/models$$')
