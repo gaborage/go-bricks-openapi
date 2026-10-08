@@ -243,8 +243,11 @@ nested Go module, is not.
   one whose short name collides with a well-known type (a project package
   `uuid` declaring `type UUID struct`). A slice payload of such a colliding
   project struct (`server.Result[[]uuid.UUID]`) is still typed inline as the
-  well-known type's array. A slice payload (`server.Result[[]T]`) is an array
-  whose items follow the same rules, so `[]string` gives string items. A `T`
+  well-known type's array. A slice or fixed-size array payload
+  (`server.Result[[]T]`, `server.Result[[N]T]`) is an array whose items follow
+  the same rules, so `[]string` gives string items. As `encoding/json` writes
+  them, `[]byte` alone is a base64 string, while `[N]byte` (payload or field)
+  is an integer array. A `T`
   (or slice element) that resolves to none of these — a third-party type such
   as `decimal.Decimal`, an undeclared name, or a well-known type under an
   aliased import (`t "time"`) — is documented as an untyped object and reported
