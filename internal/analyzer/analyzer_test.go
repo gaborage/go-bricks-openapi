@@ -2773,7 +2773,7 @@ func (h *Handler) list(ctx server.HandlerContext) {}`,
 				if !ok {
 					continue
 				}
-				reqType := analyzer.extractRequestType(funcDecl.Type.Params, astFile.Name.Name, map[string]struct{}{})
+				reqType, _ := analyzer.extractRequestType(funcDecl.Type.Params, astFile.Name.Name, map[string]struct{}{})
 				assertTypeInfo(t, tt.description, tt.expectedReq, reqType)
 			}
 		})

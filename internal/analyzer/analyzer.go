@@ -8,6 +8,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"maps"
 	"os"
 	"path/filepath"
@@ -1517,18 +1518,25 @@ func receiverVarName(recv *ast.FieldList) string {
 // handlerAnalysis is everything one handler declaration contributes to its
 // route: the request and response Shapes, the constructor-derived success
 // status, and the error statuses inferred from the constructors its body calls.
+//
+// requestType is the request parameter's type as written (`*string`,
+// `[]Item`), or "" when the handler takes no request. It is set even when
+// request is nil — a type-literal parameter ([]T, map, interface{}) resolves
+// to no TypeInfo — so populateRequestType can still screen it.
 type handlerAnalysis struct {
 	request       *models.TypeInfo
+	requestType   string
 	response      *models.TypeInfo
 	successStatus int
 	errorStatuses []int
 }
 
 // found reports whether the analysis came from a matched handler declaration.
-// A declaration carrying neither a request nor a response Shape is not treated
-// as the handler, so the search continues into the rest of the package.
+// A declaration carrying neither a request parameter nor a response Shape is
+// not treated as the handler, so the search continues into the rest of the
+// package.
 func (h handlerAnalysis) found() bool {
-	return h.request != nil || h.response != nil
+	return h.request != nil || h.requestType != "" || h.response != nil
 }
 
 // extractHandlerInfo extracts the handler name and its analysis from a route
@@ -2542,22 +2550,45 @@ func (a *ProjectAnalyzer) handleSelectorExprType(t *ast.SelectorExpr, serverAlia
 	}
 }
 
-// extractRequestType extracts request type from handler parameters.
-// Returns the first non-framework type parameter, or nil if none found.
-func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName string, serverAliases map[string]struct{}) *models.TypeInfo {
-	if params == nil || len(params.List) == 0 {
-		return nil
+// extractRequestType extracts the request type from handler parameters: the
+// first non-framework parameter's TypeInfo, plus its type as written. A
+// type-literal parameter that can never be a struct ([]T, [N]T, map,
+// interface{}, func, chan) is the request too, but resolves to a nil TypeInfo
+// — the request-body path has no shape to emit for it — with only its type
+// text returned, so populateRequestType can warn about it. Returns nil and ""
+// when the handler takes no request.
+func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName string, serverAliases map[string]struct{}) (request *models.TypeInfo, typeText string) {
+	if params == nil {
+		return nil, ""
 	}
 
 	// Return the first parameter that is not a framework type
 	// (HandlerContext can appear in first or second position)
 	for _, p := range params.List {
 		if ti := a.typeInfoFromExpr(p.Type, packageName, serverAliases); ti != nil {
-			return ti
+			return ti, types.ExprString(p.Type)
+		}
+		if isNonStructTypeLiteral(p.Type) {
+			return nil, types.ExprString(p.Type)
 		}
 	}
 
-	return nil
+	return nil, ""
+}
+
+// isNonStructTypeLiteral reports whether expr, one pointer level shed, is a
+// type literal that can never be a struct: a slice or array, a map, an
+// interface, a func or a chan. None of these is a framework type, so as a
+// handler parameter it is the request.
+func isNonStructTypeLiteral(expr ast.Expr) bool {
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = star.X
+	}
+	switch expr.(type) {
+	case *ast.ArrayType, *ast.MapType, *ast.InterfaceType, *ast.FuncType, *ast.ChanType:
+		return true
+	}
+	return false
 }
 
 // extractResponseType extracts the response payload from a handler's first
@@ -2614,8 +2645,10 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 		serverAliases := a.extractImportAliases(astFile, serverImportPath)
 
 		// Extract types using helpers
+		request, requestType := a.extractRequestType(funcDecl.Type.Params, astFile.Name.Name, serverAliases)
 		return handlerAnalysis{
-			request:       a.extractRequestType(funcDecl.Type.Params, astFile.Name.Name, serverAliases),
+			request:       request,
+			requestType:   requestType,
 			response:      a.extractResponseType(funcDecl.Type.Results, astFile.Name.Name, serverAliases),
 			successStatus: a.extractSuccessStatus(funcDecl, serverAliases),
 			errorStatuses: a.inferErrorStatuses(funcDecl, serverAliases),
@@ -3024,7 +3057,7 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 ) (handler handlerAnalysis, err error) {
 	// Try current file first
 	if h := a.findHandlerInFile(astFile, receiverType, isPackageFunc, handlerName); h.found() {
-		a.populateTypeFields(h.request, astFile, filePath)
+		a.populateRequestType(&h, astFile, filePath)
 		a.populateTypeFields(h.response, astFile, filePath)
 		return h, nil
 	}
@@ -3034,7 +3067,7 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 	if err == nil && files != nil {
 		for _, file := range files {
 			if h := a.findHandlerInFile(file, receiverType, isPackageFunc, handlerName); h.found() {
-				a.populateTypeFields(h.request, file, filePath)
+				a.populateRequestType(&h, file, filePath)
 				a.populateTypeFields(h.response, file, filePath)
 				return h, nil
 			}
@@ -3046,14 +3079,39 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 	return handlerAnalysis{}, fmt.Errorf("handler %s not found for receiver %q", handlerName, receiverType)
 }
 
-// populateTypeFields populates a request/response TypeInfo's fields and registers
-// every named struct type reachable from it (nested, sliced, pointed-to, or
-// recursive) into the analyzer's type registry, so the generator can emit a
-// component per type and $ref between them.
-func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile *ast.File, filePath string) {
-	if typeInfo == nil {
+// nonStructRequestWarning is the one warning a route raises when its request
+// type is not a struct; the argument is the type as written.
+const nonStructRequestWarning = "request type %s is not a struct: go-bricks binds requests by struct fields and panics at request time (F26, gaborage/go-bricks#1811); no requestBody emitted"
+
+// populateRequestType resolves a handler's request type the way
+// populateTypeFields resolves a response, except for what does not register
+// as a struct. go-bricks binds every request by its struct fields and panics
+// at request time on any other type (F26, gaborage/go-bricks#1811), so a
+// builtin, well-known, third-party, undeclared, local named non-struct or
+// type-literal request raises exactly one warning — the route documents no
+// requestBody — and is left untyped (no name, no fields), which is what makes
+// doctor count it as an untyped request.
+func (a *ProjectAnalyzer) populateRequestType(h *handlerAnalysis, astFile *ast.File, filePath string) {
+	if h.request != nil {
+		if registered := a.registerPayloadType(h.request, astFile, filePath); registered != nil {
+			adoptRegisteredType(h.request, registered)
+			return
+		}
+	}
+	if h.requestType == "" {
 		return
 	}
+	a.addWarningf(nonStructRequestWarning, h.requestType)
+	if h.request != nil {
+		h.request.Name = ""
+		h.request.Fields = nil
+	}
+}
+
+// registerPayloadType registers a request/response TypeInfo's named type and
+// returns its registered TypeInfo, or nil when the name is not a resolvable
+// struct.
+func (a *ProjectAnalyzer) registerPayloadType(typeInfo *models.TypeInfo, astFile *ast.File, filePath string) *models.TypeInfo {
 	registered := a.registerType(typeInfo.Name, typeInfo.Package, astFile, filePath)
 	if registered == nil && typeInfo.Package != "" {
 		// A qualified request/response type (e.g. server.Result[types.Money]) arrives
@@ -3061,6 +3119,31 @@ func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile 
 		// cross-package using that alias against the handler file's imports.
 		registered = a.registerQualifiedType(typeInfo.Package+"."+typeInfo.Name, astFile)
 	}
+	return registered
+}
+
+// adoptRegisteredType mirrors the registered fields onto the route's TypeInfo
+// (request bodies and responses read Fields directly). It adopts the final
+// (collision-qualified) name too, so the response envelope's $ref points at
+// the component actually emitted.
+func adoptRegisteredType(typeInfo, registered *models.TypeInfo) {
+	typeInfo.Name = registered.Name
+	typeInfo.Fields = registered.Fields
+	typeInfo.JOSE = registered.JOSE
+	shedRegisteredPayloadShape(typeInfo)
+}
+
+// populateTypeFields populates a response TypeInfo's fields and registers
+// every named struct type reachable from it (nested, sliced, pointed-to, or
+// recursive) into the analyzer's type registry, so the generator can emit a
+// component per type and $ref between them. A request goes through
+// populateRequestType instead, which screens what does not register as a
+// struct.
+func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile *ast.File, filePath string) {
+	if typeInfo == nil {
+		return
+	}
+	registered := a.registerPayloadType(typeInfo, astFile, filePath)
 	if registered == nil {
 		// Only an UNQUALIFIED (in-package) type can be a local non-struct
 		// declaration. A qualified type that failed both resolution attempts is
@@ -3085,13 +3168,7 @@ func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile 
 		a.dropUnresolvablePayloadName(typeInfo)
 		return
 	}
-	// Mirror the registered fields onto the route's TypeInfo (request bodies and
-	// responses read Fields directly). Adopt the final (collision-qualified) name
-	// too, so the response envelope's $ref points at the component actually emitted.
-	typeInfo.Name = registered.Name
-	typeInfo.Fields = registered.Fields
-	typeInfo.JOSE = registered.JOSE
-	shedRegisteredPayloadShape(typeInfo)
+	adoptRegisteredType(typeInfo, registered)
 }
 
 // shedRegisteredPayloadShape drops the Shape of a non-slice payload that
