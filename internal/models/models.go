@@ -109,7 +109,8 @@ type TypeInfo struct {
 	// project struct (the analyzer sheds it, so the payload is $ref'd even when
 	// its short name collides with a well-known type).
 	//
-	// For a slice payload ([]Item, []string) Kind is ShapeSlice and Elem is the
+	// For a slice payload ([]Item, []string) Kind is ShapeSlice — ShapeArray for
+	// a fixed-size array payload ([4]byte, [2]Item) — and Elem is the
 	// element's shape; Name keeps describing the ELEMENT (empty for a primitive
 	// element), so type registration, schemaName and referencedSchemaNames need
 	// no slice awareness: the component emitted for []Item is Item, and the
@@ -159,8 +160,13 @@ var WellKnownTypeNames = map[string]bool{
 type ShapeKind string
 
 const (
-	ShapePointer   ShapeKind = "pointer"
-	ShapeSlice     ShapeKind = "slice"
+	ShapePointer ShapeKind = "pointer"
+	ShapeSlice   ShapeKind = "slice"
+	// ShapeArray is a fixed-size array ([N]T, any N — 0 and a constant name
+	// included; the length is not recorded). It is kept apart from ShapeSlice
+	// only because encoding/json base64-encodes a byte SLICE but writes a byte
+	// array element by element; every other consumer treats it as a slice.
+	ShapeArray     ShapeKind = "array"
 	ShapeMap       ShapeKind = "map"
 	ShapeNamed     ShapeKind = "named"     // a declared or qualified type name (Address, time.Time)
 	ShapePrimitive ShapeKind = "primitive" // a builtin (string, int64, byte, any, interface{})
@@ -179,7 +185,8 @@ type TypeShape struct {
 	Name string
 	// Key is the map key shape (ShapeMap only).
 	Key *TypeShape
-	// Elem is the pointed-to / element / map-value shape (ShapePointer, ShapeSlice, ShapeMap).
+	// Elem is the pointed-to / element / map-value shape (ShapePointer, ShapeSlice,
+	// ShapeArray, ShapeMap).
 	Elem *TypeShape
 }
 

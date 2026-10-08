@@ -61,13 +61,15 @@ const bareReturnRouteKey = "GET /payload"
 // bareReturnPayloads is every payload T a bare handler return is compared
 // against server.Result[T] for: builtins (one behind a pointer), well-known
 // types, unresolvable names, local named non-structs, slices, the empty
-// interface, a map, and the project-struct controls.
+// interface, a map, and the project-struct controls. The fixed-size arrays
+// (#98) take the same payload path as a slice.
 var bareReturnPayloads = []string{
 	"int64", "*int64", "string", "bool", "float64", "any",
 	"time.Time", "*time.Time", "uuid.UUID", "json.RawMessage",
 	"decimal.Decimal", "Missing",
 	"Cents", "Tags",
 	"[]Address", "[]*Address", "[]string", "[]time.Time", "[]decimal.Decimal",
+	"[4]byte", "[4]*byte", "[3]int", "[2]Address", "[2]*Address", "[2]time.Time",
 	"interface{}", "map[string]Cents",
 	"Address", "*Address",
 }

@@ -192,9 +192,11 @@ func constraintsFor(shape models.TypeShape, underlyingKind string, constraints m
 	// minLength/maxLength. Map types are handled by a parallel branch below: their
 	// effectiveKind is "" (neither string nor numeric), so min/max/len route to
 	// minProperties/maxProperties (entry-count cardinality) rather than being dropped.
+	// Only a SLICE is base64: a [N]byte array is written element by element, so
+	// it takes the slice cardinality (minItems/maxItems) like any other array.
 	byteSlice := base.Kind == models.ShapeSlice && base.Elem != nil &&
 		(base.Elem.Name == goTypeByte || base.Elem.Name == goTypeUint8)
-	isSlice := base.Kind == models.ShapeSlice && !byteSlice
+	isSlice := isSequence(base) && !byteSlice
 	isMap := base.Kind == models.ShapeMap
 	// base.Name is "" for every container, which effectiveKind classifies as
 	// neither string nor numeric — exactly what the "[]string"/"map[..." strings
@@ -247,12 +249,12 @@ func applyValidationConstraints(prop *OpenAPIProperty, field *models.FieldInfo) 
 	if len(field.ElementConstraints) == 0 || prop.Items == nil || prop.Items.Ref != "" {
 		return
 	}
-	// Element shape: unwrap ONE pointer then ONE slice layer ("*[]Address" -> "Address").
+	// Element shape: unwrap ONE pointer then ONE slice or array layer ("*[]Address" -> "Address").
 	elem := field.Shape
 	if elem.Kind == models.ShapePointer && elem.Elem != nil {
 		elem = *elem.Elem
 	}
-	if elem.Kind == models.ShapeSlice && elem.Elem != nil {
+	if isSequence(elem) && elem.Elem != nil {
 		elem = *elem.Elem
 	}
 	constraintsFor(elem, field.UnderlyingKind, field.ElementConstraints).applyTo(prop.Items)

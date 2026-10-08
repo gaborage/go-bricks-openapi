@@ -17,6 +17,9 @@ func ptrOf(s models.TypeShape) models.TypeShape {
 func sliceOf(s models.TypeShape) models.TypeShape {
 	return models.TypeShape{Kind: models.ShapeSlice, Elem: &s}
 }
+func arrayOf(s models.TypeShape) models.TypeShape {
+	return models.TypeShape{Kind: models.ShapeArray, Elem: &s}
+}
 func mapOf(k, v models.TypeShape) models.TypeShape {
 	return models.TypeShape{Kind: models.ShapeMap, Key: &k, Elem: &v}
 }
@@ -25,5 +28,11 @@ func unknownShape() models.TypeShape { return models.TypeShape{Kind: models.Shap
 // payloadSlice is the *TypeShape a response TypeInfo carries for a []T payload.
 func payloadSlice(s models.TypeShape) *models.TypeShape {
 	sh := sliceOf(s)
+	return &sh
+}
+
+// payloadArray is the *TypeShape a response TypeInfo carries for a [N]T payload.
+func payloadArray(s models.TypeShape) *models.TypeShape {
+	sh := arrayOf(s)
 	return &sh
 }

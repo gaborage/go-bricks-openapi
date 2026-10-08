@@ -885,14 +885,14 @@ func metaEnvelopeSchema() *OpenAPIProperty {
 }
 
 // responsePayloadSchema returns the bare schema for a response component: an
-// array when the payload is a slice, the inline schema of a well-known or
+// array when the payload is a slice or fixed-size array, the inline schema of a well-known or
 // builtin payload, a $ref to the named type, or a generic object when the type
 // is unnamed.
 func responsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
 	if response == nil {
 		return &OpenAPIProperty{Type: typeObject}
 	}
-	if response.Shape != nil && response.Shape.Kind == models.ShapeSlice {
+	if response.Shape != nil && isSequence(*response.Shape) {
 		return sliceResponsePayloadSchema(response)
 	}
 	if prop, ok := inlinePayloadSchema(response.Shape); ok {
@@ -931,8 +931,9 @@ func inlinePayloadSchema(shape *models.TypeShape) (*OpenAPIProperty, bool) {
 	return nil, false
 }
 
-// sliceResponsePayloadSchema builds the schema for a []T payload — `type: array`
-// unless the slice itself is a well-known shape. Name still
+// sliceResponsePayloadSchema builds the schema for a []T or [N]T payload —
+// `type: array` unless the slice itself is a well-known shape ([]byte; never
+// an array, see wellKnownShape). Name still
 // carries the ELEMENT type (see models.TypeInfo.Shape), so a named element's
 // items is the $ref to its component — the same component referencedSchemaNames
 // already marks from response.Name, which is why no slice awareness is needed
@@ -1371,7 +1372,7 @@ func payloadNamesComponent(ti *models.TypeInfo) bool {
 	if ti.JOSE || ti.Shape == nil {
 		return true
 	}
-	if ti.Shape.Kind == models.ShapeSlice {
+	if isSequence(*ti.Shape) {
 		if _, ok := wellKnownShape(*ti.Shape); ok {
 			return false
 		}
@@ -1542,7 +1543,7 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 		// The old code ran isSliceType over the VALUE string, which itself
 		// stripped one leading "*" — hence the inner unwrap, so
 		// map[string]*[]Address still wraps the $ref in an array.
-		if unwrapped.Elem != nil && shapeAfterPointer(*unwrapped.Elem).Kind == models.ShapeSlice {
+		if unwrapped.Elem != nil && isSequence(shapeAfterPointer(*unwrapped.Elem)) {
 			prop.AdditionalProperties = &OpenAPIProperty{Type: typeArray, Items: ref}
 		} else {
 			prop.AdditionalProperties = ref
@@ -1559,7 +1560,7 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 	// the builtin mapping runs before applyValidationConstraints, so an explicit
 	// bound still overwrites the unsigned floor.
 	if field.UnderlyingKind != "" {
-		if unwrapped.Kind == models.ShapeSlice {
+		if isSequence(unwrapped) {
 			prop.Type = typeArray
 			prop.Items = namedScalarItems(unwrapped.Elem, field)
 			applyValidationConstraints(prop, field) // minItems/maxItems on the array, dive rules on items
@@ -1587,7 +1588,7 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 	// tests the raw shape, while unwrapped has already shed that one pointer. The
 	// prop.Type != "" term keeps `nullable` off a typeless schema (plan 017
 	// made any/interface{} emit no type), where it would have nothing to extend.
-	if isPointerField(field) && unwrapped.Kind != models.ShapeSlice &&
+	if isPointerField(field) && !isSequence(unwrapped) &&
 		unwrapped.Kind != models.ShapeMap && prop.Type != "" {
 		prop.Nullable = true
 	}
@@ -1601,7 +1602,7 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 // keywords — which is why this is a distinct path.
 func (g *OpenAPIGenerator) refProperty(field *models.FieldInfo) *OpenAPIProperty {
 	ref := &OpenAPIProperty{Ref: refPath(field.RefName)}
-	if shapeAfterPointer(field.Shape).Kind == models.ShapeSlice {
+	if isSequence(shapeAfterPointer(field.Shape)) {
 		// The inner $ref must stand alone, but the array wrapper carries the
 		// field's documentation and cardinality (minItems/maxItems). Element-scope
 		// (dive) rules have nowhere valid to go on a $ref element, so they drop.
@@ -1647,6 +1648,15 @@ func shapeAfterPointer(s models.TypeShape) models.TypeShape {
 		return *s.Elem
 	}
 	return s
+}
+
+// isSequence reports whether s is a slice or a fixed-size array level. Every
+// rule here treats the two alike except the base64 rules (wellKnownShape's
+// []byte arm and constraintsFor's byteSlice test), which match a slice only:
+// encoding/json base64-encodes a byte slice but writes a byte array element by
+// element (#98).
+func isSequence(s models.TypeShape) bool {
+	return s.Kind == models.ShapeSlice || s.Kind == models.ShapeArray
 }
 
 // wellKnownType holds the OpenAPI type/format for a recognized stdlib/library type.
@@ -1703,6 +1713,8 @@ var wellKnownFormats = map[string]wellKnownType{
 //
 // encoding/json marshals a []byte as base64 text, which OpenAPI 3.0 spells
 // `format: byte`; `binary` means raw octets, which no JSON or JOSE body carries.
+// The rule matches a SLICE only: encoding/json writes a [N]byte array element
+// by element, so an array (ShapeArray) falls through to the integer-array path.
 func wellKnownShape(s models.TypeShape) (wellKnownType, bool) {
 	if s.Kind == models.ShapeSlice && s.Elem != nil &&
 		(s.Elem.Name == goTypeByte || s.Elem.Name == goTypeUint8) {
@@ -1726,8 +1738,8 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, shape models.
 		return
 	}
 
-	// Handle arrays
-	if s.Kind == models.ShapeSlice {
+	// Handle slices and fixed-size arrays
+	if isSequence(s) {
 		prop.Type = typeArray
 		prop.Items = &OpenAPIProperty{}
 		if s.Elem != nil {
@@ -1761,7 +1773,7 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, shape models.
 func namedScalarItems(elem *models.TypeShape, field *models.FieldInfo) *OpenAPIProperty {
 	items := &OpenAPIProperty{}
 	if elem != nil {
-		if s := shapeAfterPointer(*elem); s.Kind == models.ShapeSlice {
+		if s := shapeAfterPointer(*elem); isSequence(s) {
 			items.Type = typeArray
 			items.Items = namedScalarItems(s.Elem, field)
 			return items

@@ -1,0 +1,616 @@
+openapi: 3.0.1
+info:
+  title: Fixed_array API
+  version: 1.0.0
+  description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
+paths:
+  /v1/addresses:
+    get:
+      operationId: fixedarrayAddresses
+      summary: GET /v1/addresses
+      tags:
+        - keys
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Address'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/addresses/pointers:
+    get:
+      operationId: fixedarrayAddressPointers
+      summary: GET /v1/addresses/pointers
+      tags:
+        - keys
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Address'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/blob:
+    get:
+      operationId: fixedarrayBlob
+      summary: GET /v1/blob
+      tags:
+        - keys
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+                    format: byte
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/counts:
+    get:
+      operationId: fixedarrayCounts
+      summary: GET /v1/counts
+      tags:
+        - keys
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: integer
+                      format: int64
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/keys:
+    get:
+      operationId: fixedarrayListKeys
+      summary: GET /v1/keys
+      tags:
+        - keys
+      parameters:
+        - name: prefix
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: integer
+              format: int32
+              minimum: 0
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      operationId: fixedarrayCreateKey
+      summary: POST /v1/keys
+      tags:
+        - keys
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateKeyReq'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/keys/meta:
+    get:
+      operationId: fixedarrayKeyWithMeta
+      summary: GET /v1/keys/meta
+      tags:
+        - keys
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/keys/pointers:
+    get:
+      operationId: fixedarrayKeyPointers
+      summary: GET /v1/keys/pointers
+      tags:
+        - keys
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/times:
+    get:
+      operationId: fixedarrayTimes
+      summary: GET /v1/times
+      tags:
+        - keys
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: string
+                      format: date-time
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Address:
+      type: object
+      properties:
+        street:
+          type: string
+    CreateKeyReq:
+      type: object
+      properties:
+        addrMap:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: '#/components/schemas/Address'
+        addrPtrs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
+        addrs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
+        amounts:
+          type: array
+          items:
+            type: integer
+            format: int64
+            minimum: 1
+        blobs:
+          type: array
+          items:
+            type: string
+            format: byte
+        bounded:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 200
+          minItems: 1
+          maxItems: 4
+        boundedWide:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 200
+          minItems: 1
+          maxItems: 4
+        bytePtrs:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        digest:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        empty:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        flags:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        ints:
+          type: array
+          items:
+            type: integer
+            format: int64
+        key:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        keyMap:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: integer
+              format: int32
+              minimum: 0
+        keyPairs:
+          type: array
+          items:
+            type: array
+            items:
+              type: integer
+              format: int32
+              minimum: 0
+        keys:
+          type: array
+          items:
+            type: array
+            items:
+              type: integer
+              format: int32
+              minimum: 0
+        maybeAddrs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
+        maybeInts:
+          type: array
+          items:
+            type: integer
+            format: int64
+        maybeKey:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        maybeRaw:
+          type: string
+          format: byte
+        names:
+          type: array
+          items:
+            type: string
+            minLength: 2
+        octets:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        raw:
+          type: string
+          format: byte
+        rawOctets:
+          type: string
+          format: byte
+        sample:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        sampleWide:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        sized:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        wide:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code (e.g. BAD_REQUEST, NOT_FOUND, INTERNAL_ERROR, or a custom business code)
+            details:
+              type: object
+              properties:
+                validationErrors:
+                  type: array
+                  description: Per-field validation failures (400 validation errors)
+                  items:
+                    type: object
+                    properties:
+                      field:
+                        type: string
+                        description: Field that failed validation
+                      message:
+                        type: string
+                        description: Violated validation rule
+                      value:
+                        description: Submitted value (any type)
+                  maxItems: 100
+              description: Contextual error payload, emitted in development environments only
+            message:
+              type: string
+              description: Human-readable error message
+          description: Error details
+        meta:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+              description: RFC3339 response timestamp
+            traceId:
+              type: string
+              description: W3C trace identifier for the request
+      required:
+        - error
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+      description: Tenant identifier. Enforced only when the service runs with multitenancy enabled and a header-based tenant resolver; a missing or invalid tenant yields HTTP 400. Deployments resolving the tenant from the subdomain or URL path do not read this header.
+security:
+  - TenantID: []
