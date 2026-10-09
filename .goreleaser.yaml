@@ -52,10 +52,10 @@ checksum:
   name_template: "checksums.txt"
 
 # Release notes come from the CHANGELOG.md section (release-please-owned), passed
-# to `goreleaser release --release-notes=...` by release.yml. Disable GoReleaser's
-# own changelog so CHANGELOG.md stays the single source of truth for release notes.
-changelog:
-  disable: true
+# to `goreleaser release --release-notes=...` by release.yml. With a notes file the
+# changelog pipe uses it verbatim and never generates its own. Do NOT set
+# `changelog.disable: true`: that skips the whole pipe, notes file included, and
+# publishes an empty release body (v0.3.0-v0.4.2 shipped that way).
 
 release:
   github:
