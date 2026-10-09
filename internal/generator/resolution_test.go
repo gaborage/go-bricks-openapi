@@ -20,7 +20,6 @@ func resolved(shape, res models.TypeShape) *models.FieldInfo {
 // at depth: a ref, a kind-only scalar, and the {} of a Marshaler or recursive
 // leaf (never descending into a Marshaler's Elem).
 func TestSetTypeAndFormatResolutionLeaves(t *testing.T) {
-	gen := New(defaultTitle, defaultVersion, defaultDescription)
 	ref := &OpenAPIProperty{Ref: refPath("User")}
 	arr := func(items *OpenAPIProperty) *OpenAPIProperty { return &OpenAPIProperty{Type: typeArray, Items: items} }
 	obj := func(v *OpenAPIProperty) *OpenAPIProperty {
@@ -42,7 +41,7 @@ func TestSetTypeAndFormatResolutionLeaves(t *testing.T) {
 	}
 	for _, tc := range cases {
 		prop := &OpenAPIProperty{}
-		gen.setTypeAndFormat(prop, tc.shape)
+		setTypeAndFormat(prop, tc.shape)
 		assert.Equal(t, tc.want, prop, tc.name)
 	}
 }

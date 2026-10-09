@@ -60,8 +60,9 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
                   meta:
                     type: object
                     properties:
@@ -130,6 +131,16 @@ components:
               description: W3C trace identifier for the request
       required:
         - error
+    User:
+      type: object
+      properties:
+        email:
+          type: string
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
     UserResp:
       type: object
       properties:

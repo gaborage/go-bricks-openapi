@@ -1359,8 +1359,6 @@ func TestFieldInfoToProperty(t *testing.T) {
 }
 
 func TestSetTypeAndFormat(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
-
 	tests := []struct {
 		name           string
 		shape          models.TypeShape
@@ -1402,7 +1400,7 @@ func TestSetTypeAndFormat(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			prop := &OpenAPIProperty{}
-			gen.setTypeAndFormat(prop, tt.shape)
+			setTypeAndFormat(prop, tt.shape)
 
 			if prop.Type != tt.expectedType {
 				t.Errorf(expectedTypeErrorMsg, tt.expectedType, prop.Type)
@@ -1423,7 +1421,6 @@ func TestSetTypeAndFormat(t *testing.T) {
 }
 
 func TestSetTypeAndFormatWellKnownTypes(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
 	tests := []struct {
 		name                 string
 		shape                models.TypeShape
@@ -1456,7 +1453,7 @@ func TestSetTypeAndFormatWellKnownTypes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			prop := &OpenAPIProperty{}
-			gen.setTypeAndFormat(prop, tt.shape)
+			setTypeAndFormat(prop, tt.shape)
 			assert.Equal(t, tt.wantType, prop.Type)
 			assert.Equal(t, tt.wantFormat, prop.Format)
 			assert.Nil(t, prop.Items, "well-known types must not be modeled as arrays")
@@ -1470,7 +1467,6 @@ func TestSetTypeAndFormatWellKnownTypes(t *testing.T) {
 // path, and no range bound invented for Month or Weekday (a zero Month is
 // written as 0, and nothing rejects 13).
 func TestSetTypeAndFormatWellKnownStdlibScalarPositions(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
 	// descend follows steps from prop: 'i' into an array's items, 'a' into an
 	// object's additionalProperties.
 	descend := func(t *testing.T, prop *OpenAPIProperty, steps string) *OpenAPIProperty {
@@ -1509,7 +1505,7 @@ func TestSetTypeAndFormatWellKnownStdlibScalarPositions(t *testing.T) {
 		} {
 			t.Run(name+" "+pos.name, func(t *testing.T) {
 				prop := &OpenAPIProperty{}
-				gen.setTypeAndFormat(prop, pos.shape)
+				setTypeAndFormat(prop, pos.shape)
 				leaf := descend(t, prop, pos.steps)
 				assert.Equal(t, want.typ, leaf.Type)
 				assert.Equal(t, want.format, leaf.Format)
@@ -1588,14 +1584,13 @@ func TestFieldInfoToPropertyWellKnownStdlibScalars(t *testing.T) {
 }
 
 func TestSetTypeAndFormatUnsignedMinimum(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
 	// Unsigned integers carry minimum:0; signed integers do not. uint and
 	// uint32 take int64 because int32 cannot hold their range.
 	for _, ut := range []struct {
 		goType, format string
 	}{{"uint", formatInt64}, {"uint8", formatInt32}, {"uint16", formatInt32}, {"uint32", formatInt64}, {"uint64", formatInt64}} {
 		prop := &OpenAPIProperty{}
-		gen.setTypeAndFormat(prop, prim(ut.goType))
+		setTypeAndFormat(prop, prim(ut.goType))
 		assert.Equal(t, typeInteger, prop.Type, ut.goType)
 		assert.Equal(t, ut.format, prop.Format, ut.goType)
 		if assert.NotNil(t, prop.Minimum, "%s must carry minimum:0", ut.goType) {
@@ -1604,17 +1599,15 @@ func TestSetTypeAndFormatUnsignedMinimum(t *testing.T) {
 	}
 	for _, st := range []string{"int", "int8", "int16", "int32", "int64"} {
 		prop := &OpenAPIProperty{}
-		gen.setTypeAndFormat(prop, prim(st))
+		setTypeAndFormat(prop, prim(st))
 		assert.Nil(t, prop.Minimum, "%s (signed) must NOT carry minimum", st)
 	}
 }
 
 func TestSetTypeAndFormatMaps(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
-
 	t.Run("primitive value", func(t *testing.T) {
 		prop := &OpenAPIProperty{}
-		gen.setTypeAndFormat(prop, mapOf(prim("string"), prim("string")))
+		setTypeAndFormat(prop, mapOf(prim("string"), prim("string")))
 		assert.Equal(t, typeObject, prop.Type)
 		require.NotNil(t, prop.AdditionalProperties)
 		assert.Equal(t, typeString, prop.AdditionalProperties.Type)
@@ -1622,7 +1615,7 @@ func TestSetTypeAndFormatMaps(t *testing.T) {
 
 	t.Run("integer value carries format", func(t *testing.T) {
 		prop := &OpenAPIProperty{}
-		gen.setTypeAndFormat(prop, mapOf(prim("string"), prim("int64")))
+		setTypeAndFormat(prop, mapOf(prim("string"), prim("int64")))
 		require.NotNil(t, prop.AdditionalProperties)
 		assert.Equal(t, typeInteger, prop.AdditionalProperties.Type)
 		assert.Equal(t, formatInt64, prop.AdditionalProperties.Format)
@@ -1630,7 +1623,7 @@ func TestSetTypeAndFormatMaps(t *testing.T) {
 
 	t.Run("interface{} value is an empty (unconstrained) schema", func(t *testing.T) {
 		prop := &OpenAPIProperty{}
-		gen.setTypeAndFormat(prop, mapOf(prim("string"), prim("interface{}")))
+		setTypeAndFormat(prop, mapOf(prim("string"), prim("interface{}")))
 		assert.Equal(t, typeObject, prop.Type)
 		require.NotNil(t, prop.AdditionalProperties)
 		assert.Empty(t, prop.AdditionalProperties.Type)
@@ -1641,7 +1634,7 @@ func TestSetTypeAndFormatMaps(t *testing.T) {
 	// longer carry type:object for an "any" value.
 	t.Run("any value is an empty (unconstrained) schema", func(t *testing.T) {
 		prop := &OpenAPIProperty{}
-		gen.setTypeAndFormat(prop, mapOf(prim("string"), prim("any")))
+		setTypeAndFormat(prop, mapOf(prim("string"), prim("any")))
 		assert.Equal(t, typeObject, prop.Type)
 		require.NotNil(t, prop.AdditionalProperties)
 		assert.Empty(t, prop.AdditionalProperties.Type)
@@ -1842,10 +1835,9 @@ func TestApplyValidationConstraintsElementPathPointerToSlice(t *testing.T) {
 func TestApplyValidationConstraintsUintFloorOverwritten(t *testing.T) {
 	// Ordering invariant: setTypeAndFormat pre-stamps minimum: 0 for uints and
 	// relies on constraint application running afterwards to overwrite it.
-	var gen OpenAPIGenerator
 	prop := &OpenAPIProperty{}
 	field := &models.FieldInfo{Shape: prim("uint"), Constraints: map[string]string{"min": "5"}}
-	gen.setTypeAndFormat(prop, field.Shape)
+	setTypeAndFormat(prop, field.Shape)
 	if prop.Minimum == nil || *prop.Minimum != 0 {
 		t.Fatalf("precondition: uint pre-stamp missing: %+v", prop)
 	}
@@ -1855,7 +1847,7 @@ func TestApplyValidationConstraintsUintFloorOverwritten(t *testing.T) {
 	}
 	// And with no constraint, the floor survives.
 	bare := &OpenAPIProperty{}
-	gen.setTypeAndFormat(bare, prim("uint"))
+	setTypeAndFormat(bare, prim("uint"))
 	applyValidationConstraints(bare, &models.FieldInfo{Shape: prim("uint")})
 	if bare.Minimum == nil || *bare.Minimum != 0 {
 		t.Errorf("empty constraints must leave the uint floor: %+v", bare)
@@ -2926,20 +2918,22 @@ func TestResponsePayloadSchemaWellKnownSlice(t *testing.T) {
 
 func TestResponsePayloadSchemaSliceWithoutElement(t *testing.T) {
 	// Defensive: a slice Shape with no Elem (never stamped by the analyzer)
-	// still yields a valid array rather than an items-less schema.
+	// still yields a valid array, items {} (setTypeAndFormat), rather than an
+	// items-less schema.
 	got := responsePayloadSchema(&models.TypeInfo{Shape: &models.TypeShape{Kind: models.ShapeSlice}})
 	assert.Equal(t, typeArray, got.Type)
 	require.NotNil(t, got.Items)
-	assert.Equal(t, typeObject, got.Items.Type)
+	assert.Equal(t, &OpenAPIProperty{}, got.Items)
 }
 
 // payloadShape is the *TypeShape a response TypeInfo carries for a non-slice payload.
 func payloadShape(s models.TypeShape) *models.TypeShape { return &s }
 
 // TestResponsePayloadSchemaInlineScalars pins that a non-slice well-known or
-// builtin payload documents inline — never as a $ref, even when the analyzer
-// kept its Name (well-known types do), because no component is ever emitted
-// for it. One pointer level is shed, as on the field path.
+// builtin payload, which the analyzer resolves to itself, documents inline —
+// never as a $ref, even when the analyzer kept its Name (well-known types do),
+// because no component is ever emitted for it. Pointers are shed, as on the
+// field path.
 func TestResponsePayloadSchemaInlineScalars(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -2948,23 +2942,23 @@ func TestResponsePayloadSchemaInlineScalars(t *testing.T) {
 		wantFormat string
 		wantMin    bool
 	}{
-		{"json.RawMessage", &models.TypeInfo{Name: "RawMessage", Shape: payloadShape(named(goTypeRawMessage))}, "", "", false},
-		{"*json.RawMessage", &models.TypeInfo{Name: "RawMessage", Shape: payloadShape(ptrOf(named(goTypeRawMessage)))}, "", "", false},
-		{"time.Time", &models.TypeInfo{Name: "Time", Shape: payloadShape(named(goTypeTimeTime))}, typeString, formatDateTime, false},
-		{"*time.Time", &models.TypeInfo{Name: "Time", Shape: payloadShape(ptrOf(named(goTypeTimeTime)))}, typeString, formatDateTime, false},
-		{"time.Duration", &models.TypeInfo{Name: "Duration", Shape: payloadShape(named(goTypeTimeDuration))}, typeInteger, formatInt64, false},
-		{"uuid.UUID", &models.TypeInfo{Name: "UUID", Shape: payloadShape(named(goTypeUUID))}, typeString, formatUUID, false},
-		{"json.Number", &models.TypeInfo{Name: "Number", Shape: payloadShape(named(goTypeJSONNumber))}, typeNumber, "", false},
-		{"*json.Number", &models.TypeInfo{Name: "Number", Shape: payloadShape(ptrOf(named(goTypeJSONNumber)))}, typeNumber, "", false},
-		{"time.Month", &models.TypeInfo{Name: "Month", Shape: payloadShape(named(goTypeTimeMonth))}, typeInteger, formatInt64, false},
-		{"*time.Weekday", &models.TypeInfo{Name: "Weekday", Shape: payloadShape(ptrOf(named(goTypeTimeWeekday)))}, typeInteger, formatInt64, false},
-		{"string", &models.TypeInfo{Shape: payloadShape(prim(goTypeString))}, typeString, "", false},
-		{"*string", &models.TypeInfo{Shape: payloadShape(ptrOf(prim(goTypeString)))}, typeString, "", false},
-		{"int64", &models.TypeInfo{Shape: payloadShape(prim(formatInt64))}, typeInteger, formatInt64, false},
-		{"uint64", &models.TypeInfo{Shape: payloadShape(prim(goTypeUint64))}, typeInteger, formatInt64, true},
-		{"bool", &models.TypeInfo{Shape: payloadShape(prim(goTypeBool))}, typeBoolean, "", false},
-		{"any", &models.TypeInfo{Shape: payloadShape(prim(goTypeAny))}, "", "", false},
-		{"interface{}", &models.TypeInfo{Shape: payloadShape(prim(goTypeInterface))}, "", "", false},
+		{"json.RawMessage", resolvedPayload(&models.TypeInfo{Name: "RawMessage", Shape: payloadShape(named(goTypeRawMessage))}), "", "", false},
+		{"*json.RawMessage", resolvedPayload(&models.TypeInfo{Name: "RawMessage", Shape: payloadShape(ptrOf(named(goTypeRawMessage)))}), "", "", false},
+		{"time.Time", resolvedPayload(&models.TypeInfo{Name: "Time", Shape: payloadShape(named(goTypeTimeTime))}), typeString, formatDateTime, false},
+		{"*time.Time", resolvedPayload(&models.TypeInfo{Name: "Time", Shape: payloadShape(ptrOf(named(goTypeTimeTime)))}), typeString, formatDateTime, false},
+		{"time.Duration", resolvedPayload(&models.TypeInfo{Name: "Duration", Shape: payloadShape(named(goTypeTimeDuration))}), typeInteger, formatInt64, false},
+		{"uuid.UUID", resolvedPayload(&models.TypeInfo{Name: "UUID", Shape: payloadShape(named(goTypeUUID))}), typeString, formatUUID, false},
+		{"json.Number", resolvedPayload(&models.TypeInfo{Name: "Number", Shape: payloadShape(named(goTypeJSONNumber))}), typeNumber, "", false},
+		{"*json.Number", resolvedPayload(&models.TypeInfo{Name: "Number", Shape: payloadShape(ptrOf(named(goTypeJSONNumber)))}), typeNumber, "", false},
+		{"time.Month", resolvedPayload(&models.TypeInfo{Name: "Month", Shape: payloadShape(named(goTypeTimeMonth))}), typeInteger, formatInt64, false},
+		{"*time.Weekday", resolvedPayload(&models.TypeInfo{Name: "Weekday", Shape: payloadShape(ptrOf(named(goTypeTimeWeekday)))}), typeInteger, formatInt64, false},
+		{"string", resolvedPayload(&models.TypeInfo{Shape: payloadShape(prim(goTypeString))}), typeString, "", false},
+		{"*string", resolvedPayload(&models.TypeInfo{Shape: payloadShape(ptrOf(prim(goTypeString)))}), typeString, "", false},
+		{"int64", resolvedPayload(&models.TypeInfo{Shape: payloadShape(prim(formatInt64))}), typeInteger, formatInt64, false},
+		{"uint64", resolvedPayload(&models.TypeInfo{Shape: payloadShape(prim(goTypeUint64))}), typeInteger, formatInt64, true},
+		{"bool", resolvedPayload(&models.TypeInfo{Shape: payloadShape(prim(goTypeBool))}), typeBoolean, "", false},
+		{"any", resolvedPayload(&models.TypeInfo{Shape: payloadShape(prim(goTypeAny))}), "", "", false},
+		{"interface{}", resolvedPayload(&models.TypeInfo{Shape: payloadShape(prim(goTypeInterface))}), "", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2997,15 +2991,6 @@ func TestResponsePayloadSchemaNamedShapes(t *testing.T) {
 	assert.Equal(t, typeObject, fallback.Type)
 }
 
-// TestInlinePayloadSchemaRejects covers the inputs the inline path declines.
-func TestInlinePayloadSchemaRejects(t *testing.T) {
-	for _, shape := range []*models.TypeShape{nil, payloadShape(named("Item")), payloadShape(unknownShape())} {
-		prop, ok := inlinePayloadSchema(shape)
-		assert.False(t, ok)
-		assert.Nil(t, prop)
-	}
-}
-
 // TestBuildResponsesInlineScalarPayloads covers both callers: an enveloped
 // route's data property and a WithRawResponse route's bare body, each typed
 // inline with no description (only the untyped fallback is annotated).
@@ -3013,7 +2998,7 @@ func TestBuildResponsesInlineScalarPayloads(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 	enveloped := gen.buildResponses(&models.Route{
 		Method:   "GET",
-		Response: &models.TypeInfo{Name: "Time", Package: "time", Shape: payloadShape(named(goTypeTimeTime))},
+		Response: resolvedPayload(&models.TypeInfo{Name: "Time", Package: "time", Shape: payloadShape(named(goTypeTimeTime))}),
 	})
 	data := enveloped["200"].Content[mediaJSON].Schema.Properties[propNameData]
 	require.NotNil(t, data)
@@ -3025,7 +3010,7 @@ func TestBuildResponsesInlineScalarPayloads(t *testing.T) {
 	raw := gen.buildResponses(&models.Route{
 		Method:      "GET",
 		RawResponse: true,
-		Response:    &models.TypeInfo{Name: "RawMessage", Package: "json", Shape: payloadShape(ptrOf(named(goTypeRawMessage)))},
+		Response:    resolvedPayload(&models.TypeInfo{Name: "RawMessage", Package: "json", Shape: payloadShape(ptrOf(named(goTypeRawMessage)))}),
 	})
 	body := raw["200"].Content[mediaJSON].Schema
 	require.NotNil(t, body)
@@ -3046,7 +3031,7 @@ func TestSuccessEnvelopeSchemaSliceData(t *testing.T) {
 	assert.Empty(t, data.Description, "a typed array is not the untyped 'Response data' fallback")
 
 	// The untyped fallback keeps its annotation.
-	assert.Equal(t, "Response data", successEnvelopeSchema(nil).Properties[propNameData].Description)
+	assert.Equal(t, responseDataDescription, successEnvelopeSchema(nil).Properties[propNameData].Description)
 }
 
 func TestBuildResponsesSliceEnvelope(t *testing.T) {
@@ -3960,10 +3945,8 @@ func TestApplyExample(t *testing.T) {
 // maximum) and rune is int32 (integer/int32, signed, so no minimum). uintptr has
 // no meaningful API contract and stays the object fallback.
 func TestSetTypeAndFormatPredeclaredAliases(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
-
 	byteProp := &OpenAPIProperty{}
-	gen.setTypeAndFormat(byteProp, prim(goTypeByte))
+	setTypeAndFormat(byteProp, prim(goTypeByte))
 	assert.Equal(t, typeInteger, byteProp.Type)
 	assert.Equal(t, formatInt32, byteProp.Format)
 	if assert.NotNil(t, byteProp.Minimum, "byte is unsigned: minimum:0") {
@@ -3972,21 +3955,21 @@ func TestSetTypeAndFormatPredeclaredAliases(t *testing.T) {
 	assert.Nil(t, byteProp.Maximum, "no unsigned type emits a maximum")
 
 	runeProp := &OpenAPIProperty{}
-	gen.setTypeAndFormat(runeProp, prim(goTypeRune))
+	setTypeAndFormat(runeProp, prim(goTypeRune))
 	assert.Equal(t, typeInteger, runeProp.Type)
 	assert.Equal(t, formatInt32, runeProp.Format)
 	assert.Nil(t, runeProp.Minimum, "rune is signed (int32)")
 
 	// []rune is an array of int32 — NOT a base64 string (only []byte is).
 	runes := &OpenAPIProperty{}
-	gen.setTypeAndFormat(runes, sliceOf(prim(goTypeRune)))
+	setTypeAndFormat(runes, sliceOf(prim(goTypeRune)))
 	assert.Equal(t, typeArray, runes.Type)
 	require.NotNil(t, runes.Items)
 	assert.Equal(t, typeInteger, runes.Items.Type)
 	assert.Equal(t, formatInt32, runes.Items.Format)
 
 	ptr := &OpenAPIProperty{}
-	gen.setTypeAndFormat(ptr, prim(goTypeUintptr))
+	setTypeAndFormat(ptr, prim(goTypeUintptr))
 	assert.Equal(t, typeObject, ptr.Type, "uintptr is a machine address, not an API value")
 	assert.Empty(t, ptr.Format)
 }
@@ -4005,9 +3988,8 @@ func TestResponsePayloadSchemaNestedByteSliceItems(t *testing.T) {
 // TestSetTypeAndFormatNestedByteSlice locks the field-path counterpart of the
 // payload case above: [][]byte is an array of base64 strings.
 func TestSetTypeAndFormatNestedByteSlice(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
 	prop := &OpenAPIProperty{}
-	gen.setTypeAndFormat(prop, sliceOf(sliceOf(prim(goTypeByte))))
+	setTypeAndFormat(prop, sliceOf(sliceOf(prim(goTypeByte))))
 	assert.Equal(t, typeArray, prop.Type)
 	require.NotNil(t, prop.Items)
 	assert.Equal(t, typeString, prop.Items.Type)
@@ -4015,7 +3997,7 @@ func TestSetTypeAndFormatNestedByteSlice(t *testing.T) {
 
 	// map[string][]byte: every value is a base64 string too.
 	m := &OpenAPIProperty{}
-	gen.setTypeAndFormat(m, mapOf(prim(goTypeString), sliceOf(prim(goTypeByte))))
+	setTypeAndFormat(m, mapOf(prim(goTypeString), sliceOf(prim(goTypeByte))))
 	assert.Equal(t, typeObject, m.Type)
 	require.NotNil(t, m.AdditionalProperties)
 	assert.Equal(t, typeString, m.AdditionalProperties.Type)
@@ -4248,17 +4230,18 @@ func TestErrorStatusDescriptionFallback(t *testing.T) {
 // mark its short Name referenced. The analyzer keeps a well-known payload's
 // Name (UUID for uuid.UUID), so without the guard a coincidental project
 // struct of that name that nothing references — a params-only request type —
-// would be emitted as an orphan component. A payload with no Shape still
+// would be emitted as an orphan component. The analyzer resolves such a
+// payload, so it carries a Resolution. A payload with no Shape still
 // references its component.
 func TestReferencedSchemaNamesSkipsInlinePayloads(t *testing.T) {
 	routes := []models.Route{
-		{Method: "GET", Path: "/id", Response: &models.TypeInfo{Name: "UUID", Package: "uuid", Shape: payloadShape(named(goTypeUUID))}},
-		{Method: "GET", Path: "/at", Response: &models.TypeInfo{Name: "Time", Package: "time", Shape: payloadShape(sliceOf(ptrOf(named(goTypeTimeTime))))}},
+		{Method: "GET", Path: "/id", Response: resolvedPayload(&models.TypeInfo{Name: "UUID", Package: "uuid", Shape: payloadShape(named(goTypeUUID))})},
+		{Method: "GET", Path: "/at", Response: resolvedPayload(&models.TypeInfo{Name: "Time", Package: "time", Shape: payloadShape(sliceOf(ptrOf(named(goTypeTimeTime))))})},
 		{Method: "GET", Path: "/item", Response: &models.TypeInfo{Name: "Item", Package: "shop", Shape: payloadShape(ptrOf(named("Item")))}},
 		{Method: "GET", Path: "/items", Response: &models.TypeInfo{Name: "Line", Package: "shop", Shape: payloadShape(sliceOf(named("Line")))}},
 		{Method: "GET", Path: "/legacy", Response: &models.TypeInfo{Name: "Legacy", Package: "shop"}},
-		{Method: "GET", Path: "/blob", Response: &models.TypeInfo{Name: "Blob", Package: "shop", Shape: payloadShape(sliceOf(prim(goTypeByte)))}},
-		{Method: "GET", Path: "/count", Response: &models.TypeInfo{Package: "shop", Shape: payloadShape(prim(goTypeString))}},
+		{Method: "GET", Path: "/blob", Response: resolvedPayload(&models.TypeInfo{Name: "Blob", Package: "shop", Shape: payloadShape(sliceOf(prim(goTypeByte)))})},
+		{Method: "GET", Path: "/count", Response: resolvedPayload(&models.TypeInfo{Package: "shop", Shape: payloadShape(prim(goTypeString))})},
 	}
 
 	got := referencedSchemaNames(routes, map[string]*models.TypeInfo{})
@@ -4330,7 +4313,7 @@ func TestGenerateNoOrphanForWellKnownPayloadName(t *testing.T) {
 			Name: "users", Package: "users",
 			Routes: []models.Route{{
 				Method: "GET", Path: "/users/id", HandlerName: "id", Module: "users", Package: "users",
-				Response: &models.TypeInfo{Name: "UUID", Package: "uuid", Shape: payloadShape(named(goTypeUUID))},
+				Response: resolvedPayload(&models.TypeInfo{Name: "UUID", Package: "uuid", Shape: payloadShape(named(goTypeUUID))}),
 			}},
 		}},
 		Types: map[string]*models.TypeInfo{"UUID": localUUID},

@@ -80,3 +80,12 @@ func substNamed(s, leaf models.TypeShape) models.TypeShape {
 func resolvedTo(f *models.FieldInfo, leaf models.TypeShape) *models.FieldInfo {
 	return withResolution(f, substNamed(f.Shape, leaf))
 }
+
+// resolvedPayload returns ti with its Resolution set to a copy of its Shape,
+// as the analyzer stamps a well-known or builtin payload, whose leaves resolve
+// to themselves.
+func resolvedPayload(ti *models.TypeInfo) *models.TypeInfo {
+	r := *ti.Shape
+	ti.Resolution = &r
+	return ti
+}

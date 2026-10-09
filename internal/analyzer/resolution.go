@@ -713,17 +713,25 @@ func (a *ProjectAnalyzer) warnFieldFallback(f *models.FieldInfo, site *fieldSite
 	}
 }
 
+// registerLeafAt registers one ShapeRef leaf in the file its name was
+// written in and stamps its final component name, reporting success. A leaf
+// that cannot register is demoted to a named leaf (it emits object); the
+// caller warns.
+func (a *ProjectAnalyzer) registerLeafAt(leaf *models.TypeShape, site pkgFile, depth int) bool {
+	if reg := a.registerTypeAt(leaf.Name, site.file.Name.Name, site.file, site.path, depth); reg != nil {
+		leaf.Name = reg.Name
+		return true
+	}
+	leaf.Kind = models.ShapeNamed
+	return false
+}
+
 // registerRefLeaf registers one ShapeRef leaf in the file its name was
 // written in, stamping the final component name. A leaf that cannot register
 // is demoted to a named leaf (it emits object) and warns, unless the depth cap
 // truncated it, which raised its own warning.
 func (a *ProjectAnalyzer) registerRefLeaf(leaf *models.TypeShape, f *models.FieldInfo, site pkgFile, depth int) {
-	if reg := a.registerTypeAt(leaf.Name, site.file.Name.Name, site.file, site.path, depth); reg != nil {
-		leaf.Name = reg.Name
-		return
-	}
-	leaf.Kind = models.ShapeNamed
-	if depth > maxTypeRegistrationDepth {
+	if a.registerLeafAt(leaf, site, depth) || depth > maxTypeRegistrationDepth {
 		return
 	}
 	fs := a.fieldSites[f.Resolution]

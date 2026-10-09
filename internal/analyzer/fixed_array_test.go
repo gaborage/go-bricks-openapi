@@ -28,19 +28,21 @@ func TestTypeShapeKeepsArraysApartFromSlices(t *testing.T) {
 }
 
 // fixedArrayPayloadShapes is the payload Shape each fixed-size array type
-// argument must resolve to: the array kind survives the payload path (which
-// sheds one element pointer before decoding the element), and the element
-// keeps describing the component, exactly as for a slice payload.
+// argument must resolve to: the array kind survives the payload path, the
+// element pointer is kept (#110), and the element, one pointer level shed,
+// keeps describing the component, exactly as for a slice payload. rendered is
+// the Shape in renderShape notation; base is payloadBaseShape's element.
 var fixedArrayPayloadShapes = map[string]struct {
-	name string
-	elem models.TypeShape
+	name     string
+	rendered string
+	base     models.TypeShape
 }{
-	"[4]byte":     {elem: models.TypeShape{Kind: models.ShapePrimitive, Name: "byte"}},
-	"[32]uint8":   {elem: models.TypeShape{Kind: models.ShapePrimitive, Name: "uint8"}},
-	"[4]*byte":    {elem: models.TypeShape{Kind: models.ShapePrimitive, Name: "byte"}},
-	"[3]int":      {elem: models.TypeShape{Kind: models.ShapePrimitive, Name: "int"}},
-	"[2]Address":  {name: "Address", elem: models.TypeShape{Kind: models.ShapeNamed, Name: "Address"}},
-	"[2]*Address": {name: "Address", elem: models.TypeShape{Kind: models.ShapeNamed, Name: "Address"}},
+	"[4]byte":     {rendered: "[N]byte", base: models.TypeShape{Kind: models.ShapePrimitive, Name: "byte"}},
+	"[32]uint8":   {rendered: "[N]uint8", base: models.TypeShape{Kind: models.ShapePrimitive, Name: "uint8"}},
+	"[4]*byte":    {rendered: "[N]*byte", base: models.TypeShape{Kind: models.ShapePrimitive, Name: "byte"}},
+	"[3]int":      {rendered: "[N]int", base: models.TypeShape{Kind: models.ShapePrimitive, Name: "int"}},
+	"[2]Address":  {name: "Address", rendered: "[N]Address", base: models.TypeShape{Kind: models.ShapeNamed, Name: "Address"}},
+	"[2]*Address": {name: "Address", rendered: "[N]*Address", base: models.TypeShape{Kind: models.ShapeNamed, Name: "Address"}},
 }
 
 // TestFixedArrayPayloadShapes pins the second decode site (#98):
@@ -56,9 +58,8 @@ func TestFixedArrayPayloadShapes(t *testing.T) {
 				require.NotNil(t, ti)
 				require.NotNil(t, ti.Shape, "an array payload keeps its Shape: the array wrapper is built from it")
 				assert.Equal(t, models.ShapeArray, ti.Shape.Kind)
-				require.NotNil(t, ti.Shape.Elem)
-				assert.Equal(t, want.elem, *ti.Shape.Elem)
-				assert.Equal(t, want.elem, PayloadBaseShape(*ti.Shape), "doctor classifies an array payload by its element")
+				assert.Equal(t, want.rendered, renderShape(*ti.Shape))
+				assert.Equal(t, want.base, payloadBaseShape(*ti.Shape), "an array payload is named by its element")
 				assert.Equal(t, want.name, ti.Name)
 				assert.Empty(t, warnings)
 			})
@@ -66,10 +67,10 @@ func TestFixedArrayPayloadShapes(t *testing.T) {
 	}
 }
 
-// TestPayloadBaseShapeUnwrapsArray pins PayloadBaseShape's array arm directly:
+// TestPayloadBaseShapeUnwrapsArray pins payloadBaseShape's array arm directly:
 // an array payload's base is its element, with one pointer level shed.
 func TestPayloadBaseShapeUnwrapsArray(t *testing.T) {
 	addr := models.TypeShape{Kind: models.ShapeNamed, Name: "Address"}
 	ptr := models.TypeShape{Kind: models.ShapePointer, Elem: &addr}
-	assert.Equal(t, addr, PayloadBaseShape(models.TypeShape{Kind: models.ShapeArray, Elem: &ptr}))
+	assert.Equal(t, addr, payloadBaseShape(models.TypeShape{Kind: models.ShapeArray, Elem: &ptr}))
 }

@@ -41,6 +41,9 @@ const (
 	schemaSuccessResponse   = "SuccessResponse"
 )
 
+// responseDataDescription annotates an untyped success payload (data).
+const responseDataDescription = "Response data"
+
 // maxValidationErrorItems bounds the documented validationErrors array
 // (SAST hygiene, CKV_OPENAPI_21): validators emit one entry per failed
 // field/rule, so this is a generous ceiling for any real request struct.
@@ -853,15 +856,17 @@ func (g *OpenAPIGenerator) successPlaintextSchema(route *models.Route) string {
 	return schemaSuccessResponse
 }
 
-// successEnvelopeSchema builds the inline {data, meta} success envelope. When the
-// route has a typed response, data is a $ref to its component schema; otherwise
-// data is a generic object (the handler returned an untyped/empty payload).
+// successEnvelopeSchema builds the inline {data, meta} success envelope. data is
+// the payload's schema (responsePayloadSchema); a bare untyped object (the
+// handler returned an untyped or unresolved payload) is annotated.
 func successEnvelopeSchema(response *models.TypeInfo) *OpenAPIProperty {
 	data := responsePayloadSchema(response)
-	if data.Ref == "" && data.Type == typeObject {
-		// Untyped fallback (generic object) — annotate it for readers. A typed
-		// array payload is NOT the fallback and takes no such annotation.
-		data.Description = "Response data"
+	if data.Ref == "" && data.Type == typeObject && data.AdditionalProperties == nil {
+		// Only the bare untyped object is the fallback — annotate it for
+		// readers. A map or array schema (Result[map[string]int64], or the
+		// recursion-cut map of Result[Tree], which still counts as an untyped
+		// payload) is not that bare object and takes no such annotation.
+		data.Description = responseDataDescription
 	}
 	return &OpenAPIProperty{
 		Type: typeObject,
@@ -884,84 +889,47 @@ func metaEnvelopeSchema() *OpenAPIProperty {
 	}
 }
 
-// responsePayloadSchema returns the bare schema for a response component: an
-// array when the payload is a slice or fixed-size array, the inline schema of a well-known or
-// builtin payload, a $ref to the named type, or a generic object when the type
-// is unnamed.
+// responsePayloadSchema returns the bare schema of a response payload. A
+// payload the analyzer resolved (Resolution) is typed exactly as a struct
+// field of its type is, every pointer level shed and never nullable. A
+// registered project struct is a $ref to its component, an array of them for
+// a registered struct slice ([]Item). Anything else, meaning no payload or
+// the warned fallback whose name the analyzer cleared, is typed from its Shape,
+// which for a name that resolved to nothing is the untyped object.
 func responsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
-	if response == nil {
-		return &OpenAPIProperty{Type: typeObject}
-	}
-	if response.Shape != nil && isSequence(*response.Shape) {
-		return sliceResponsePayloadSchema(response)
-	}
-	if prop, ok := inlinePayloadSchema(response.Shape); ok {
-		return prop
-	}
-	if response.Name == "" {
-		return &OpenAPIProperty{Type: typeObject}
-	}
-	return &OpenAPIProperty{Ref: refPath(schemaName(response))}
-}
-
-// inlinePayloadSchema types a non-slice payload that names no component from
-// its Shape, exactly as a struct field of that type is typed: a well-known
-// type (time.Time, uuid.UUID, json.Number, ...: see wellKnownFormats) or a builtin
-// (string, int64, any, interface{}). One pointer level is shed first, so
-// *json.RawMessage documents as json.RawMessage. It must run before the $ref
-// branch: a well-known payload still carries its Name, but no component is
-// ever emitted for it. Reports false for anything else (a struct name that is
-// not well-known, the untyped fallback, or no Shape at all — a payload that
-// registered as a project struct has its Shape shed by the analyzer, so a
-// project struct named like a well-known type, uuid.UUID, is still $ref'd).
-func inlinePayloadSchema(shape *models.TypeShape) (*OpenAPIProperty, bool) {
-	if shape == nil {
-		return nil, false
-	}
-	s := shapeAfterPointer(*shape)
-	prop := &OpenAPIProperty{}
-	if wk, ok := wellKnownShape(s); ok {
-		setWellKnown(prop, wk)
-		return prop, true
-	}
-	if s.Kind == models.ShapePrimitive {
-		setBasicTypeAndFormat(prop, s.Name)
-		return prop, true
-	}
-	return nil, false
-}
-
-// sliceResponsePayloadSchema builds the schema for a []T or [N]T payload —
-// `type: array` unless the slice itself is a well-known shape ([]byte; never
-// an array, see wellKnownShape). Name still
-// carries the ELEMENT type (see models.TypeInfo.Shape), so a named element's
-// items is the $ref to its component — the same component referencedSchemaNames
-// already marks from response.Name, which is why no slice awareness is needed
-// there. A primitive element names no component and is typed from its shape.
-func sliceResponsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
-	// A well-known slice shape ([]byte / []uint8) is a base64 string, NOT an
-	// array. Consult the same resolver setTypeAndFormat uses so a payload gets
-	// the schema its struct-field counterpart would get.
-	if wk, ok := wellKnownShape(*response.Shape); ok {
-		prop := &OpenAPIProperty{}
-		setWellKnown(prop, wk)
-		return prop
-	}
-
-	items := &OpenAPIProperty{}
-	elem := response.Shape.Elem
 	switch {
-	case elem != nil && isWellKnownElem(*elem):
-		// A well-known element (time.Time, uuid.UUID, json.RawMessage) is an
-		// inline schema, never a component: the $ref branch below would dangle,
-		// because generateSchemasFromTypes emits no component for it.
-		setElemTypeAndFormat(items, *elem)
-	case response.Name != "":
-		items.Ref = refPath(schemaName(response))
-	case elem != nil:
-		setElemTypeAndFormat(items, *elem)
+	case response == nil:
+		return &OpenAPIProperty{Type: typeObject}
+	case response.Resolution != nil:
+		return payloadShapeSchema(*response.Resolution)
+	case response.Name == "" && response.Shape != nil:
+		return payloadShapeSchema(*response.Shape)
+	case response.Name == "":
+		return &OpenAPIProperty{Type: typeObject}
+	case response.Shape != nil && isSequence(*response.Shape):
+		return structSlicePayloadSchema(response)
 	default:
-		items.Type = typeObject
+		return &OpenAPIProperty{Ref: refPath(schemaName(response))}
+	}
+}
+
+// payloadShapeSchema types a payload shape as setTypeAndFormat types a field.
+func payloadShapeSchema(s models.TypeShape) *OpenAPIProperty {
+	prop := &OpenAPIProperty{}
+	setTypeAndFormat(prop, s)
+	return prop
+}
+
+// structSlicePayloadSchema documents a slice or array payload of a registered
+// project struct ([]Item, []*Item, [2]Address): Name is the element's
+// component. A project struct named like a well-known type ([]uuid.UUID) is
+// still typed inline as that type, a documented residual.
+func structSlicePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
+	items := &OpenAPIProperty{}
+	if elem := response.Shape.Elem; elem != nil && isWellKnownElem(*elem) {
+		setTypeAndFormat(items, *elem)
+	} else {
+		items.Ref = refPath(schemaName(response))
 	}
 	return &OpenAPIProperty{Type: typeArray, Items: items}
 }
@@ -973,21 +941,6 @@ func sliceResponsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
 func isWellKnownElem(elem models.TypeShape) bool {
 	_, ok := wellKnownShape(shapeAfterPointer(elem))
 	return ok
-}
-
-// setElemTypeAndFormat types a slice ELEMENT for an items schema. It consults
-// the well-known resolver first, exactly as the struct-field path does, so a
-// [][]byte payload's items are base64 strings rather than the object fallback
-// the bare leaf-name mapping would pick for a nameless container shape. One
-// pointer level is shed first (see isWellKnownElem): a *T item documents as T,
-// since JSON has no pointer.
-func setElemTypeAndFormat(prop *OpenAPIProperty, elem models.TypeShape) {
-	s := shapeAfterPointer(elem)
-	if wk, ok := wellKnownShape(s); ok {
-		setWellKnown(prop, wk)
-		return
-	}
-	setBasicTypeAndFormat(prop, s.Name)
 }
 
 // setWellKnown stamps a resolved well-known type onto prop. The format is
@@ -1196,7 +1149,7 @@ func successResponseSchema() *OpenAPISchema {
 	return &OpenAPISchema{
 		Type: typeObject,
 		Properties: map[string]*OpenAPIProperty{
-			propNameData: {Type: typeObject, Description: "Response data"},
+			propNameData: {Type: typeObject, Description: responseDataDescription},
 			propNameMeta: metaEnvelopeSchema(),
 		},
 	}
@@ -1311,7 +1264,9 @@ func (g *OpenAPIGenerator) generateSchemasFromTypes(types map[string]*models.Typ
 // referencedSchemaNames collects every component name a document points at:
 // typed (non-JOSE) response payloads, field/map-value refs across all types, and
 // the plaintext types of JOSE routes. Used so a type that is referenced is not
-// skipped (which would leave the reference pointing at nothing).
+// skipped (which would leave the reference pointing at nothing). A response's
+// Resolution is walked for $ref leaves exactly as a field's is; request types
+// still are not.
 //
 // Non-JOSE REQUEST types are deliberately NOT scanned, and that is safe: a
 // request $ref is emitted only by buildRequestBody's non-JOSE jsonMediaRef
@@ -1344,6 +1299,11 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 		if r.Response != nil && payloadNamesComponent(r.Response) {
 			out[schemaName(r.Response)] = true
 		}
+		// A resolved payload names no component itself; the structs its
+		// Resolution reaches are $ref'd from its schema.
+		if r.Response != nil && r.Response.Resolution != nil {
+			addRefNames(out, *r.Response.Resolution)
+		}
 		// Requests, by contrast, are referenced ONLY when JOSE — for the same
 		// joseDescription prose reason. See the note above on why non-JOSE request
 		// types must not be added here.
@@ -1359,27 +1319,25 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 // component its Name names. A JOSE payload always does: buildResponses' JOSE
 // branch never inlines it, and successPlaintextSchema names the component in
 // prose whenever Name is set. Otherwise it mirrors responsePayloadSchema's
-// branches: a well-known payload (uuid.UUID, or a []*time.Time element) keeps
-// its Name but is documented inline, so it must not mark that name referenced
-// — a coincidental project struct of the same short name that nothing else
-// references (a params-only request type UUID) would be emitted as an orphan
-// component. A payload that registered as a project struct carries no Shape
-// (the analyzer sheds it), so it is always referenced.
+// branches: a resolved payload names no component itself (a well-known one,
+// time.Time, keeps its Name but is typed inline, so it must not mark that name
+// referenced — a coincidental project struct of the same short name that
+// nothing else references would be emitted as an orphan component); a
+// registered struct slice names its element unless that element is
+// well-known; and a registered struct (no Shape) always does.
 func payloadNamesComponent(ti *models.TypeInfo) bool {
-	if ti.Name == "" {
+	switch {
+	case ti.Name == "":
 		return false
-	}
-	if ti.JOSE || ti.Shape == nil {
+	case ti.JOSE:
+		return true
+	case ti.Resolution != nil:
+		return false
+	case ti.Shape != nil && isSequence(*ti.Shape):
+		return ti.Shape.Elem == nil || !isWellKnownElem(*ti.Shape.Elem)
+	default:
 		return true
 	}
-	if isSequence(*ti.Shape) {
-		if _, ok := wellKnownShape(*ti.Shape); ok {
-			return false
-		}
-		return ti.Shape.Elem == nil || !isWellKnownElem(*ti.Shape.Elem)
-	}
-	_, inline := inlinePayloadSchema(ti.Shape)
-	return !inline
 }
 
 // addFieldSchemaRefs marks every component named by a $ref leaf of a field's
@@ -1542,7 +1500,7 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 	}
 
 	prop := &OpenAPIProperty{Description: field.Description}
-	g.setTypeAndFormat(prop, resolved)
+	setTypeAndFormat(prop, resolved)
 
 	// Apply the field's validate-tag constraints: collection/scalar rules onto
 	// prop (incl. minItems/maxItems for slices), element-scope (dive) rules onto
@@ -1608,9 +1566,8 @@ func stripPointers(s models.TypeShape) models.TypeShape {
 	return s
 }
 
-// shapeAfterPointer unwraps ONE pointer level. Payload typing still uses it
-// (until #120's payload half); field typing sheds every level through
-// stripPointers.
+// shapeAfterPointer unwraps ONE pointer level. isWellKnownElem uses it; field
+// and payload typing shed every level through stripPointers.
 func shapeAfterPointer(s models.TypeShape) models.TypeShape {
 	if s.Kind == models.ShapePointer && s.Elem != nil {
 		return *s.Elem
@@ -1657,9 +1614,9 @@ type wellKnownType struct {
 //     written as their number, unclamped (a zero Month is 0), so no range
 //     bound is stamped. The analyzer also maps both to int in
 //     knownUnderlyingBuiltins, so validate bounds and local wrappers resolve;
-//     this entry types the positions that classification skips (payloads,
-//     until #110; fields resolve through knownUnderlyingBuiltins at every
-//     depth).
+//     this entry types the positions that classification skips (registered
+//     struct slice elements; fields and payloads resolve through
+//     knownUnderlyingBuiltins at every depth).
 //
 // NOTE: matching is by the analyzer's qualified type string (pkg-local alias +
 // "." + name), so an aliased import (import t "time" -> "t.Time") is not yet
@@ -1703,7 +1660,7 @@ func wellKnownShape(s models.TypeShape) (wellKnownType, bool) {
 // $ref; a kind-only scalar, its kind alone (#92: no format, no unsigned
 // floor); a Marshaler or recursive leaf, {} (any JSON value), never
 // descending into a Marshaler's Elem.
-func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, shape models.TypeShape) {
+func setTypeAndFormat(prop *OpenAPIProperty, shape models.TypeShape) {
 	s := stripPointers(shape)
 
 	// Well-known types first: []byte must win over the generic []T array branch,
@@ -1718,14 +1675,14 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, shape models.
 		prop.Type = typeArray
 		prop.Items = &OpenAPIProperty{}
 		if s.Elem != nil {
-			g.setTypeAndFormat(prop.Items, *s.Elem)
+			setTypeAndFormat(prop.Items, *s.Elem)
 		}
 	case models.ShapeMap:
 		// Maps are objects with a typed additionalProperties (string-keyed).
 		prop.Type = typeObject
 		prop.AdditionalProperties = &OpenAPIProperty{}
 		if s.Elem != nil {
-			g.setTypeAndFormat(prop.AdditionalProperties, *s.Elem)
+			setTypeAndFormat(prop.AdditionalProperties, *s.Elem)
 		}
 	case models.ShapeRef:
 		prop.Ref = refPath(s.Name)
