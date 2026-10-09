@@ -745,12 +745,12 @@ func TestUnresolvableFieldsWarn(t *testing.T) {
 			"\tt \"time\"\n\tj \"encoding/json\"\n\t\"github.com/google/uuid\"\n\t\"github.com/shopspring/decimal\"\n\t\"github.com/example/app/types\"\n",
 			"type StampD t.Time\ntype IDD uuid.UUID\ntype C complex128\n",
 			"\tDec decimal.Decimal `json:\"dec\"`\n\tAliasedTime t.Time `json:\"aliasedTime\"`\n\tAliasedRaw j.RawMessage `json:\"aliasedRaw\"`\n"+
-				"\tCents types.Cents `json:\"cents\"`\n\tStampD StampD `json:\"stampD\"`\n\tIDD IDD `json:\"idd\"`\n\tMissing Missing `json:\"missing\"`\n"+
+				"\tCents types.Cents `json:\"cents\"`\n\tTMissing types.Missing `json:\"tMissing\"`\n\tStampD StampD `json:\"stampD\"`\n\tIDD IDD `json:\"idd\"`\n\tMissing Missing `json:\"missing\"`\n"+
 				"\tQ decimal.Decimal `query:\"q\"`\n"+
 				"\tCh chan int `json:\"ch\"`\n\tAnon struct{ X int } `json:\"anon\"`\n\tPage Page[int] `json:\"page\"`\n"+
 				"\tErr error `json:\"err\"`\n\tC64 complex64 `json:\"c64\"`\n\tC128 complex128 `json:\"c128\"`\n\tCW C `json:\"cw\"`\n\tCM map[string]complex128 `json:\"cm\"`\n"),
 	})
-	for _, name := range []string{"Dec", "AliasedTime", "AliasedRaw", "Cents", "StampD", "IDD", "Missing", "Q"} {
+	for _, name := range []string{"Dec", "AliasedTime", "AliasedRaw", "TMissing", "StampD", "IDD", "Missing", "Q"} {
 		if w := fieldWarnings(a, name); assert.Len(t, w, 1, name) {
 			assert.Contains(t, w[0], "resolves to no schema", name)
 		}
@@ -774,7 +774,9 @@ func TestUnresolvableFieldsWarn(t *testing.T) {
 	assert.Equal(t, goTypeComplex128, got["c128"])
 	assert.Equal(t, goTypeComplex128, got["cw"])
 	assert.Equal(t, "map[string]complex128", got["cm"])
-	assert.Equal(t, "types.Cents", got["cents"])
+	assert.Equal(t, goTypeInt64, got["cents"], "an in-module qualified named type resolves (#100)")
+	assert.Empty(t, fieldWarnings(a, "Cents"))
+	assert.Equal(t, "types.Missing", got["tMissing"])
 }
 
 // TestWarnedRowsInEveryPosition pins each warned row in all seven positions:

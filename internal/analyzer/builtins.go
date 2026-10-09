@@ -11,13 +11,14 @@ const (
 	kindBoolean = "boolean"
 
 	// Go primitive type names referenced for type discrimination
-	goTypeInt   = "int"
-	goTypeInt32 = "int32"
-	goTypeInt64 = "int64"
-	goTypeByte  = "byte"
-	goTypeRune  = "rune"
-	goTypeUint8 = "uint8"
-	goTypeBool  = "bool"
+	goTypeInt    = "int"
+	goTypeInt32  = "int32"
+	goTypeInt64  = "int64"
+	goTypeUint64 = "uint64"
+	goTypeByte   = "byte"
+	goTypeRune   = "rune"
+	goTypeUint8  = "uint8"
+	goTypeBool   = "bool"
 	// goTypeUintptr is deliberately NOT an integer: encoding/json marshals it as
 	// a number, but it names a machine address with no meaningful API contract,
 	// so a field of this type is documented as an object and diagnosed instead.
@@ -25,6 +26,8 @@ const (
 	// unknownTypeName is the name the retired type-string renderer produced for
 	// an AST node it did not model; embeddedFields still reports it in warnings.
 	unknownTypeName = "unknown"
+	mainPackageName = "main"   // a program's package clause: never importable
+	buildIgnoreTag  = "ignore" // the build tag that keeps a generator or tool out of its package
 	goTypeAny       = "any"
 	goTypeInterface = "interface{}"
 	goTypeFloat32   = "float32"
@@ -47,7 +50,7 @@ func isStringType(typeName string) bool {
 func isIntegerType(typeName string) bool {
 	switch typeName {
 	case goTypeInt, "int8", "int16", goTypeInt32, goTypeInt64,
-		"uint", goTypeUint8, "uint16", "uint32", "uint64",
+		"uint", goTypeUint8, "uint16", "uint32", goTypeUint64,
 		goTypeByte, goTypeRune:
 		return true
 	}
