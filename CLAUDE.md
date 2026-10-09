@@ -95,6 +95,7 @@ Token rules:
 - The Windows leg forgives nothing by design — a pattern-based failure allowlist was deleted on purpose; don't reintroduce one.
 - `go.mod` declares `go 1.25.0` with no `toolchain` directive while CI's setup-go steps pin a newer Go.
 - Every `actions/setup-go` step in `ci.yml` and `release.yml` requests `go-version: '1.27'` with `check-latest: true`. Without `check-latest`, a runner's cached older patch wins: the v0.4.0 release gate ran on go1.26.8 and failed govulncheck on stdlib vulns fixed in later patches.
+- Go 1.27 needs govulncheck ≥ v1.8.0: v1.1.4 (x/tools v0.29.0) panics `unexpected expr: *ast.KeyValueExpr` building SSA for the linux stdlib, which failed the v0.4.1 release gate. `make vuln` runs only in `release.yml`, never in PR CI, and a macOS run analyzes darwin files and passes — check the CI target with an installed binary: `GOOS=linux GOARCH=amd64 govulncheck ./...` (`go run` with `GOOS` set cross-compiles the tool itself and fails with `exec format error`).
 - The 1.25 floor is intentional — don't rely on language features newer than that.
 
 ## Settled invariants — do not "clean these up"

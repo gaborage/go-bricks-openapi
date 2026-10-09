@@ -5,7 +5,7 @@ BINARY_NAME := go-bricks-openapi
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
 # Pinned scanner versions — identical to CI so the local release gate matches.
-GOVULNCHECK_VERSION := v1.1.4
+GOVULNCHECK_VERSION := v1.8.0
 # gosec is pinned to an untagged master pseudo-version: every tagged release
 # through v2.29.0 depends on golang.org/x/tools <= v0.49.0, which cannot read
 # Go 1.27 export data and fails typechecking. Swap for the next tagged release.
