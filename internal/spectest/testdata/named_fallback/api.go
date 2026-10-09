@@ -6,7 +6,6 @@ import (
 	"time"
 	t "time"
 
-	"github.com/example/namedfallback/types"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
@@ -87,7 +86,6 @@ type Fallback struct {
 	Decimal     decimal.Decimal    `json:"decimal"`                                  // -> {object}
 	AliasedTime t.Time             `json:"aliasedTime"`                              // -> {object}
 	AliasedRaw  j.RawMessage       `json:"aliasedRaw"`                               // -> {object}
-	Cents       types.Cents        `json:"cents"`                                    // -> {object}
 	StampD      StampD             `json:"stampD"`                                   // -> {object}
 	IDD         IDD                `json:"idd"`                                      // -> {object}
 	Err         error              `json:"err"`                                      // -> {object}

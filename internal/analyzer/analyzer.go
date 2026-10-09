@@ -121,7 +121,7 @@ type ProjectAnalyzer struct {
 	unresolvedRoutes []models.UnresolvedRoute           // Route registrations dropped because their path did not resolve
 	typeRegistry     map[string]*models.TypeInfo        // Named struct types reachable from routes (by final schema name)
 	pkgCache         map[string]map[string]*ast.File    // dir -> (file path -> parsed AST), populated on demand
-	nameAssign       map[string]string                  // "pkg\x00Type" -> final schema name (collision qualification)
+	nameAssign       map[string]string                  // "dir\x00pkg\x00Type" -> final schema name (collision qualification)
 	usedNames        map[string]struct{}                // final schema names already taken
 	directives       map[string]map[int]*directiveGroup // filename -> end line of a Directive comment group -> the group and its attached flag
 	directiveFiles   map[string]struct{}                // files already Directive-indexed (keeps diagnostics once-only)
@@ -3272,17 +3272,39 @@ func (a *ProjectAnalyzer) registerTypeAt(name, pkg string, astFile *ast.File, fi
 // registerStructAt to bound the struct-FIELD recursion that runs once the chain
 // bottoms out at a struct.
 func (a *ProjectAnalyzer) registerViaTypeSpecAt(name, pkg string, astFile *ast.File, filePath string, depth int) *models.TypeInfo {
+	spec, specFile, specPath, found := a.resolveLocalTypeSpec(astFile, filePath, name)
+	if !found {
+		return nil
+	}
 	st, resolvedPkg, file, path, ok := a.resolveTypeSpecChain(astFile, filePath, name, 0)
 	if !ok {
 		return nil
 	}
-	// Key the component under the ORIGINAL name, but extract the struct's fields
-	// in the package/file where the struct is actually defined so nested field
-	// refs resolve in the right context.
 	if resolvedPkg == "" {
 		resolvedPkg = pkg
 	}
-	return a.registerStructAt(name, resolvedPkg, st, file, path, depth)
+	// Key the component by X's OWN declaring site, so a local `type User
+	// b.Record` and b's `type User RecordV2` stay two components; but extract
+	// the struct's fields in the package/file where the struct is actually
+	// defined so nested field refs resolve in the right context. The key is
+	// taken only once the chain resolved, so a failed chain claims no name.
+	keyPkg, keyDir := specFile.Name.Name, filepath.Dir(specPath)
+	if isSameNamedReExport(spec) {
+		// type User = d.User is d.User: the chain resolved it to d's struct
+		// User, so take that struct's key, the one a direct d.User keys.
+		keyPkg, keyDir = resolvedPkg, filepath.Dir(path)
+	}
+	key := a.schemaKey(name, keyPkg, keyDir)
+	return a.registerStructKeyed(key, name, resolvedPkg, st, file, path, depth)
+}
+
+// isSameNamedReExport reports whether spec is an alias of a qualified type of
+// its own name (type User = d.User), the re-export idiom. A Go alias is the
+// type it names, so such an alias shares that type's component; an alias
+// under another name (type UA = d.User) keeps its own.
+func isSameNamedReExport(spec *ast.TypeSpec) bool {
+	sel, ok := spec.Type.(*ast.SelectorExpr)
+	return ok && spec.Assign.IsValid() && sel.Sel.Name == spec.Name.Name
 }
 
 // resolveTypeSpecChain follows a chain of named types to the underlying struct,
@@ -3332,7 +3354,14 @@ func (a *ProjectAnalyzer) resolveTypeSpecChain(astFile *ast.File, filePath, name
 // registerFieldRefAt (field-ref registration, Cycle A, incremented here), so
 // they share one budget.
 func (a *ProjectAnalyzer) registerStructAt(typeName, pkg string, structType *ast.StructType, astFile *ast.File, filePath string, depth int) *models.TypeInfo {
-	key := a.schemaKey(typeName, pkg)
+	return a.registerStructKeyed(a.schemaKey(typeName, pkg, filepath.Dir(filePath)), typeName, pkg, structType, astFile, filePath, depth)
+}
+
+// registerStructKeyed is registerStructAt under a component name the caller
+// already assigned: registerViaTypeSpecAt keys a named type over a struct by
+// the named type's own declaring site, not the struct's (a same-named alias
+// re-export, type User = d.User, takes the struct's key).
+func (a *ProjectAnalyzer) registerStructKeyed(key, typeName, pkg string, structType *ast.StructType, astFile *ast.File, filePath string, depth int) *models.TypeInfo {
 	if existing, ok := a.typeRegistry[key]; ok {
 		return existing
 	}
@@ -3356,21 +3385,23 @@ func (a *ProjectAnalyzer) registerStructAt(typeName, pkg string, structType *ast
 	return ti
 }
 
-// schemaKey returns a stable, collision-free component name for (pkg, typeName).
-// It prefers the bare type name and falls back to <Pkg><TypeName> (then a numeric
-// suffix) when that bare name is already taken by a different package, so two
-// packages each defining e.g. Request get distinct components. Idempotent per
-// (pkg, typeName).
+// schemaKey returns a stable, collision-free component name for (pkg, typeName)
+// declared in dir. It prefers the bare type name and falls back to
+// <Pkg><TypeName> (then a numeric suffix) when that bare name is already taken
+// by a different package, so two packages each defining e.g. Request get
+// distinct components. Identity includes the declaring directory, not just the
+// package clause: orders/model.Item and users/model.Item are two components
+// (Item, ModelItem), never one. Idempotent per (dir, pkg, typeName).
 //
-// On a collision the bare name goes to whichever (pkg, typeName) is registered
+// On a collision the bare name goes to whichever (dir, pkg, typeName) is registered
 // first; which one that is follows discovery order. Discovery walks the project
 // deterministically, so a given source tree yields a stable assignment, but the
 // emitted spec is always valid either way — every $ref resolves to the component
 // the field/response actually carries (a ShapeRef leaf's Name / TypeInfo.Name
 // are the final key). A future enhancement could make the choice order-independent (e.g. always
 // qualify by package), but that is a naming-policy change, not a correctness fix.
-func (a *ProjectAnalyzer) schemaKey(typeName, pkg string) string {
-	k := pkg + "\x00" + typeName
+func (a *ProjectAnalyzer) schemaKey(typeName, pkg, dir string) string {
+	k := dir + "\x00" + pkg + "\x00" + typeName
 	if name, ok := a.nameAssign[k]; ok {
 		return name
 	}

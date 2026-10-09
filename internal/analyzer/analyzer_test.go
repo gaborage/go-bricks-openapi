@@ -5717,17 +5717,20 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	}
 }
 
-// TestSchemaKeyCollision locks the collision-qualification rule: same (pkg,type)
-// is idempotent; a different package with the same type name is qualified.
+// TestSchemaKeyCollision locks the collision-qualification rule: same
+// (dir,pkg,type) is idempotent; a different package with the same type name is
+// qualified, and so is a same-named package in another directory.
 func TestSchemaKeyCollision(t *testing.T) {
 	a := New(t.TempDir())
-	assert.Equal(t, "Request", a.schemaKey("Request", "users"))
-	assert.Equal(t, "Request", a.schemaKey("Request", "users"), "idempotent for same (pkg,type)")
-	assert.Equal(t, "OrdersRequest", a.schemaKey("Request", "orders"), "collision qualified by package")
-	assert.Equal(t, "OrdersRequest", a.schemaKey("Request", "orders"), "qualified name is stable")
+	assert.Equal(t, "Request", a.schemaKey("Request", "users", "users"))
+	assert.Equal(t, "Request", a.schemaKey("Request", "users", "users"), "idempotent for same (dir,pkg,type)")
+	assert.Equal(t, "OrdersRequest", a.schemaKey("Request", "orders", "orders"), "collision qualified by package")
+	assert.Equal(t, "OrdersRequest", a.schemaKey("Request", "orders", "orders"), "qualified name is stable")
 	// A third package with the same name gets a further-qualified/distinct name.
-	got := a.schemaKey("Request", "billing")
+	got := a.schemaKey("Request", "billing", "billing")
 	assert.NotContains(t, []string{"Request", "OrdersRequest"}, got, "third collision is distinct")
+	// The same clause in another directory is another package.
+	assert.Equal(t, "OrdersRequest2", a.schemaKey("Request", "orders", filepath.Join("v2", "orders")), "same clause, other dir")
 }
 
 // TestInModuleDir covers the import-path -> dir translation and the

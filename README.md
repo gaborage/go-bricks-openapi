@@ -253,12 +253,17 @@ nested Go module, is not.
   (`type C complex128`) — has no JSON schema. It is documented as an untyped
   object and reported as a warning (so `--strict` fails on it). Exclude the
   field with `json:"-"`, which also silences the warning.
-- A field type that resolves to no schema — a third-party type
-  (`decimal.Decimal`), a well-known type under an aliased import (`t.Time`,
-  `j.RawMessage`), a named non-struct type from another package of the project
-  (`b.Cents`), or a defined type over a well-known struct
-  (`type Stamp time.Time`, `type ID uuid.UUID`) — is documented as an untyped
-  object with a warning (so `--strict` fails on it).
+- A field type that resolves to no schema — a type from outside the module
+  (`decimal.Decimal`, a go-bricks type such as `scheduler.ScheduleType`), a
+  well-known type under an aliased import (`t.Time`, `j.RawMessage`), or a
+  defined type over a well-known struct (`type Stamp time.Time`,
+  `type ID uuid.UUID`) — is documented as an untyped object with a warning (so
+  `--strict` fails on it). Named types from other packages of the project,
+  under a default or aliased import (not a dot import), are resolved in their
+  own package like local ones —
+  except through an unaliased import of a directory whose first file by name
+  has another package clause (a `package main` generator or another
+  build-ignored file), which falls back with that warning (#122).
 - `int` and `uint` are documented as 64-bit (`format: int64`), which is wrong
   for a 32-bit build, where they hold only 32 bits.
 - `uint64` is documented as `format: int64` with `minimum: 0`, so values of
@@ -333,7 +338,12 @@ nested Go module, is not.
   directive above that `.Add` is reported as detached. This is read where the
   `.Add` is: a local that is a group registrar only in a sibling block, or
   only from a later write in its own block, is not one there.
-- Build constraints (`//go:build`) are ignored. When a registration helper is
+- Build constraints (`//go:build`) are ignored, except `ignore`, which only
+  decides which files are searched for an imported package's named non-struct
+  types (struct lookups still scan every file): a build-ignored file of
+  another package clause (a generator or tool) is skipped, while one sharing
+  the package's clause is still merged (an unaliased import of such a
+  directory is the #122 exception above). When a registration helper is
   declared in several build-tagged files, only one copy is walked — the one in
   the calling file (for a delegate in another package, the file declaring its
   type) if that file declares one, otherwise the one in the first file by name —
@@ -346,8 +356,9 @@ nested Go module, is not.
   otherwise the one in the first file by name. The same applies wherever such
   a type appears: slice items, map values and nested containers. Copies with
   no scalar to fall back on and no common container shape (`type W []string`
-  in one, `type W []int` in another) are documented as an untyped object, with
-  a warning.
+  in one, `type W []int` in another), or that reach two structs of one name in
+  different packages (`type W dw.Items` in one, `type W lx.Items` in another),
+  are documented as an untyped object, with a warning.
 
 ## Development
 
