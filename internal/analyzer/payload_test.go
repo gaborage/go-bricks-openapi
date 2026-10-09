@@ -585,6 +585,7 @@ func TestIsTypedPayload(t *testing.T) {
 		{"ref", resolved(tsSlice(models.TypeShape{Kind: models.ShapeRef, Name: "User"})), true},
 		{"kind-only", resolved(models.TypeShape{Kind: models.ShapeKindOnly, Name: kindInteger}), true},
 		{"marshaler", resolved(models.TypeShape{Kind: models.ShapeMarshaler, Name: rowTier}), false},
+		{"text", resolved(tsSlice(models.TypeShape{Kind: models.ShapeText, Name: rowTier})), true},
 		{"recursive", resolved(tsMap(models.TypeShape{Kind: models.ShapeRecursive, Name: "Tree"})), false},
 		{"uintptr", resolved(tsPrim(goTypeUintptr)), false},
 		{"complex128", resolved(tsPrim(goTypeComplex128)), false},
@@ -619,6 +620,8 @@ func TestWarnPayloadEveryKind(t *testing.T) {
 		{fieldFallback{kind: fallbackDeclsDisagree, typeName: "X"}, fmt.Sprintf(declsDisagreePayloadWarning, written, "X")},
 		{fieldFallback{kind: fallbackUntypedBuiltin, typeName: goTypeComplex128, detail: goTypeComplex128},
 			fmt.Sprintf(untypedBuiltinPayloadWarning, written, goTypeComplex128)},
+		{fieldFallback{kind: fallbackMarshalerPromoted, typeName: "X", detail: rowMarshalTxt, via: "Y"},
+			fmt.Sprintf(marshalerPromotedPayloadWarning, written, "X", rowMarshalTxt, "Y")},
 	}
 	for _, c := range cases {
 		a := New("")

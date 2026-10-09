@@ -229,17 +229,58 @@ nested Go module, is not.
   which also silences the warning. The diagnostic covers every field whose type
   holds a `uintptr` at any depth — `[]uintptr`, a map value
   (`map[string]uintptr`) and a named wrapper (`type Addr uintptr`) alike.
-- A field whose type has its own `MarshalJSON`, `MarshalJSONTo`, `MarshalText`,
+- A Marshaler type (one with a `MarshalJSON`, `MarshalJSONTo`, `MarshalText`,
   `AppendText`, `UnmarshalJSON`, `UnmarshalJSONFrom` or `UnmarshalText` method
-  (with the exact `encoding/json` signature, on the type or its pointer, or on
-  a type it aliases) is documented as `{}` (any JSON value), with a warning,
-  and its `validate` keywords are dropped: `encoding/json` writes it through
-  that method, not through its underlying type. A defined type over it drops
-  the methods and is documented from the underlying type. A path, query or
-  header parameter of such a type is bound by kind, so it keeps the underlying
-  type's schema and does not warn. A slice of a byte-sized type that only
-  decodes through such a method stays a base64 string. There is no per-field
-  override yet. A method declared with an alias as its receiver
+  with the exact `encoding/json` signature, on the type or its pointer, or on a
+  type it aliases, declared or promoted from an embedded field) is documented
+  from its method set, not from its fields or underlying type:
+  - a type `encoding/json` writes and reads as text — `MarshalText` and
+    `UnmarshalText`, declared or promoted, with no `MarshalJSON`,
+    `MarshalJSONTo`, `UnmarshalJSON` or `UnmarshalJSONFrom` (`AppendText`
+    alone does not count), and with `MarshalText` on the value receiver or
+    promoted through a pointer embed (`UnmarshalText` may be on the
+    pointer) — is documented as `{type: string}`, without its
+    `validate` keywords (an enclosing slice's or map's cardinality is kept)
+    and with its `example:` as a string;
+  - every other Marshaler type, including a struct and a struct that embeds
+    one, is documented as `{}` (any JSON value) with a warning, its `validate`
+    keywords dropped, and gets no component; as a payload it makes the route
+    untyped. Method promotion follows Go: the shallowest embedding wins, two
+    at the same depth cancel, the type's own method (of any signature) or a
+    field named like the method (an embedded type's name included) shadows a
+    promoted one, and json tags (`json:"-"` included) do not matter. A
+    request of such a type keeps its path, query and header fields as
+    parameters and gets an untyped body (a text one gets a string body). A
+    request whose every field is a path, query or header parameter is
+    documented without a body even when it is a Marshaler type; a Marshaler
+    request with no field at all is not such a request and gets a body (`{}`
+    with a warning, or `{type: string}`), on a GET too. A jose-tagged struct
+    Marshaler type keeps its route `application/jose`, but its plaintext is
+    not documented (the request and response descriptions say so). There is
+    no per-field override yet (#117).
+
+  A defined type over a Marshaler type drops its declared methods and is
+  documented from the underlying type, but keeps what an underlying struct's
+  embedded fields promote. A path, query or header parameter of such a type
+  is bound by kind, so it keeps the underlying type's schema (a struct
+  parameter keeps its component) and does not warn. A slice of a byte-sized
+  type that only decodes through such a method stays a base64 string.
+  Pointer-receiver-only methods count in every position, although
+  `encoding/json` skips them on non-addressable values (a map value, a
+  payload returned by value), so a type whose `MarshalText` is only on its
+  pointer (or promoted through a value embed of such a type) is `{}` with a
+  warning, not a string, even where it is addressable (`*T`). Out-of-module types are known only from a
+  table (`time.Time`, `uuid.UUID`, `json.RawMessage`), so an embedded
+  `decimal.Decimal` goes undetected and its embedding struct is documented
+  from its fields. Methods in build-tagged files count (build constraints are
+  not evaluated). A Marshaler type's own fields are not read, so their tags
+  and types are not checked and raise no warning; a Marshaler request's
+  fields are still read to find its parameters, so a malformed tag on any of
+  them still warns. Because a struct Marshaler type gets no component, it no
+  longer holds its short component name: a same-named struct of another
+  package that used to be qualified (`BMoney`) can take the short one
+  (`Money`), so its `$ref`s and generated client type name move. A method
+  declared with an alias as its receiver
   (`type SA = Status; func (SA) MarshalText() ...`) is seen only where the
   alias name is used: a `Status` field is still documented from its
   underlying type, with no warning.
@@ -282,8 +323,8 @@ nested Go module, is not.
   with a well-known type (a project package `uuid` declaring
   `type UUID struct`); a slice payload of such a colliding project struct
   (`server.Result[[]uuid.UUID]`) is still typed inline as the well-known
-  type's array. A payload that ends in a fallback — a Marshaler type,
-  recursion, `uintptr`, `error`/`complex64`/`complex128`, or a type that
+  type's array. A payload that ends in a fallback — a Marshaler type
+  other than a text one, recursion, `uintptr`, `error`/`complex64`/`complex128`, or a type that
   resolves to no schema (a third-party type such as `decimal.Decimal`, an
   undeclared name, a well-known type under an aliased import `t "time"`) —
   raises one warning, so `--strict` fails on it. The exception is a bare

@@ -31,6 +31,8 @@ func renderShape(s models.TypeShape) string {
 		return "marshal:" + s.Name + "(" + renderShapePtr(s.Elem) + ")"
 	case models.ShapeRecursive:
 		return "cycle:" + s.Name
+	case models.ShapeText:
+		return "text:" + s.Name
 	default:
 		return "unknown"
 	}

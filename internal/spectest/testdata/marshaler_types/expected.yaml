@@ -1,0 +1,841 @@
+openapi: 3.0.1
+info:
+  title: Marshaler_types API
+  version: 1.0.0
+  description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
+paths:
+  /cmd:
+    post:
+      operationId: marshalertypesCmd
+      summary: POST /cmd
+      parameters:
+        - name: f
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Filter'
+        - name: e
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Empty'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {}
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /custom/{id}:
+    post:
+      operationId: marshalertypesCustom
+      summary: POST /custom/{id}
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {}
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /fields:
+    get:
+      operationId: marshalertypesGetFields
+      summary: GET /fields
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Fields'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      operationId: marshalertypesPostFields
+      summary: POST /fields
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Fields'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Fields'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /items/{id}:
+    get:
+      operationId: marshalertypesItems
+      summary: GET /items/{id}
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /jose:
+    post:
+      operationId: marshalertypesJose
+      summary: POST /jose
+      requestBody:
+        required: true
+        description: |
+          JOSE compact serialization (signed-then-encrypted). The wire payload
+          is a base64url-encoded JWE compact form whose plaintext, after
+          decrypt+verify, is its type's own JSON encoding, which is not documented.
+        content:
+          application/jose:
+            schema:
+              type: string
+              format: jose
+      responses:
+        "200":
+          description: |
+            JOSE compact serialization (signed-then-encrypted). The wire payload
+            is a base64url-encoded JWE compact form whose plaintext, after
+            decrypt+verify, is its type's own JSON encoding, which is not documented.
+          content:
+            application/jose:
+              schema:
+                type: string
+                format: jose
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JOSEErrorEnvelope'
+        "401":
+          description: Unauthorized — JOSE decrypt/verify failure (JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN, JOSE_KID_MISSING)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JOSEErrorEnvelope'
+        "415":
+          description: Unsupported Media Type — plaintext request on a JOSE route (JOSE_PLAINTEXT_REJECTED)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JOSEErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          content:
+            application/jose:
+              schema:
+                type: string
+                format: jose
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JOSEErrorEnvelope'
+  /level:
+    get:
+      operationId: marshalertypesLevel
+      summary: GET /level
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /levels:
+    get:
+      operationId: marshalertypesLevels
+      summary: GET /levels
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: string
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /money:
+    get:
+      operationId: marshalertypesMoney
+      summary: GET /money
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: {}
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /money-ptr:
+    get:
+      operationId: marshalertypesMoneyPtr
+      summary: GET /money-ptr
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: {}
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /money-t:
+    get:
+      operationId: marshalertypesMoneyT
+      summary: GET /money-t
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /moneys:
+    get:
+      operationId: marshalertypesMoneys
+      summary: GET /moneys
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: {}
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /params:
+    get:
+      operationId: marshalertypesParams
+      summary: GET /params
+      parameters:
+        - name: level
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+        - name: X-Level
+          in: header
+          required: false
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /stamped:
+    get:
+      operationId: marshalertypesStamped
+      summary: GET /stamped
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: {}
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /wrap-level:
+    get:
+      operationId: marshalertypesWrapLevel
+      summary: GET /wrap-level
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Empty:
+      type: object
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code (e.g. BAD_REQUEST, NOT_FOUND, INTERNAL_ERROR, or a custom business code)
+            details:
+              type: object
+              properties:
+                validationErrors:
+                  type: array
+                  description: Per-field validation failures (400 validation errors)
+                  items:
+                    type: object
+                    properties:
+                      field:
+                        type: string
+                        description: Field that failed validation
+                      message:
+                        type: string
+                        description: Violated validation rule
+                      value:
+                        description: Submitted value (any type)
+                  maxItems: 100
+              description: Contextual error payload, emitted in development environments only
+            message:
+              type: string
+              description: Human-readable error message
+          description: Error details
+        meta:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+              description: RFC3339 response timestamp
+            traceId:
+              type: string
+              description: W3C trace identifier for the request
+      required:
+        - error
+    Fields:
+      type: object
+      properties:
+        amount:
+          type: string
+        appOnly: {}
+        both: {}
+        code:
+          type: string
+        deep:
+          type: string
+        embP: {}
+        flags:
+          type: array
+          items:
+            type: string
+        fromOnly: {}
+        grid:
+          type: array
+          items:
+            type: array
+            items:
+              type: string
+        ld:
+          type: integer
+          format: int64
+        level:
+          type: string
+          example: high
+        levelA:
+          type: string
+        levelMap:
+          type: object
+          additionalProperties:
+            type: string
+        levelOne:
+          type: string
+          example: "2"
+        levelP: {}
+        levelPMap:
+          type: object
+          additionalProperties: {}
+        levelPtr:
+          type: string
+          nullable: true
+        levelU: {}
+        levels:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        ma: {}
+        maMap:
+          type: object
+          additionalProperties: {}
+        maPtr: {}
+        mas:
+          type: array
+          items: {}
+        md:
+          $ref: '#/components/schemas/MD'
+        money: {}
+        moneyMap:
+          type: object
+          additionalProperties: {}
+        moneyOdd:
+          $ref: '#/components/schemas/MoneyOdd'
+        moneyP: {}
+        moneyPMap:
+          type: object
+          additionalProperties: {}
+        moneyPPtr: {}
+        moneyPs:
+          type: array
+          items: {}
+        moneyPtr: {}
+        moneyT:
+          type: string
+        moneyTPtr:
+          type: string
+          nullable: true
+        moneyTs:
+          type: array
+          items:
+            type: string
+        moneyU: {}
+        moneyUMap:
+          type: object
+          additionalProperties: {}
+        moneyUPtr: {}
+        moneyUs:
+          type: array
+          items: {}
+        moneys:
+          type: array
+          items: {}
+        pair:
+          $ref: '#/components/schemas/Pair'
+        price: {}
+        priceMap:
+          type: object
+          additionalProperties: {}
+        pricePtr: {}
+        prices:
+          type: array
+          items: {}
+        ptrEmb:
+          type: string
+        ptrEmbP:
+          type: string
+        raw: {}
+        shadow: {}
+        stamped: {}
+        statusV: {}
+        tag:
+          type: string
+        taggedEmb:
+          type: string
+        textApp:
+          type: string
+        textJ: {}
+        toText: {}
+        twin: {}
+        withCode:
+          type: string
+        withID:
+          type: string
+        withInner: {}
+        wrapLevel:
+          type: string
+        wrapper: {}
+      required:
+        - level
+    Filter:
+      type: object
+    JOSEErrorEnvelope:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN, JOSE_KID_MISSING, JOSE_PLAINTEXT_REJECTED)
+        message:
+          type: string
+          description: Constant-time generic message — never reveals which key was tried or which library detected the failure
+      required:
+        - code
+        - message
+    MD:
+      type: object
+      properties:
+        amount:
+          type: integer
+          format: int64
+    MoneyOdd:
+      type: object
+      properties:
+        amount:
+          type: integer
+          format: int64
+    Pair:
+      type: object
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+      description: Tenant identifier. Enforced only when the service runs with multitenancy enabled and a header-based tenant resolver; a missing or invalid tenant yields HTTP 400. Deployments resolving the tenant from the subdomain or URL path do not read this header.
+security:
+  - TenantID: []

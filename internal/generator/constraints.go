@@ -239,9 +239,10 @@ func constraintsFor(shape models.TypeShape, constraints map[string]string) *cons
 // schema. A $ref must stand alone (OpenAPI 3.0 ignores its siblings), so
 // element rules on a slice-of-struct have nowhere valid to go and drop.
 //
-// No rule lands on a Marshaler leaf (the field itself, or its element): it is
-// written through its own method, so its underlying kind says nothing, and
-// format/enum/pattern would apply regardless of kind (#88).
+// No rule lands on a Marshaler leaf, text leaves included (the field itself,
+// or its element): it is written through its own method, so its underlying
+// kind says nothing, and format/enum/pattern would apply regardless of kind
+// (#88, #111). An enclosing slice or map keeps its cardinality.
 func applyValidationConstraints(prop *OpenAPIProperty, field *models.FieldInfo) {
 	resolved := field.ResolvedShape()
 	if len(field.Constraints) > 0 && !isMarshalerLeaf(resolved) {
@@ -261,9 +262,11 @@ func applyValidationConstraints(prop *OpenAPIProperty, field *models.FieldInfo) 
 	constraintsFor(elem, field.ElementConstraints).applyTo(prop.Items)
 }
 
-// isMarshalerLeaf reports whether s, after every pointer, is a Marshaler leaf.
+// isMarshalerLeaf reports whether s, after every pointer, is a Marshaler leaf:
+// a ShapeMarshaler, or a ShapeText (a string both ways, #111).
 func isMarshalerLeaf(s models.TypeShape) bool {
-	return stripPointers(s).Kind == models.ShapeMarshaler
+	k := stripPointers(s).Kind
+	return k == models.ShapeMarshaler || k == models.ShapeText
 }
 
 // sortedKeys returns the keys of m in lexicographic order so callers can iterate

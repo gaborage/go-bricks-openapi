@@ -32,6 +32,13 @@ const (
 		"— emitting an untyped schema (use a sized integer type)"
 	unregisteredRefPayloadWarning = "response type %s: struct %s could not be registered as a component " +
 		"— emitting an untyped object"
+	marshalerPromotedPayloadWarning = "response type %s: %s has the %s method promoted from its embedded %s, which " +
+		"encoding/json uses instead of its fields — emitting an untyped schema ({})"
+	marshalerRequestWarning = "request type %s: %s has its own %s method, which encoding/json uses instead of its " +
+		"fields — emitting an untyped requestBody schema ({}); its path, query and header fields stay parameters"
+	marshalerPromotedRequestWarning = "request type %s: %s has the %s method promoted from its embedded %s, which " +
+		"encoding/json uses instead of its fields — emitting an untyped requestBody schema ({}); its path, query and " +
+		"header fields stay parameters"
 )
 
 // resolvePayload resolves a payload that did not register as a project struct
@@ -107,6 +114,8 @@ func (a *ProjectAnalyzer) warnPayload(written string, r *models.TypeShape, fb fi
 		a.addWarningf(definedOverQualifiedPayloadWarning, written, fb.typeName, fb.detail)
 	case fallbackDeclsDisagree:
 		a.addWarningf(declsDisagreePayloadWarning, written, fb.typeName)
+	case fallbackMarshalerPromoted:
+		a.addWarningf(marshalerPromotedPayloadWarning, written, fb.typeName, fb.detail, fb.via)
 	default:
 		a.addWarningf(untypedBuiltinPayloadWarning, written, fb.detail)
 	}
@@ -166,9 +175,125 @@ func isFallbackLeaf(leaf *models.TypeShape) bool {
 		return !models.WellKnownTypeNames[leaf.Name]
 	case models.ShapePrimitive:
 		return leaf.Name == goTypeUintptr || models.UntypedBuiltinNames[leaf.Name]
-	case models.ShapeRef, models.ShapeKindOnly:
+	case models.ShapeRef, models.ShapeKindOnly, models.ShapeText:
 		return false
 	default:
 		return true
+	}
+}
+
+// namedShape is the type a request or response TypeInfo names, spelled as the
+// Shape decoder would: bare when declared in astFile's package, qualified by
+// its import name otherwise (registerPayloadType's rule).
+func namedShape(ti *models.TypeInfo, astFile *ast.File) models.TypeShape {
+	name := ti.Name
+	if ti.Package != "" && ti.Package != astFile.Name.Name {
+		name = ti.Package + "." + name
+	}
+	return models.TypeShape{Kind: models.ShapeNamed, Name: name}
+}
+
+// marshalerNamed resolves the type ti names in a body position and reports
+// whether it is a Marshaler type (a text or Marshaler leaf), with the leaf and
+// the fallback it noted. A struct Marshaler type never registers (#111).
+func (a *ProjectAnalyzer) marshalerNamed(ti *models.TypeInfo, astFile *ast.File, filePath string) (models.TypeShape, fieldFallback, bool) {
+	if ti.Name == "" {
+		return models.TypeShape{}, fieldFallback{}, false
+	}
+	c := newResolveCtx(astFile, filePath, false)
+	r := a.resolveShape(namedShape(ti, astFile), c)
+	return r, c.st.first, r.Kind == models.ShapeMarshaler || r.Kind == models.ShapeText
+}
+
+// structSite is a struct declaration and the package and file declaring it.
+type structSite struct {
+	st   *ast.StructType
+	pkg  string
+	file *ast.File
+	path string
+}
+
+// payloadStructSite finds the struct a request TypeInfo names, as
+// registerPayloadType would: a local chain, or a struct of another package
+// of the module.
+func (a *ProjectAnalyzer) payloadStructSite(ti *models.TypeInfo, astFile *ast.File, filePath string) (structSite, bool) {
+	if ti.Package != "" && ti.Package != astFile.Name.Name {
+		q, ok := a.resolveQualifiedStruct(ti.Package+"."+ti.Name, astFile)
+		return structSite{st: q.st, pkg: q.pkg, file: q.file, path: q.filePath}, ok
+	}
+	st, pkg, file, path, ok := a.resolveTypeSpecChain(astFile, filePath, ti.Name, 0)
+	return structSite{st: st, pkg: pkg, file: file, path: path}, ok
+}
+
+// populateMarshalerRequest documents a request whose type is a struct
+// Marshaler type (#111): its body is the Marshaler leaf's schema ({} with one
+// warning, or a string), it names no component, and only its path, query and
+// header fields are kept, as parameters. It reports false for any other
+// request.
+func (a *ProjectAnalyzer) populateMarshalerRequest(h *handlerAnalysis, astFile *ast.File, filePath string) bool {
+	ti := h.request
+	leaf, fb, isMarshaler := a.marshalerNamed(ti, astFile, filePath)
+	if !isMarshaler {
+		return false
+	}
+	site, ok := a.payloadStructSite(ti, astFile, filePath)
+	if !ok {
+		return false
+	}
+	params, paramsOnly := a.requestParamFields(site, ti.Name)
+	ti.Fields = params
+	if paramsOnly && !ti.JOSE {
+		// Bound from parameters only (isParamsOnlyType's sense): no body is
+		// documented, as before #111; Name is kept so doctor counts it typed.
+		return true
+	}
+	ti.Name = ""
+	ti.Resolution = &leaf
+	a.warnMarshalerRequest(h.requestType, fb)
+	return true
+}
+
+// requestParamFields extracts a struct Marshaler request's fields without
+// registering it, and keeps its parameters: each warns and registers its refs
+// as registerStructKeyed would.
+func (a *ProjectAnalyzer) requestParamFields(s structSite, name string) ([]models.FieldInfo, bool) {
+	fields := a.extractStructFields(s.st, s.pkg, s.file, s.path, map[string]struct{}{name: {}}, 0)
+	total := len(fields)
+	params := fields[:0]
+	for i := range fields {
+		if fields[i].ParamType != "" {
+			params = append(params, fields[i])
+		}
+	}
+	for i := range params {
+		a.warnResolvedField(&params[i])
+	}
+	for i := range params {
+		a.registerFieldRefAt(&params[i], s.file, s.path, 1)
+	}
+	// Zero fields is not params-only: such a request (type Ping struct{}
+	// with UnmarshalJSON) reads its body through its own method, so it gets
+	// a body.
+	return params, total > 0 && len(params) == total
+}
+
+// structMarshalerJOSE reports whether the struct a Marshaler payload names
+// carries a jose: tag, as registerType would have recorded: the route stays
+// JOSE on the wire whatever the plaintext's methods.
+func (a *ProjectAnalyzer) structMarshalerJOSE(ti *models.TypeInfo, astFile *ast.File, filePath string) bool {
+	site, ok := a.payloadStructSite(ti, astFile, filePath)
+	return ok && hasJOSETag(site.st)
+}
+
+// warnMarshalerRequest raises a struct Marshaler request's one warning, or
+// none for a string-both-ways type. written is the request type as written.
+func (a *ProjectAnalyzer) warnMarshalerRequest(written string, fb fieldFallback) {
+	switch fb.kind {
+	case fallbackMarshaler:
+		a.addWarningf(marshalerRequestWarning, written, fb.typeName, fb.detail)
+	case fallbackMarshalerPromoted:
+		a.addWarningf(marshalerPromotedRequestWarning, written, fb.typeName, fb.detail, fb.via)
+	default:
+		// A string both ways: documented, no warning.
 	}
 }

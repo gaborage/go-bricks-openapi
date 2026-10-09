@@ -37,6 +37,8 @@ func TestSetTypeAndFormatResolutionLeaves(t *testing.T) {
 		{"[][]kind:number", sliceOf(sliceOf(kindOnlyLeaf(typeNumber))), arr(arr(&OpenAPIProperty{Type: typeNumber}))},
 		{"marshaler over $User", marshalerOf("Users", sliceOf(refTo("User"))), &OpenAPIProperty{}},
 		{"recursive", recursiveLeaf("Tree"), &OpenAPIProperty{}},
+		{"text", textLeaf("Level"), &OpenAPIProperty{Type: typeString}},
+		{"[]text", sliceOf(textLeaf("Level")), arr(&OpenAPIProperty{Type: typeString})},
 		{"**int64", ptrOf(ptrOf(prim("int64"))), &OpenAPIProperty{Type: typeInteger, Format: formatInt64}},
 	}
 	for _, tc := range cases {
@@ -99,6 +101,7 @@ func TestAddFieldSchemaRefsWalksResolution(t *testing.T) {
 		*resolved(named("B"), arrayOf(refTo("Arr"))),
 		*resolved(named("C"), marshalerOf("C", sliceOf(refTo("Hidden")))),
 		*resolved(named("D"), recursiveLeaf("D")),
+		*resolved(named("T"), sliceOf(textLeaf("T"))),
 		{Name: "E", JSONName: "-", Shape: named("Excluded")},
 	}}
 	out := map[string]bool{}
