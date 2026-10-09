@@ -110,7 +110,7 @@ func (m *Module) get(req QualifiedParams, ctx server.HandlerContext) (server.Res
 	return server.NewResult(http.StatusOK, Qualified{}), nil
 }
 
-// cents keeps today's payload fallback: payloads are resolved by #110.
+// cents is documented as an int64, since payloads resolve like fields (#110).
 func (m *Module) cents(ctx server.HandlerContext) (server.Result[b.Cents], server.IAPIError) {
 	return server.NewResult(http.StatusOK, b.Cents(0)), nil
 }

@@ -116,14 +116,37 @@ type TypeInfo struct {
 	// no slice awareness: the component emitted for []Item is Item, and the
 	// payload schema wraps a $ref to it in an array.
 	//
-	// For any other non-slice payload Shape is the argument as written (a
-	// pointer kept; consumers shed one level). The generator documents a
-	// well-known type (time.Time, uuid.UUID, json.Number, ...: WellKnownTypeNames) or
-	// a builtin (string, int64, any, interface{}) inline from it and never $refs
-	// it. A builtin carries no Name; a well-known type keeps its Name. Any other
-	// name that resolves to no component is cleared by the analyzer, with a
-	// warning, so the payload falls back to an untyped object.
+	// For any other payload Shape is the argument as written (a pointer kept).
+	// A payload that does not register as a project struct is resolved by the
+	// analyzer (Resolution) and typed from it exactly as a struct field of its
+	// type, never $ref'd itself; a builtin carries no Name, a well-known type
+	// (time.Time, uuid.UUID, json.Number, ...: WellKnownTypeNames) keeps its
+	// Name, and any other name is cleared. Only a root that resolves to nothing
+	// (an unresolvable or undeclared name, a defined type over a well-known
+	// struct, disagreeing build-tagged declarations, or an unmodelled leaf such
+	// as func()) keeps the name-cleared, warned, untyped-object fallback. A
+	// nameless composite over a named func or chan type (map[string]Fn) gets no
+	// Resolution and is typed from its Shape, a container of untyped objects,
+	// with no per-type warning, exactly as a field of its type.
 	Shape *TypeShape
+	// Resolution is the payload's Shape with every named non-struct type of the
+	// module substituted by what it stands for and every struct leaf a ShapeRef
+	// (CONTEXT.md, "Resolution"). Stamped by the analyzer on a payload that does
+	// not register as a struct; nil for a request, a registered struct payload,
+	// the NoContentResult marker, a payload whose root resolves to nothing, and
+	// a nameless composite whose resolution has an unmodelled leaf
+	// (map[string]Fn), which is typed from its Shape like the field of its type.
+	// Read it through ResolvedShape.
+	Resolution *TypeShape
+}
+
+// ResolvedShape returns the payload's Resolution, else its Shape (nil when it
+// has neither).
+func (t *TypeInfo) ResolvedShape() *TypeShape {
+	if t.Resolution != nil {
+		return t.Resolution
+	}
+	return t.Shape
 }
 
 // Qualified names of the well-known stdlib/library types, spelled as the Shape
@@ -199,9 +222,10 @@ const (
 
 // TypeShape is the syntactic container structure of a field's declared type,
 // decoded once from the AST at extraction. Purely syntactic — it carries no
-// registry knowledge. The registry outcome lives in FieldInfo.Resolution,
-// which reuses this vocabulary plus the four Resolution-only kinds (ShapeRef,
-// ShapeKindOnly, ShapeMarshaler, ShapeRecursive).
+// registry knowledge. The registry outcome lives in FieldInfo.Resolution and
+// TypeInfo.Resolution, which reuse this vocabulary plus the four
+// Resolution-only kinds (ShapeRef, ShapeKindOnly, ShapeMarshaler,
+// ShapeRecursive).
 // The zero value (Kind "") is treated everywhere as ShapeUnknown.
 type TypeShape struct {
 	Kind ShapeKind

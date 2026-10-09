@@ -14,9 +14,9 @@ func (m *Module) Name() string                    { return "catalog" }
 func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
 func (m *Module) Shutdown() error                 { return nil }
 
-// Status is a local named scalar: it resolves to no component, so a
-// []Status payload documents its items as an untyped object and the route is
-// reported as having no resolved type (the analyzer warns).
+// Status is a local named scalar: it names no component, and a []Status
+// payload documents its items as strings, exactly as a []Status field does
+// (#110).
 type Status string
 
 // Item is the catalog resource.
@@ -61,9 +61,8 @@ func (m *Module) listTags(ctx server.HandlerContext) (server.Result[[]string], s
 	return server.OK([]string{}), nil
 }
 
-// listStatuses returns a slice of a named scalar, which resolves to no
-// component: items stay an untyped object, exactly as the non-slice
-// server.Result[Status] payload does.
+// listStatuses returns a slice of a named scalar, which resolves to string:
+// its items are strings, as the items of a []Status field are.
 func (m *Module) listStatuses(ctx server.HandlerContext) (server.Result[[]Status], server.IAPIError) {
 	return server.OK([]Status{}), nil
 }

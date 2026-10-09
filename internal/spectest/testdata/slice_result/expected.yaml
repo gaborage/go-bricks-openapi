@@ -183,7 +183,7 @@ paths:
                   data:
                     type: array
                     items:
-                      type: object
+                      type: string
                   meta:
                     type: object
                     properties:

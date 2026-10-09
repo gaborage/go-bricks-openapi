@@ -366,10 +366,11 @@ func TestQualifiedSameClausePackages(t *testing.T) {
 	assert.Empty(t, a.Warnings(t.Context()))
 }
 
-// TestQualifiedPayloadUnchanged pins the out-of-scope payload half (#110): a
-// Result[b.Cents] payload keeps its untyped data schema and its warning.
-func TestQualifiedPayloadUnchanged(t *testing.T) {
-	a := analyzeDirectiveProject(t, map[string]string{
+// TestQualifiedPayloadResolves pins the payload half (#110): a
+// Result[b.Cents] payload resolves in b exactly as a b.Cents field does, to
+// int64, with no warning.
+func TestQualifiedPayloadResolves(t *testing.T) {
+	a, routes := analyzeProjectRoutes(t, map[string]string{
 		"go.mod":                   resolveGoMod,
 		filepath.Join("b", "b.go"): "package b\n\ntype Cents int64\n",
 		filepath.Join("mod", "module.go"): strings.Replace(resolveModuleHead, "import (\n", "import (\n\t\"github.com/example/app/b\"\n", 1) + `
@@ -381,7 +382,12 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 `,
 	})
-	assert.Contains(t, strings.Join(a.Warnings(t.Context()), "\n"), "response type b.Cents resolves to no schema component")
+	assert.Empty(t, a.Warnings(t.Context()))
+	cents := routeByPath(t, routes, "/cents").Response
+	require.NotNil(t, cents)
+	require.NotNil(t, cents.Resolution)
+	assert.Equal(t, goTypeInt64, renderShape(*cents.Resolution))
+	assert.Empty(t, cents.Name)
 }
 
 // TestQualifiedInSiblingFile pins that a struct declared in a sibling of the

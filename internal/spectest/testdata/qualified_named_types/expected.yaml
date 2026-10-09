@@ -20,8 +20,8 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    type: integer
+                    format: int64
                   meta:
                     type: object
                     properties:

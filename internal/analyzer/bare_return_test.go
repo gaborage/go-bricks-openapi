@@ -109,7 +109,7 @@ func TestBareReturnPayloadShapes(t *testing.T) {
 		require.NotNil(t, ti)
 		assert.Empty(t, ti.Name, "a builtin names no component — a $ref would dangle")
 		require.NotNil(t, ti.Shape)
-		assert.Equal(t, models.TypeShape{Kind: models.ShapePrimitive, Name: "int64"}, PayloadBaseShape(*ti.Shape))
+		assert.Equal(t, models.TypeShape{Kind: models.ShapePrimitive, Name: "int64"}, payloadBaseShape(*ti.Shape))
 		assert.Empty(t, warnings)
 	})
 	t.Run("well_known_keeps_name_and_shape", func(t *testing.T) {
@@ -142,9 +142,14 @@ func TestBareReturnPayloadShapes(t *testing.T) {
 		require.Len(t, warnings, 1)
 		assert.Contains(t, warnings[0], "response type decimal.Decimal resolves to no schema component")
 	})
-	t.Run("map_stays_untyped", func(t *testing.T) {
+	t.Run("map_resolves", func(t *testing.T) {
 		ti, warnings := analyzeBareReturn(t, "map[string]Cents")
-		assert.Nil(t, ti, "maps are out of scope, as for server.Result[map[string]T]")
+		require.NotNil(t, ti, "a bare map is carried nameless, as server.Result[map[string]T] is (#110)")
+		assert.Empty(t, ti.Name)
+		require.NotNil(t, ti.Shape)
+		assert.Equal(t, "map[string]Cents", renderShape(*ti.Shape))
+		require.NotNil(t, ti.Resolution)
+		assert.Equal(t, "map[string]int64", renderShape(*ti.Resolution))
 		assert.Empty(t, warnings)
 	})
 }

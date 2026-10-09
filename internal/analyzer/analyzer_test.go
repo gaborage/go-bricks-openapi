@@ -3590,14 +3590,12 @@ func TestTypeInfoFromExprResultWrappers(t *testing.T) {
 		assert.Equal(t, models.ShapePrimitive, ti.Shape.Elem.Kind)
 		assert.Equal(t, "string", ti.Shape.Elem.Name)
 	})
-	t.Run("result_slice_of_pointer_is_treated_as_slice_of_value", func(t *testing.T) {
+	t.Run("result_slice_of_pointer_keeps_the_element_pointer", func(t *testing.T) {
 		ti := parseResult(t, "server.Result[[]*User]")
 		require.NotNil(t, ti)
 		assert.Equal(t, "User", ti.Name)
 		require.NotNil(t, ti.Shape)
-		require.NotNil(t, ti.Shape.Elem)
-		assert.Equal(t, models.ShapeNamed, ti.Shape.Elem.Kind, "the element pointer is shed, mirroring []*T struct fields")
-		assert.Equal(t, "User", ti.Shape.Elem.Name)
+		assert.Equal(t, "[]*User", renderShape(*ti.Shape), "the element pointer is kept ([]*byte is a number array)")
 	})
 	t.Run("result_slice_of_qualified_named", func(t *testing.T) {
 		ti := parseResult(t, "server.Result[[]types.Item]")
@@ -3610,11 +3608,19 @@ func TestTypeInfoFromExprResultWrappers(t *testing.T) {
 	t.Run("result_slice_of_framework_type_is_nil", func(t *testing.T) {
 		assert.Nil(t, parseResult(t, "server.Result[[]server.IAPIError]"), "a framework element is not a payload")
 	})
-	t.Run("result_nested_slice_is_nil", func(t *testing.T) {
-		assert.Nil(t, parseResult(t, "server.Result[[][]User]"), "nested slices are out of scope")
+	t.Run("result_nested_slice_is_carried_nameless", func(t *testing.T) {
+		ti := parseResult(t, "server.Result[[][]User]")
+		require.NotNil(t, ti)
+		assert.Empty(t, ti.Name)
+		require.NotNil(t, ti.Shape)
+		assert.Equal(t, "[][]User", renderShape(*ti.Shape))
 	})
-	t.Run("result_map_is_nil", func(t *testing.T) {
-		assert.Nil(t, parseResult(t, "server.Result[map[string]User]"), "maps are out of scope")
+	t.Run("result_map_is_carried_nameless", func(t *testing.T) {
+		ti := parseResult(t, "server.Result[map[string]User]")
+		require.NotNil(t, ti)
+		assert.Empty(t, ti.Name)
+		require.NotNil(t, ti.Shape)
+		assert.Equal(t, "map[string]User", renderShape(*ti.Shape))
 	})
 	t.Run("non_slice_result_carries_its_shape", func(t *testing.T) {
 		ti := parseResult(t, "server.Result[User]")
@@ -3640,7 +3646,7 @@ func TestTypeInfoFromExprResultWrappers(t *testing.T) {
 			require.NotNil(t, ti, expr)
 			assert.Empty(t, ti.Name, "%s: a builtin names no component — a $ref would dangle", expr)
 			require.NotNil(t, ti.Shape, expr)
-			assert.Equal(t, models.ShapePrimitive, PayloadBaseShape(*ti.Shape).Kind, expr)
+			assert.Equal(t, models.ShapePrimitive, payloadBaseShape(*ti.Shape).Kind, expr)
 		}
 	})
 	t.Run("non_slice_empty_interface_is_an_untyped_payload", func(t *testing.T) {
@@ -4050,12 +4056,12 @@ type Item struct {
 	assert.Empty(t, a.Warnings(t.Context()), "a successfully-resolved qualified reference must not warn")
 }
 
-// TestNamedSliceWarnsAndClears verifies a named slice used as a route response
-// (`type UserList []User`) cannot resolve to a struct: the response's Name is
-// cleared to "" (so the generator's untyped-object fallback applies instead of
-// a dangling $ref), a warning naming the type fires, and neither the named
-// slice nor its dropped element type end up in the type registry.
-func TestNamedSliceWarnsAndClears(t *testing.T) {
+// TestNamedSlicePayloadResolves verifies a named slice used as a route response
+// (`type UserList []User`) resolves exactly as a field of its type (#110): its
+// Name is cleared (a named non-struct never names a component), its Resolution
+// is an array of $ref User, no warning fires, and the element User registers
+// while the named slice itself does not.
+func TestNamedSlicePayloadResolves(t *testing.T) {
 	src := `package mod
 import (
 	"github.com/gaborage/go-bricks/app"
@@ -4077,30 +4083,20 @@ func (m *Module) list(ctx server.HandlerContext) (server.Result[UserList], serve
 	a, routes := analyzeSingleModule(t, src)
 	route := routeForPath(t, routes, "GET /users")
 	require.NotNil(t, route.Response)
-	assert.Empty(t, route.Response.Name, "a named slice response must clear to untyped rather than carry a dangling $ref name")
-
-	warnings := a.Warnings(t.Context())
-	require.NotEmpty(t, warnings, "a named-slice response must produce a warning")
-	found := false
-	for _, w := range warnings {
-		if strings.Contains(w, "UserList") {
-			found = true
-		}
-	}
-	assert.True(t, found, "expected a warning mentioning UserList, got: %v", warnings)
+	assert.Empty(t, route.Response.Name, "a named slice names no component")
+	require.NotNil(t, route.Response.Resolution)
+	assert.Equal(t, "[]$User", renderShape(*route.Response.Resolution))
+	assert.Empty(t, a.Warnings(t.Context()))
 
 	assert.NotContains(t, a.typeRegistry, "UserList", "the named slice itself must not be registered")
-	assert.NotContains(t, a.typeRegistry, "User", "the element type is dropped along with the cleared response")
+	assert.Contains(t, a.typeRegistry, "User", "the element struct registers through the payload")
 }
 
-// TestNamedScalarSliceElementClearsNameKeepsShape pins the state the doctor's
-// typed-route gate reads for `server.Result[[]Status]` where Status is a local
-// named scalar: the element resolves to no component, so Name is cleared (with
-// the same warning the non-slice server.Result[Status] produces), while the
-// slice Shape survives with a ShapeNamed element. A payload in that state is
-// documented as items: {type: object} — an untyped fallback in an array
-// wrapper — which is why isTypedPayload requires a PRIMITIVE element.
-func TestNamedScalarSliceElementClearsNameKeepsShape(t *testing.T) {
+// TestNamedScalarSliceElementResolves pins `server.Result[[]Status]` where
+// Status is a local named scalar (#110): the element resolves to string, so
+// the payload's Resolution is []string, its Name is cleared, no warning fires,
+// and the Shape keeps the element as written.
+func TestNamedScalarSliceElementResolves(t *testing.T) {
 	src := `package mod
 import (
 	"github.com/gaborage/go-bricks/app"
@@ -4119,30 +4115,22 @@ func (m *Module) list(ctx server.HandlerContext) (server.Result[[]Status], serve
 	a, routes := analyzeSingleModule(t, src)
 	route := routeForPath(t, routes, "GET /statuses")
 	require.NotNil(t, route.Response)
-	assert.Empty(t, route.Response.Name, "a named scalar element resolves to no component, so the name is cleared")
-	require.NotNil(t, route.Response.Shape, "the slice shape survives the cleared name")
-	assert.Equal(t, models.ShapeSlice, route.Response.Shape.Kind)
-	require.NotNil(t, route.Response.Shape.Elem)
-	assert.Equal(t, models.ShapeNamed, route.Response.Shape.Elem.Kind)
-
-	found := false
-	for _, w := range a.Warnings(t.Context()) {
-		if strings.Contains(w, "Status") {
-			found = true
-		}
-	}
-	assert.True(t, found, "the named non-struct warning must still fire for a slice element")
+	assert.Empty(t, route.Response.Name, "a named scalar element names no component")
+	require.NotNil(t, route.Response.Shape)
+	assert.Equal(t, "[]Status", renderShape(*route.Response.Shape), "the Shape stays as written")
+	require.NotNil(t, route.Response.Resolution)
+	assert.Equal(t, "[]string", renderShape(*route.Response.Resolution))
+	assert.Empty(t, a.Warnings(t.Context()))
 	assert.NotContains(t, a.typeRegistry, "Status")
 }
 
 // TestUnresolvablePayloadFallsBackWithWarning pins the fallback for a payload
 // name that resolves to no component: a third-party type, an undeclared name,
 // or an aliased import of a well-known type (which is not recognised). Each is
-// cleared to the warned untyped path — the one server.Result[Status] takes — so
-// the generator never emits a $ref to a missing component and --strict fails.
-// Well-known types keep their name and raise no warning; builtins carry no
-// name at all. A slice payload of an unresolvable element falls back the same
-// way.
+// cleared to the warned untyped path, so the generator never emits a $ref to
+// a missing component and --strict fails. Well-known types keep their name and
+// raise no warning; builtins carry no name at all. A slice payload of an
+// unresolvable element falls back the same way.
 func TestUnresolvablePayloadFallsBackWithWarning(t *testing.T) {
 	src := `package mod
 import (
@@ -4212,7 +4200,7 @@ func (m *Module) item(ctx server.HandlerContext) (server.Result[Item], server.IA
 		require.NotNil(t, route.Response, path)
 		assert.Empty(t, route.Response.Name, "%s: an unresolvable payload name is cleared so no $ref dangles", path)
 		require.NotNil(t, route.Response.Shape, "%s: the shape survives the cleared name", path)
-		assert.Equal(t, models.ShapeNamed, PayloadBaseShape(*route.Response.Shape).Kind, path)
+		assert.Equal(t, models.ShapeNamed, payloadBaseShape(*route.Response.Shape).Kind, path)
 		assert.True(t, warnedAbout(written), "%s: expected a warning naming %s, got: %v", path, written, warnings)
 	}
 
@@ -4246,11 +4234,11 @@ func TestPayloadBaseShape(t *testing.T) {
 	named := models.TypeShape{Kind: models.ShapeNamed, Name: models.WellKnownTimeTime}
 	ptr := models.TypeShape{Kind: models.ShapePointer, Elem: &named}
 	slice := models.TypeShape{Kind: models.ShapeSlice, Elem: &named}
-	assert.Equal(t, named, PayloadBaseShape(named))
-	assert.Equal(t, named, PayloadBaseShape(ptr), "one pointer level is shed")
-	assert.Equal(t, named, PayloadBaseShape(slice), "a slice payload resolves from its element")
+	assert.Equal(t, named, payloadBaseShape(named))
+	assert.Equal(t, named, payloadBaseShape(ptr), "one pointer level is shed")
+	assert.Equal(t, named, payloadBaseShape(slice), "a slice payload resolves from its element")
 	bare := models.TypeShape{Kind: models.ShapePointer}
-	assert.Equal(t, bare, PayloadBaseShape(bare), "a pointer with no element is returned as-is")
+	assert.Equal(t, bare, payloadBaseShape(bare), "a pointer with no element is returned as-is")
 }
 
 // TestRegisteredPayloadShedsShape pins that a non-slice payload which resolves
@@ -4319,10 +4307,11 @@ func (m *Module) many(ctx server.HandlerContext) (server.Result[[]uuid.UUID], se
 }
 
 // TestAliasChainDepthCapped verifies a chain of named indirections deeper than
-// the depth cap (8) does not panic and does not resolve — the cap fires before
-// the terminal struct is ever examined, so registerViaTypeSpec returns nil and
-// the Step 3 warning fires exactly as it would for any other unresolvable local
-// non-struct declaration.
+// the depth cap (8) does not panic. The cap still stops registerViaTypeSpec
+// before the terminal struct is examined, so the payload does not register as
+// T0; it then resolves exactly as a T0 field does (#110): the resolver opens
+// the first alias and the rest resolves to a $ref to component T1, with no
+// warning.
 func TestAliasChainDepthCapped(t *testing.T) {
 	src := `package mod
 import (
@@ -4353,10 +4342,11 @@ func (m *Module) get(ctx server.HandlerContext) (server.Result[T0], server.IAPIE
 	a, routes := analyzeSingleModule(t, src)
 	route := routeForPath(t, routes, "GET /t")
 	require.NotNil(t, route.Response)
-	assert.Empty(t, route.Response.Name, "a chain deeper than the depth cap must not resolve")
-
-	warnings := a.Warnings(t.Context())
-	require.NotEmpty(t, warnings, "the depth-capped chain must produce the Step 3 warning")
+	assert.Empty(t, route.Response.Name, "a chain deeper than the depth cap does not register as T0")
+	require.NotNil(t, route.Response.Resolution)
+	assert.Equal(t, "$T1", renderShape(*route.Response.Resolution))
+	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Contains(t, a.typeRegistry, "T1")
 }
 
 // deepChainModuleSrc builds a single-module source file whose route response is

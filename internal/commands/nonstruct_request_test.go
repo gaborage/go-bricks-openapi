@@ -139,7 +139,7 @@ func TestRunGenerateStructRequestPassesStrict(t *testing.T) {
 // the response is classified exactly as before.
 func TestDoctorCountsNonStructRequestUntyped(t *testing.T) {
 	t.Run("non_struct_request_untyped_response", func(t *testing.T) {
-		stats := nonStructRequestStats(t, writeNonStructRequestProject(t, "string", "map[string]string"))
+		stats := nonStructRequestStats(t, writeNonStructRequestProject(t, "string", "map[string]chan int"))
 		assert.Equal(t, 0, stats.TypedRequestRoutes)
 		assert.Equal(t, 0, stats.TypedRoutes)
 		assert.Equal(t, []string{"create"}, stats.UntypedRoutes)

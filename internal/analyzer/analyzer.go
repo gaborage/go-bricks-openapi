@@ -682,12 +682,15 @@ func (a *ProjectAnalyzer) extractRoutesFromPackage(astFile *ast.File, filePath, 
 		a.extractConstants(file)
 	}
 
-	for _, file := range files {
+	for path, file := range files {
 		aliases := a.extractImportAliases(file, serverImportPath)
 		if len(aliases) == 0 {
 			continue
 		}
-		routes = append(routes, a.collectRoutesFromFile(file, filePath, structName, moduleName, aliases)...)
+		// Each file is walked with its OWN path: the resolver skips the file
+		// whose path it is given, so pairing this AST with the Module-struct
+		// file's path would hide that file's named types from every handler here.
+		routes = append(routes, a.collectRoutesFromFile(file, path, structName, moduleName, aliases)...)
 	}
 
 	return routes
@@ -1534,6 +1537,7 @@ type handlerAnalysis struct {
 	request       *models.TypeInfo
 	requestType   string
 	response      *models.TypeInfo
+	responseType  string // the payload type as written, for payload warnings
 	successStatus int
 	errorStatuses []int
 }
@@ -1541,8 +1545,10 @@ type handlerAnalysis struct {
 // found reports whether the analysis came from a matched handler declaration.
 // A declaration carrying neither a request parameter nor a response Shape is
 // not treated as the handler, so the search continues into the rest of the
-// package.
-func (h handlerAnalysis) found() bool {
+// package. A request-less handler whose payload is carried (a map, a nested
+// slice or a pointer to a container included) is found, so its success and
+// error statuses are kept.
+func (h *handlerAnalysis) found() bool {
 	return h.request != nil || h.requestType != "" || h.response != nil
 }
 
@@ -2378,12 +2384,60 @@ func (a *ProjectAnalyzer) handleResultWrapper(x, index ast.Expr, packageName str
 // result — to a TypeInfo carrying its Shape. go-bricks sends both under the
 // same data key (or as the whole body with WithRawResponse()), so both must be
 // documented alike: a slice or fixed-size array is an array payload, anything
-// else a scalar one.
+// else a scalar one. A map, a nested slice and a pointer to a slice, array, map
+// or interface{} are carried nameless with their Shape, on this payload path
+// only: a slice or map handler PARAMETER keeps resolving to nil through
+// typeInfoFromExpr. A written **T root falls through to scalarPayloadTypeInfo,
+// where typeInfoFromExpr returns nil: whether Result[**T] should resolve is
+// #120's open question.
 func (a *ProjectAnalyzer) payloadTypeInfo(expr ast.Expr, packageName string, serverAliases map[string]struct{}) *models.TypeInfo {
-	if arr, ok := expr.(*ast.ArrayType); ok {
-		return a.slicePayloadTypeInfo(arr, packageName, serverAliases)
+	switch e := expr.(type) {
+	case *ast.ArrayType:
+		return a.slicePayloadTypeInfo(e, packageName, serverAliases)
+	case *ast.MapType:
+		return a.compositePayloadTypeInfo(e, packageName)
+	case *ast.StarExpr:
+		if isCompositePointee(e.X) { // *[]T, *[N]T, *map[K]V, *interface{}
+			return a.compositePayloadTypeInfo(e, packageName)
+		}
 	}
 	return a.scalarPayloadTypeInfo(expr, packageName, serverAliases)
+}
+
+// isCompositePointee reports whether a pointer payload's pointee is a slice,
+// array, map or interface{} literal, which payloadTypeInfo carries nameless.
+// A named pointee (*Item, *q.T) keeps the scalar path, and so does a second
+// pointer (**T stays nil, #120).
+func isCompositePointee(x ast.Expr) bool {
+	switch x.(type) {
+	case *ast.ArrayType, *ast.MapType, *ast.InterfaceType:
+		return true
+	default:
+		return false
+	}
+}
+
+// compositePayloadTypeInfo carries a composite payload (a map, a nested slice,
+// a pointer to a container) nameless with its Shape, so populateTypeFields can
+// resolve it like a field of its type. A literal unmodelled leaf
+// (map[string]func(), []struct{...}, a generic instantiation) returns nil,
+// keeping the pre-existing nil response (#118, #114).
+func (a *ProjectAnalyzer) compositePayloadTypeInfo(expr ast.Expr, packageName string) *models.TypeInfo {
+	shape := a.typeShape(expr)
+	if hasUnknownLeaf(&shape) {
+		return nil
+	}
+	return &models.TypeInfo{Package: packageName, Shape: &shape}
+}
+
+// hasUnknownLeaf reports whether any emitted leaf of s is unmodelled
+// (ShapeUnknown, or the zero Kind).
+func hasUnknownLeaf(s *models.TypeShape) bool {
+	found := false
+	walkResolvedLeaves(s, func(leaf *models.TypeShape) {
+		found = found || leaf.Kind == models.ShapeUnknown || leaf.Kind == ""
+	})
+	return found
 }
 
 // scalarPayloadTypeInfo resolves a non-slice payload (server.Result[Item],
@@ -2393,6 +2447,8 @@ func (a *ProjectAnalyzer) payloadTypeInfo(expr ast.Expr, packageName string, ser
 //
 // A builtin (one pointer level shed) names no component, so its Name is
 // cleared — the same rule slicePayloadTypeInfo applies to a primitive element.
+// A named payload that does not register as a project struct is resolved by
+// populateTypeFields (resolvePayload) and typed like a field of its type.
 // interface{} is resolved here too: typeInfoFromExpr has no case for it, but
 // as a payload it is "any JSON value", exactly like any. If the payload later
 // registers as a project struct, populateTypeFields sheds the Shape again
@@ -2408,19 +2464,18 @@ func (a *ProjectAnalyzer) scalarPayloadTypeInfo(
 	if ti == nil {
 		return nil
 	}
-	if PayloadBaseShape(shape).Kind == models.ShapePrimitive {
+	if payloadBaseShape(shape).Kind == models.ShapePrimitive {
 		ti.Name = ""
 	}
 	ti.Shape = &shape
 	return ti
 }
 
-// PayloadBaseShape returns the shape a payload's schema is resolved from: a
+// payloadBaseShape returns the shape a payload's schema is resolved from: a
 // slice or array payload's element, otherwise the payload itself, with one
-// pointer level shed — the generator's uniform pointer discipline
-// (shapeAfterPointer). Exported for doctor's isTypedPayload, which must
-// classify payloads by the same base shape the analyzer screens them by.
-func PayloadBaseShape(s models.TypeShape) models.TypeShape {
+// pointer level shed. The analyzer screens and names payloads by it
+// (slicePayloadTypeInfo, resolvePayload, dropUnresolvablePayloadName).
+func payloadBaseShape(s models.TypeShape) models.TypeShape {
 	if isSequence(s.Kind) && s.Elem != nil {
 		s = *s.Elem
 	}
@@ -2437,10 +2492,13 @@ func PayloadBaseShape(s models.TypeShape) models.TypeShape {
 // instead of the untyped-object fallback an unresolved payload produces. The
 // marker must keep an array apart: only a byte slice is a base64 string.
 //
-// Only a named or primitive element is modelled; a pointer element is shed
-// first, mirroring how a []*T struct field is documented as an array of the
-// value type. Anything else ([][]T, map elements, func/chan) returns nil,
-// keeping the pre-existing untyped-object output rather than guessing.
+// The element pointer is kept: encoding/json writes a []*byte as a number
+// array, not base64, so the Shape must keep it apart from []byte. A named
+// element (one pointer level shed) names the TypeInfo after it, so []Item and
+// []*Item register Item; a builtin element names nothing. Any other element
+// shape ([][]T, []map[K]V, []**T, []*[]T) is carried nameless
+// (compositePayloadTypeInfo), and a literal unmodelled element
+// ([]struct{...}, []func()) still returns nil.
 //
 // This lives on the payload path rather than in typeInfoFromExpr's own switch
 // on purpose: only a response (a Result/ResultWithMeta type argument or a bare
@@ -2450,27 +2508,23 @@ func PayloadBaseShape(s models.TypeShape) models.TypeShape {
 func (a *ProjectAnalyzer) slicePayloadTypeInfo(
 	arr *ast.ArrayType, packageName string, serverAliases map[string]struct{},
 ) *models.TypeInfo {
-	elemExpr := arr.Elt
-	if star, ok := elemExpr.(*ast.StarExpr); ok {
-		elemExpr = star.X
-	}
-	elemShape := a.typeShape(elemExpr)
+	elemShape := a.typeShape(arr.Elt)
 	shape := models.TypeShape{Kind: sequenceKind(arr), Elem: &elemShape}
 
-	switch elemShape.Kind {
+	switch payloadBaseShape(shape).Kind {
 	case models.ShapePrimitive:
 		// A builtin element names no component; the generator types the items
 		// from the shape. Leaving Name empty is what keeps a $ref from dangling.
 		return &models.TypeInfo{Package: packageName, Shape: &shape}
 	case models.ShapeNamed:
-		elem := a.typeInfoFromExpr(elemExpr, packageName, serverAliases)
+		elem := a.typeInfoFromExpr(arr.Elt, packageName, serverAliases)
 		if elem == nil {
 			return nil // a framework type ([]server.IAPIError) is not a payload
 		}
 		elem.Shape = &shape
 		return elem
 	default:
-		return nil // nested slices, maps and unmodelled shapes are out of scope
+		return a.compositePayloadTypeInfo(arr, packageName)
 	}
 }
 
@@ -2609,20 +2663,36 @@ func isNonStructTypeLiteral(expr ast.Expr) bool {
 // and is documented, warned about and classified alike. That routing lives
 // here rather than in typeInfoFromExpr, which request extraction shares: a
 // request type must keep resolving as it does today.
-func (a *ProjectAnalyzer) extractResponseType(results *ast.FieldList, packageName string, serverAliases map[string]struct{}) *models.TypeInfo {
+//
+// written is the payload type as written, for payload warnings: the wrapper's
+// type argument, the bare result itself, or "" for NoContentResult.
+func (a *ProjectAnalyzer) extractResponseType(
+	results *ast.FieldList, packageName string, serverAliases map[string]struct{},
+) (ti *models.TypeInfo, written string) {
 	if results == nil || len(results.List) == 0 {
-		return nil
+		return nil, ""
 	}
 
 	first := results.List[0].Type
-	switch first.(type) {
-	case *ast.IndexExpr, *ast.IndexListExpr:
-		return a.typeInfoFromExpr(first, packageName, serverAliases)
+	switch e := first.(type) {
+	case *ast.IndexExpr:
+		return a.typeInfoFromExpr(first, packageName, serverAliases), types.ExprString(e.Index)
+	case *ast.IndexListExpr:
+		return a.typeInfoFromExpr(first, packageName, serverAliases), firstTypeArg(e)
 	}
 	if a.isNoContentResultType(first, serverAliases) {
-		return a.typeInfoFromExpr(first, packageName, serverAliases)
+		return a.typeInfoFromExpr(first, packageName, serverAliases), ""
 	}
-	return a.payloadTypeInfo(first, packageName, serverAliases)
+	return a.payloadTypeInfo(first, packageName, serverAliases), types.ExprString(first)
+}
+
+// firstTypeArg renders a multi-parameter generic's first type argument, the
+// one typeInfoFromExpr treats as the payload.
+func firstTypeArg(e *ast.IndexListExpr) string {
+	if len(e.Indices) == 0 {
+		return ""
+	}
+	return types.ExprString(e.Indices[0])
 }
 
 // findHandlerInFile searches a single AST file for a handler method
@@ -2653,10 +2723,12 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 
 		// Extract types using helpers
 		request, requestType := a.extractRequestType(funcDecl.Type.Params, astFile.Name.Name, serverAliases)
+		response, responseType := a.extractResponseType(funcDecl.Type.Results, astFile.Name.Name, serverAliases)
 		return handlerAnalysis{
 			request:       request,
 			requestType:   requestType,
-			response:      a.extractResponseType(funcDecl.Type.Results, astFile.Name.Name, serverAliases),
+			response:      response,
+			responseType:  responseType,
 			successStatus: a.extractSuccessStatus(funcDecl, serverAliases),
 			errorStatuses: a.inferErrorStatuses(funcDecl, serverAliases),
 		}
@@ -3065,17 +3137,17 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 	// Try current file first
 	if h := a.findHandlerInFile(astFile, receiverType, isPackageFunc, handlerName); h.found() {
 		a.populateRequestType(&h, astFile, filePath)
-		a.populateTypeFields(h.response, astFile, filePath)
+		a.populateTypeFields(h.response, h.responseType, astFile, filePath)
 		return h, nil
 	}
 
 	// Try other files in the package
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
 	if err == nil && files != nil {
-		for _, file := range files {
+		for path, file := range files {
 			if h := a.findHandlerInFile(file, receiverType, isPackageFunc, handlerName); h.found() {
-				a.populateRequestType(&h, file, filePath)
-				a.populateTypeFields(h.response, file, filePath)
+				a.populateRequestType(&h, file, path)
+				a.populateTypeFields(h.response, h.responseType, file, path)
 				return h, nil
 			}
 		}
@@ -3145,37 +3217,55 @@ func adoptRegisteredType(typeInfo, registered *models.TypeInfo) {
 // recursive) into the analyzer's type registry, so the generator can emit a
 // component per type and $ref between them. A request goes through
 // populateRequestType instead, which screens what does not register as a
-// struct.
-func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile *ast.File, filePath string) {
+// struct. written is the payload type as written, for payload warnings.
+//
+// A payload ends in one of four outcomes: it registers as a project struct
+// (its component is $ref'd); it resolves (resolvePayload stamps its
+// Resolution, and warns when it ends in a fallback); its root resolves to
+// nothing (screenUnresolvedPayload clears its name with a warning); or it is a
+// nameless composite whose resolution has an unmodelled leaf (map[string]Fn),
+// which resolvePayload leaves unstamped and the screens pass over silently on
+// its empty Name, so it is typed from its Shape like the field of its type.
+func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, written string, astFile *ast.File, filePath string) {
 	if typeInfo == nil {
 		return
 	}
-	registered := a.registerPayloadType(typeInfo, astFile, filePath)
-	if registered == nil {
-		// Only an UNQUALIFIED (in-package) type can be a local non-struct
-		// declaration. A qualified type that failed both resolution attempts is
-		// stdlib/third-party — never let a coincidental same-named local type
-		// here discard a legitimately-qualified type. Whatever is still named
-		// afterwards is screened by dropUnresolvablePayloadName.
-		//
-		// An own-package Ident reference's Package is NOT "" — handleIdentType
-		// stamps Package: packageName, which is always astFile.Name.Name (the
-		// declaring package), never empty. A genuinely cross-package reference
-		// (server.Result[q.Type]) instead carries Package = the import alias
-		// used at the call site, which differs from the current file's own
-		// package name. So "unqualified" is identified by Package being either
-		// empty (defensive) or equal to the current package, not by Package=="".
-		if typeInfo.Package == "" || typeInfo.Package == astFile.Name.Name {
-			if _, _, _, local := a.resolveLocalTypeSpec(astFile, filePath, typeInfo.Name); local {
-				a.addWarningf("request/response type %s is a named non-struct type — emitting an untyped schema (annotate or restructure it as a struct for a typed spec)", typeInfo.Name)
-				typeInfo.Name = ""
-				typeInfo.Fields = nil
-			}
-		}
-		a.dropUnresolvablePayloadName(typeInfo)
+	if registered := a.registerPayloadType(typeInfo, astFile, filePath); registered != nil {
+		adoptRegisteredType(typeInfo, registered)
 		return
 	}
-	adoptRegisteredType(typeInfo, registered)
+	if a.resolvePayload(typeInfo, written, astFile, filePath) {
+		return
+	}
+	a.screenUnresolvedPayload(typeInfo, astFile, filePath)
+}
+
+// screenUnresolvedPayload screens a payload that neither registered nor
+// resolved: a local named non-struct type whose root resolves to nothing warns
+// and is cleared here, and whatever is still named afterwards is screened by
+// dropUnresolvablePayloadName.
+func (a *ProjectAnalyzer) screenUnresolvedPayload(typeInfo *models.TypeInfo, astFile *ast.File, filePath string) {
+	// Only an UNQUALIFIED (in-package) type can be a local non-struct
+	// declaration. A qualified type that failed both resolution attempts is
+	// stdlib/third-party — never let a coincidental same-named local type
+	// here discard a legitimately-qualified type. Whatever is still named
+	// afterwards is screened by dropUnresolvablePayloadName.
+	//
+	// An own-package Ident reference's Package is NOT "" — handleIdentType
+	// stamps Package: packageName, which is always astFile.Name.Name (the
+	// declaring package), never empty. A genuinely cross-package reference
+	// (server.Result[q.Type]) instead carries Package = the import alias
+	// used at the call site, which differs from the current file's own
+	// package name. So "unqualified" is identified by Package being either
+	// empty (defensive) or equal to the current package, not by Package=="".
+	if typeInfo.Package == "" || typeInfo.Package == astFile.Name.Name {
+		if _, _, _, local := a.resolveLocalTypeSpec(astFile, filePath, typeInfo.Name); local {
+			a.addWarningf("request/response type %s is a named non-struct type — emitting an untyped schema (annotate or restructure it as a struct for a typed spec)", typeInfo.Name)
+			typeInfo.Name = ""
+			typeInfo.Fields = nil
+		}
+	}
+	a.dropUnresolvablePayloadName(typeInfo)
 }
 
 // shedRegisteredPayloadShape drops the Shape of a non-slice payload that
@@ -3193,26 +3283,25 @@ func shedRegisteredPayloadShape(ti *models.TypeInfo) {
 	}
 }
 
-// dropUnresolvablePayloadName screens a response payload whose name resolved to
-// no component: a third-party type (decimal.Decimal), an undeclared name, or an
-// aliased import of a well-known type (t.Time, not yet recognised). Left named,
-// the generator would $ref a component that is never emitted, so the name is
-// cleared with a warning — the untyped-object path server.Result[Status] takes —
-// and --strict fails instead of the document.
+// dropUnresolvablePayloadName screens a response payload whose root resolved to
+// nothing: a third-party type (server.Result[decimal.Decimal]), an undeclared
+// name, or an aliased import of a well-known type (t.Time, not yet
+// recognised). A composite with an unresolvable leaf
+// (map[string]decimal.Decimal) never reaches it: resolvePayload warns about it
+// with the same text. Left named, the generator would $ref a component that is
+// never emitted, so the name is cleared with a warning and the payload is
+// documented as an untyped object — --strict fails instead of the document.
 //
 // Only a response payload (a result-wrapper type argument or a bare return)
-// carries a Shape, so request bodies are never touched here. A well-known type
-// keeps its name: the generator documents it inline from the Shape, and the
-// doctor counts it as typed by that name.
+// carries a Shape, so request bodies are never touched here. A well-known
+// payload never reaches it: payloadResolves accepts every well-known root, so
+// resolvePayload stamps its Resolution and keeps its name first.
 func (a *ProjectAnalyzer) dropUnresolvablePayloadName(ti *models.TypeInfo) {
 	if ti.Name == "" || ti.Shape == nil {
 		return
 	}
-	base := PayloadBaseShape(*ti.Shape)
-	if base.Kind == models.ShapeNamed && models.WellKnownTypeNames[base.Name] {
-		return
-	}
-	a.addWarningf("response type %s resolves to no schema component — emitting an untyped schema (declare it as a struct in the project for a typed spec)", base.Name)
+	base := payloadBaseShape(*ti.Shape)
+	a.addWarningf(unresolvablePayloadWarning, base.Name)
 	ti.Name = ""
 	ti.Fields = nil
 }

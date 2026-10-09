@@ -269,25 +269,37 @@ nested Go module, is not.
 - `uint64` is documented as `format: int64` with `minimum: 0`, so values of
   2^63 and above exceed its declared format. No signed format holds the whole
   range, and leaving the format off would make generated clients narrower.
-- A `server.Result[T]` payload is typed inline when `T` is a builtin (except
-  `uintptr`, which stays an untyped object with no warning) or one of the
-  well-known types (`time.Time`, `time.Duration`, `time.Month`,
-  `time.Weekday`, `uuid.UUID`, `json.RawMessage`, `json.Number`), and
-  referenced when `T` is a struct in the project — even
-  one whose short name collides with a well-known type (a project package
-  `uuid` declaring `type UUID struct`). A slice payload of such a colliding
-  project struct (`server.Result[[]uuid.UUID]`) is still typed inline as the
-  well-known type's array. A slice or fixed-size array payload
-  (`server.Result[[]T]`, `server.Result[[N]T]`) is an array whose items follow
-  the same rules, so `[]string` gives string items. As `encoding/json` writes
-  them, `[]byte` alone is a base64 string, while `[N]byte` (payload or field)
-  is an integer array. A `T`
-  (or slice element) that resolves to none of these — a third-party type such
-  as `decimal.Decimal`, an undeclared name, or a well-known type under an
-  aliased import (`t "time"`) — is documented as an untyped object and reported
-  as a warning (so `--strict` fails on it). A bare handler return of type `T`
-  (no wrapper, with or without `WithRawResponse()`) follows the same rules as
-  `server.Result[T]`.
+- A response payload, the `T` of `server.Result[T]` /
+  `server.ResultWithMeta[T]` or a bare handler return of type `T` (with or
+  without `WithRawResponse()`), is documented exactly as a struct field of
+  type `T`: builtins, the well-known types (`time.Time`, `time.Duration`,
+  `time.Month`, `time.Weekday`, `uuid.UUID`, `json.RawMessage`,
+  `json.Number`), named non-struct types (local, or from another package of
+  the module), maps, nested slices and pointers to containers included. The
+  root is never `nullable`. As `encoding/json` writes them, `[]byte` alone is a
+  base64 string, while `[N]byte` (payload or field) and `[]*byte` are integer
+  arrays. A project struct is referenced, even one whose short name collides
+  with a well-known type (a project package `uuid` declaring
+  `type UUID struct`); a slice payload of such a colliding project struct
+  (`server.Result[[]uuid.UUID]`) is still typed inline as the well-known
+  type's array. A payload that ends in a fallback — a Marshaler type,
+  recursion, `uintptr`, `error`/`complex64`/`complex128`, or a type that
+  resolves to no schema (a third-party type such as `decimal.Decimal`, an
+  undeclared name, a well-known type under an aliased import `t "time"`) —
+  raises one warning, so `--strict` fails on it. The exception is a bare
+  `error` or `*error` payload (`server.Result[error]`): it is skipped as a
+  framework type and documented as an untyped object with no per-type
+  warning. Only the aggregate untyped-route warning reports it, and that
+  warning does not fire when the route has a typed request, so `--strict`
+  can pass. A map, nested slice or pointer to a slice over a named func or
+  chan type (`map[string]Fn`, `[][]Fn`, `*[]Fn`) is documented as a
+  container of untyped objects with no per-type warning. The route counts
+  as untyped, so only the aggregate untyped-route warning reports it, and
+  `--strict` fails only when the route has no typed request. A
+  plain `[]Fn` payload, like `Fn` itself, still raises the named non-struct
+  warning. Anonymous struct and generic payloads
+  (`server.Result[struct{ A int }]`, `server.Result[Page[User]]`) stay
+  untyped (#118, #114).
 - A handler whose request type is not a struct — a builtin (`string`,
   `*int64`), `any` or `interface{}`, a well-known or third-party type
   (`json.RawMessage`, `decimal.Decimal`), an undeclared name, a slice, map or

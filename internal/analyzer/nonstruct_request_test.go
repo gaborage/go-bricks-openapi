@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -168,21 +169,27 @@ func TestStructRequestDoesNotWarn(t *testing.T) {
 // resolves to nothing either, so the warning fires and the handler's success
 // and error statuses are still read.
 func TestNonStructRequestWithUnresolvedResponseStillWarns(t *testing.T) {
-	route, warnings := analyzeNonStructRequest(t, "req []Address, ctx server.HandlerContext", "map[string]Status")
+	route, warnings := analyzeNonStructRequest(t, "req []Address, ctx server.HandlerContext", "map[string]chan int")
 	assert.Equal(t, []string{wantNonStructRequestWarning("[]Address")}, warnings)
 	assert.Nil(t, route.Request)
 	assert.Nil(t, route.Response)
 }
 
 // TestNonStructRequestLeavesResponseWarningsAlone pins that only the request
-// side changed: a local named non-struct RESPONSE keeps its own warning text
-// beside the request's, and a builtin response stays typed with no warning.
+// side changed: a local named non-struct RESPONSE resolves like a field of its
+// type with no warning of its own (#110), an unresolvable response keeps its
+// own warning beside the request's, and a builtin response stays typed with no
+// warning.
 func TestNonStructRequestLeavesResponseWarningsAlone(t *testing.T) {
-	t.Run("named_non_struct_response", func(t *testing.T) {
+	t.Run("named_non_struct_response_resolves", func(t *testing.T) {
 		_, warnings := analyzeNonStructRequest(t, "req string, ctx server.HandlerContext", "Status")
+		assert.Equal(t, []string{wantNonStructRequestWarning("string")}, warnings)
+	})
+	t.Run("unresolvable_response", func(t *testing.T) {
+		_, warnings := analyzeNonStructRequest(t, "req string, ctx server.HandlerContext", "server.Result[decimal.Decimal]")
 		assert.Equal(t, []string{
 			wantNonStructRequestWarning("string"),
-			"request/response type Status is a named non-struct type — emitting an untyped schema (annotate or restructure it as a struct for a typed spec)",
+			fmt.Sprintf(unresolvablePayloadWarning, "decimal.Decimal"),
 		}, warnings)
 	})
 	t.Run("builtin_response", func(t *testing.T) {

@@ -1,7 +1,7 @@
 // Package api demonstrates named non-struct type resolution: an alias to a
-// struct (must emit a full $ref'ed component) and a named slice (which has no
-// struct shape of its own, so it must emit an untyped envelope rather than a
-// dangling $ref).
+// struct (must emit a full $ref'ed component) and a named slice (documented as
+// an array of $ref User, like a []User field, rather than a dangling $ref to a
+// component of its own; #110).
 package api
 
 import (
@@ -29,9 +29,9 @@ type User struct {
 // directly, and it must resolve to User's fields under the alias's own name.
 type UserResp = User
 
-// UserList is a named slice of User. It has no struct shape of its own, so it
-// cannot resolve to a component; the route below must emit an untyped
-// response envelope instead of a dangling $ref to "UserList".
+// UserList is a named slice of User. It names no component of its own: the
+// route below documents it as an array of $ref User, exactly as a []User
+// field does (#110), and User is emitted.
 type UserList []User
 
 // RegisterRoutes registers the module's HTTP routes.
