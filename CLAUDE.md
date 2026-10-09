@@ -60,6 +60,8 @@ Token rules:
 - `make clean` runs `go clean -cache -testcache`, which wipes the machine-wide Go build/test cache, not just this repo's.
 - `make sec`'s green exit isn't evidence it ran: gosec silently scans 0 files and exits 0 when given Go import paths.
 - The `sec` target omits CI's scanned-file-count assertion — trust the CI `Security (gosec)` job, not a local `make sec`.
+- gosec walks the filesystem, so `./...` also enters nested modules such as gitignored agent worktrees under `.claude/worktrees`; `make sec` adds `-exclude-dir=.claude` for that (CI never has the directory). The expected scan is 22 files.
+- `GOSEC_VERSION` (Makefile) and ci.yml's `go install …gosec@` are an untagged master pseudo-version, kept identical: every tagged gosec through v2.29.0 depends on `golang.org/x/tools` ≤ v0.49.0, which cannot read Go 1.27 export data (version 5) and fails typechecking. Swap both for the next tagged release.
 - `make validate-spec` (redocly) is deliberately excluded from `check` — it needs `npx` and network.
 - `make validate-spec` runs only on Ubuntu, against one fixture: `internal/spectest/testdata/nested_schema`.
 - It is belt-and-suspenders — the primary structural gate is the in-process kin-openapi validation in `internal/spectest`.
@@ -92,6 +94,7 @@ Token rules:
 - `internal/testutil`'s stdout-capture helper swaps the global `os.Stdout`; its doc says not to call it from parallel tests.
 - The Windows leg forgives nothing by design — a pattern-based failure allowlist was deleted on purpose; don't reintroduce one.
 - `go.mod` declares `go 1.25.0` with no `toolchain` directive while CI's setup-go steps pin a newer Go.
+- Every `actions/setup-go` step in `ci.yml` and `release.yml` requests `go-version: '1.27'` with `check-latest: true`. Without `check-latest`, a runner's cached older patch wins: the v0.4.0 release gate ran on go1.26.8 and failed govulncheck on stdlib vulns fixed in later patches.
 - The 1.25 floor is intentional — don't rely on language features newer than that.
 
 ## Settled invariants — do not "clean these up"
@@ -129,6 +132,7 @@ Token rules:
 - `lll` is at 215, not the 120 default.
 - Test files are linted, but `gocyclo`, `gosec`, `goconst`, `dupl`, `errcheck`, and `govet` are excluded on `_test.go`.
 - The golangci-lint pin lives in two places that must move together: the `GOLANGCI_VERSION` variable in `Makefile`, and the `golangci-lint-action` `version:` key in `ci.yml`.
+- The pin is v2.14.0, the first release on `golang.org/x/tools` v0.50.0. Every earlier version (v2.12.2 through v2.13.2) fails `typecheck` on the standard library under Go 1.27.2 with "export data version 5 is greater than maximum supported version 4".
 - A newer local golangci-lint can pass where the pinned one fails: PR #55 was clean under a local v2.13.2 while CI's pinned v2.12.2 flagged `goconst` (its occurrence counting differs and includes `_test.go` files) — the incident that motivated the guard below.
 - > **SUPERSEDED (2026-09-06).** `make lint` used to run bare `golangci-lint`, so a Homebrew install earlier on `PATH` shadowed the `make dev-deps` pin silently, and the workaround was `PATH="$HOME/go/bin:$PATH" make lint`. `lint` and `dev-deps` now both resolve the binary through the `GOLANGCI` Makefile variable, which lives under `GOBIN_DIR`: `go env GOBIN` when set, otherwise the first non-empty `GOPATH` entry plus `/bin`, the same rule `go install` uses (`dev-deps` installs there via `GOBIN`; both targets are Unix-only, CI lints Windows through the action directly), and `lint` fails loudly before running golangci-lint if the binary is missing, or if its `--version` output doesn't contain `version <N>` followed by a space (where `<N>` is `GOLANGCI_VERSION` with its leading `v` stripped) — naming `make dev-deps` and, on a mismatch, both the expected and found versions. PATH shadowing can no longer affect `make lint`; the old workaround is unnecessary.
 - `goconst` counts occurrences across the whole package including `_test.go` files (it only suppresses *findings* there), so moving a file into a package can push existing literals over the threshold with no new code — PR #58 hit 18 such findings from a pure relocation.
