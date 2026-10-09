@@ -45,7 +45,9 @@ const (
 		"— emitting an untyped object"
 	unregisteredRefFieldWarning = "field %s at %s has type %s: struct %s could not be registered as a component " +
 		"— emitting an untyped object"
-	unknownFieldPosition = "unknown position"
+	unknownFieldPosition          = "unknown position"
+	marshalerPromotedFieldWarning = "field %s at %s has type %s: %s has the %s method promoted from its embedded %s, which " +
+		"encoding/json uses instead of its fields — emitting an untyped schema ({}); parameters are typed by kind and unaffected"
 )
 
 type resolveMode int
@@ -66,6 +68,7 @@ const (
 	fallbackDefinedOverQualified
 	fallbackDeclsDisagree
 	fallbackUntypedBuiltin
+	fallbackMarshalerPromoted
 )
 
 // fieldFallback is the first fallback a field's resolution met.
@@ -76,6 +79,9 @@ type fieldFallback struct {
 	// underlying (fallbackDefinedOverQualified), or the builtin
 	// (fallbackUntypedBuiltin).
 	detail string
+	// via is the embedded field a promoted Marshaler method comes through
+	// (fallbackMarshalerPromoted), as written.
+	via string
 }
 
 // resolveState is the state shared by one field's resolution.
@@ -180,8 +186,8 @@ func (c resolveCtx) in(file *ast.File, path string) resolveCtx {
 // required: marshalerLeaf notes the Marshaler fallback after its quiet run of
 // the type's underlying form, so a note from that run (a defined type over
 // an unresolvable qualified type, or a recursion cut) must not become the
-// field's warning. The discarded ref sites matter once a consumer
-// descends into a Marshaler's Elem (#111).
+// field's warning. Nothing descends into a Marshaler's Elem, so the
+// discarded ref sites register nothing.
 func (c resolveCtx) quiet() resolveCtx {
 	c.st = &resolveState{param: c.st.param, home: c.st.home, stack: slices.Clone(c.st.stack), refSites: map[string]pkgFile{}}
 	return c
@@ -287,7 +293,10 @@ func isBytePrimitive(s *models.TypeShape) bool {
 // an in-module named type resolves in its declaring package (inModuleTypeSite),
 // and anything else is unresolvable (it emits object).
 func (a *ProjectAnalyzer) resolveQualified(leaf models.TypeShape, c resolveCtx) models.TypeShape {
-	if _, ok := a.resolveQualifiedStruct(leaf.Name, c.file); ok {
+	if q, ok := a.resolveQualifiedStruct(leaf.Name, c.file); ok {
+		if r, isMarshaler := a.structMarshalerLeaf(q.typeName, c.in(q.file, q.filePath), identityMode); isMarshaler {
+			return r
+		}
 		c.recordRef(leaf.Name)
 		return models.TypeShape{Kind: models.ShapeRef, Name: leaf.Name}
 	}
@@ -386,6 +395,9 @@ func fileBuildConstraint(f *ast.File) constraint.Expr {
 func (a *ProjectAnalyzer) resolveLocal(leaf models.TypeShape, c resolveCtx, mode resolveMode) models.TypeShape {
 	name := leaf.Name
 	if _, _, _, _, ok := a.resolveTypeSpecChain(c.file, c.path, name, 0); ok {
+		if r, isMarshaler := a.structMarshalerLeaf(name, c, mode); isMarshaler {
+			return r
+		}
 		c.recordRef(name)
 		return models.TypeShape{Kind: models.ShapeRef, Name: name}
 	}
@@ -413,12 +425,36 @@ func (a *ProjectAnalyzer) resolveLocal(leaf models.TypeShape, c resolveCtx, mode
 // base64 (#97). The rule is decided here, in the declaring package's context,
 // because only here are the type's own methods known.
 func (a *ProjectAnalyzer) marshalerLeaf(name string, decls []typeDecl, c resolveCtx, m marshalerMethods) models.TypeShape {
+	if m.textBothWays() {
+		return models.TypeShape{Kind: models.ShapeText, Name: name}
+	}
 	under := a.resolveDecls(name, decls, c.quiet(), underlyingMode)
 	if c.byteElem && !m.encode && isBytePrimitive(&under) {
 		return under
 	}
 	c.st.note(fieldFallback{kind: fallbackMarshaler, typeName: c.display(name), detail: m.first})
 	return models.TypeShape{Kind: models.ShapeMarshaler, Name: name, Elem: &under}
+}
+
+// structMarshalerLeaf resolves name, a named type whose chain ends at a
+// struct, in a body position: a text leaf when its method set (declared and
+// promoted: methodSetOf) makes it a string both ways, a noted Marshaler leaf
+// when it holds any other of the seven methods, else ok is false and it stays
+// a ref. In underlying mode name's declared methods are dropped. A parameter
+// is bound by kind, so it is never a Marshaler leaf.
+func (a *ProjectAnalyzer) structMarshalerLeaf(name string, c resolveCtx, mode resolveMode) (models.TypeShape, bool) {
+	if c.st.param {
+		return models.TypeShape{}, false
+	}
+	m, fb := a.methodSetOf(name, c, mode == identityMode, nil).marshaler(c.display(name))
+	if !m.found() {
+		return models.TypeShape{}, false
+	}
+	if m.textBothWays() {
+		return models.TypeShape{Kind: models.ShapeText, Name: name}, true
+	}
+	c.st.note(fb)
+	return models.TypeShape{Kind: models.ShapeMarshaler, Name: name}, true
 }
 
 // resolveDecls resolves every declaration of name with name open, then merges
@@ -708,6 +744,8 @@ func (a *ProjectAnalyzer) warnFieldFallback(f *models.FieldInfo, site *fieldSite
 		a.addWarningf(definedOverQualifiedFieldWarning, append(head, fb.typeName, fb.detail)...)
 	case fallbackDeclsDisagree:
 		a.addWarningf(declsDisagreeFieldWarning, append(head, fb.typeName)...)
+	case fallbackMarshalerPromoted:
+		a.addWarningf(marshalerPromotedFieldWarning, append(head, fb.typeName, fb.detail, fb.via)...)
 	default:
 		a.addWarningf(untypedBuiltinFieldWarning, append(head, fb.detail)...)
 	}

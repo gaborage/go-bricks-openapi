@@ -654,8 +654,10 @@ func (g *OpenAPIGenerator) buildOperation(route *models.Route, opIDs map[string]
 	// Emit a request body when there are body fields, OR when the route is
 	// JOSE-tagged (a JOSE request type may have only the sentinel field, with all
 	// "plaintext" fields filtered into header/path/query params or absent — but
-	// the route still expects an application/jose payload on the wire).
-	if route.Request != nil && (len(bodyFields) > 0 || route.Request.JOSE) {
+	// the route still expects an application/jose payload on the wire), OR when
+	// the request carries a Resolution: a struct Marshaler request (#111) keeps
+	// only its parameters in Fields, and a text one may have no exported field.
+	if route.Request != nil && (len(bodyFields) > 0 || route.Request.JOSE || route.Request.Resolution != nil) {
 		op.RequestBody = g.buildRequestBody(route.Request)
 	}
 
@@ -693,6 +695,9 @@ func joseTokenSchema() *OpenAPIProperty {
 // objects do not), so this is attached at the parent level. It names the
 // plaintext component schema the decrypted payload conforms to.
 func joseDescription(plaintextSchema string) string {
+	if plaintextSchema == "" {
+		return joseUndocumentedDescription
+	}
 	return fmt.Sprintf(
 		"JOSE compact serialization (signed-then-encrypted). The wire payload\n"+
 			"is a base64url-encoded JWE compact form whose plaintext, after\n"+
@@ -700,6 +705,14 @@ func joseDescription(plaintextSchema string) string {
 			"see %s.\n",
 		plaintextSchema, refPath(plaintextSchema))
 }
+
+// joseUndocumentedDescription is joseDescription for a JOSE request or
+// response whose plaintext type is a struct Marshaler type (#111): it names
+// no component, not even the generic SuccessResponse, whose object data its
+// plaintext need not match.
+const joseUndocumentedDescription = "JOSE compact serialization (signed-then-encrypted). The wire payload\n" +
+	"is a base64url-encoded JWE compact form whose plaintext, after\n" +
+	"decrypt+verify, is its type's own JSON encoding, which is not documented.\n"
 
 // jsonMediaRef builds a single-entry application/json content map whose schema is
 // a $ref to the named component.
@@ -848,12 +861,18 @@ func (g *OpenAPIGenerator) successDescription(route *models.Route, code string, 
 
 // successPlaintextSchema names the plaintext component a JOSE response decrypts
 // to, falling back to the generic SuccessResponse envelope when the handler
-// declares no typed response.
+// declares no typed response. A struct Marshaler payload (#111), which carries
+// a Resolution instead of a Name, names none: "" (joseUndocumentedDescription).
 func (g *OpenAPIGenerator) successPlaintextSchema(route *models.Route) string {
-	if route.Response != nil && route.Response.Name != "" {
-		return schemaName(route.Response)
+	resp := route.Response
+	switch {
+	case resp != nil && resp.Name != "":
+		return schemaName(resp)
+	case resp != nil && resp.Resolution != nil:
+		return ""
+	default:
+		return schemaSuccessResponse
 	}
-	return schemaSuccessResponse
 }
 
 // successEnvelopeSchema builds the inline {data, meta} success envelope. data is
@@ -1130,7 +1149,7 @@ func (g *OpenAPIGenerator) createStandardSchemas(routes []models.Route) map[stri
 	for i := range routes {
 		r := &routes[i]
 		used[errorSchemaName(r)] = true
-		if r.Response != nil && r.Response.JOSE && r.Response.Name == "" {
+		if r.Response != nil && r.Response.JOSE && g.successPlaintextSchema(r) == schemaSuccessResponse {
 			used[schemaSuccessResponse] = true
 		}
 	}
@@ -1265,8 +1284,9 @@ func (g *OpenAPIGenerator) generateSchemasFromTypes(types map[string]*models.Typ
 // typed (non-JOSE) response payloads, field/map-value refs across all types, and
 // the plaintext types of JOSE routes. Used so a type that is referenced is not
 // skipped (which would leave the reference pointing at nothing). A response's
-// Resolution is walked for $ref leaves exactly as a field's is; request types
-// still are not.
+// Resolution is walked for $ref leaves exactly as a field's is; a request's own
+// name still is not marked (unless JOSE), but the $ref targets of its Fields
+// are (addRequestFieldRefs).
 //
 // Non-JOSE REQUEST types are deliberately NOT scanned, and that is safe: a
 // request $ref is emitted only by buildRequestBody's non-JOSE jsonMediaRef
@@ -1276,6 +1296,14 @@ func (g *OpenAPIGenerator) generateSchemasFromTypes(types map[string]*models.Typ
 // Scanning request types here would instead force ORPHAN components for every
 // params-only request type by flipping the guard in generateSchemasFromTypes
 // (redocly's no-unused-components). Do not add them.
+//
+// A request's Fields are walked, though (addRequestFieldRefs): that marks only
+// the components its fields' $ref leaves name, never the request itself. For a
+// registered request it repeats what addFieldSchemaRefs marks. A struct
+// Marshaler request (#111) is not in the registry and keeps only its
+// parameters; its body, if any, comes from its Resolution, so its own name is
+// never a $ref. This walk is the only marking its struct parameters get, and
+// without it their $refs would dangle.
 //
 // The other half of that invariant lives in generateSchemasFromTypes: a type with
 // non-empty Fields but ZERO serializable properties (e.g. every field json:"-")
@@ -1310,9 +1338,24 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 		if r.Request != nil && r.Request.JOSE && r.Request.Name != "" {
 			out[schemaName(r.Request)] = true
 		}
+		addRequestFieldRefs(out, r.Request)
 	}
 	addFieldSchemaRefs(out, types)
 	return out
+}
+
+// addRequestFieldRefs marks the $ref leaves of a request's own Fields. A
+// registered request's Fields are its registry entry's, so this repeats what
+// addFieldSchemaRefs marks; a struct Marshaler request (#111) is not in the
+// registry and keeps only parameters, whose struct targets would otherwise go
+// unmarked. It never marks the request's own name.
+func addRequestFieldRefs(out map[string]bool, req *models.TypeInfo) {
+	if req == nil {
+		return
+	}
+	for j := range req.Fields {
+		addRefNames(out, req.Fields[j].ResolvedShape())
+	}
 }
 
 // payloadNamesComponent reports whether a response payload points at the
@@ -1658,8 +1701,8 @@ func wellKnownShape(s models.TypeShape) (wellKnownType, bool) {
 // recursing through slice, array and map elements. Every pointer level is
 // shed first (stripPointers). The Resolution-only leaves type as: a ref, a
 // $ref; a kind-only scalar, its kind alone (#92: no format, no unsigned
-// floor); a Marshaler or recursive leaf, {} (any JSON value), never
-// descending into a Marshaler's Elem.
+// floor); a text Marshaler leaf, a string (#111); a Marshaler or recursive
+// leaf, {} (any JSON value), never descending into a Marshaler's Elem.
 func setTypeAndFormat(prop *OpenAPIProperty, shape models.TypeShape) {
 	s := stripPointers(shape)
 
@@ -1688,6 +1731,8 @@ func setTypeAndFormat(prop *OpenAPIProperty, shape models.TypeShape) {
 		prop.Ref = refPath(s.Name)
 	case models.ShapeKindOnly:
 		prop.Type = s.Name
+	case models.ShapeText:
+		prop.Type = typeString
 	case models.ShapeMarshaler, models.ShapeRecursive:
 		return // {}: any JSON value
 	default:
@@ -2013,8 +2058,11 @@ func appendMissingPathParams(params []Parameter, path string) []Parameter {
 
 // buildRequestBody builds the Request Body Object for a request type. When the
 // request carries a jose: tag the Content-Type is application/jose with a
-// string-token wire schema and the plaintext shape is named in the description;
-// otherwise the schema is a $ref to the documented plaintext component. Takes the
+// string-token wire schema and the plaintext shape is named in the description
+// (a JOSE request with no Name, a struct Marshaler type, gets the nameless
+// joseUndocumentedDescription); a request with a Resolution (a struct Marshaler
+// request, #111) is typed from it, {} or a string; otherwise the schema is a
+// $ref to the documented plaintext component. Takes the
 // full TypeInfo (rather than a positional bool) so future flags compose without
 // signature churn.
 func (g *OpenAPIGenerator) buildRequestBody(reqType *models.TypeInfo) *OpenAPIRequestBody {
@@ -2032,6 +2080,8 @@ func (g *OpenAPIGenerator) buildRequestBody(reqType *models.TypeInfo) *OpenAPIRe
 		// schema; the Media Type schema describes the JOSE string-token wire shape.
 		rb.Description = joseDescription(schemaName)
 		rb.Content = map[string]*OpenAPIMediaType{mediaJOSE: {Schema: joseTokenSchema()}}
+	case reqType != nil && reqType.Resolution != nil:
+		rb.Content = map[string]*OpenAPIMediaType{mediaJSON: {Schema: payloadShapeSchema(*reqType.Resolution)}}
 	case schemaName != "":
 		rb.Content = jsonMediaRef(schemaName)
 	default:

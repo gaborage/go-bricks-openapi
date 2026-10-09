@@ -9,11 +9,11 @@ The syntactic container structure of a declared type — pointer, slice, array, 
 _Avoid_: type string, kind (overloaded with OpenAPI's `type` keyword)
 
 **Resolution**:
-The registry outcome for a declared type — of a field or of a payload — at any depth: which named schema a struct type references, or what a named non-struct type stands for (its underlying builtin scalar, and so its kind, or its underlying slice, map, array or pointer type). A distinct, later phase than Shape — resolving requires the type registry; Shape does not. A Marshaler type never resolves through its underlying type.
+The registry outcome for a declared type — of a field or of a payload — at any depth: which named schema a struct type references (a struct Marshaler type references none: it resolves to a string or an untyped leaf), or what a named non-struct type stands for (its underlying builtin scalar, and so its kind, or its underlying slice, map, array or pointer type). A distinct, later phase than Shape — resolving requires the type registry; Shape does not. A Marshaler type never resolves through its underlying type.
 _Avoid_: lookup, ref info
 
 **Marshaler type**:
-A type whose JSON form, in either direction, comes from its own `MarshalJSON`, `MarshalJSONTo`, `MarshalText`, `AppendText`, `UnmarshalJSON`, `UnmarshalJSONFrom` or `UnmarshalText` method — with the exact signature its `encoding/json` or `encoding` interface requires, on the type or its pointer, on a type it aliases, or promoted from a struct it embeds — rather than from its underlying type. A defined type over a Marshaler type is not one; it drops the methods. Only JSON bodies are affected: parameters are bound by kind.
+A type whose JSON form, in either direction, comes from its own `MarshalJSON`, `MarshalJSONTo`, `MarshalText`, `AppendText`, `UnmarshalJSON`, `UnmarshalJSONFrom` or `UnmarshalText` method — with the exact signature its `encoding/json` or `encoding` interface requires, on the type or its pointer, on a type it aliases, or promoted from a struct it embeds — rather than from its underlying type. A defined type over a Marshaler type drops that type's declared methods, but keeps whatever its underlying struct's embedded fields promote (`type MDW WrapLevel` is one). A struct field named like one of the methods hides a promoted method of that name, as Go's selector rules say. Only JSON bodies are affected: parameters are bound by kind.
 _Avoid_: custom type, enum type, custom-marshaled type
 
 **Constraint set**:

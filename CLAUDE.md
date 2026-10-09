@@ -106,8 +106,8 @@ Token rules:
 - `hiddenTagKeys` (`internal/analyzer/tagcheck.go`) warns when a struct tag is malformed enough that `reflect.StructTag`'s own scan stops early, hiding one of the seven keys `lookupStructTag` reads.
 - Because analyzer warnings feed `--strict`, a project with such a tag newly fails `generate --strict` with no artifact — a behavior change, not a bug.
 - The detector reports only when reflect's scan stops early; a mangled key that reflect still parses as a (wrong) key name — e.g. `json:"b";validate:"c"` reads a key literally named `;validate` — is not reported, and no tool in this repo's toolchain catches every such shape.
-- In `internal/generator/openapi.go`, `referencedSchemaNames` deliberately does not scan non-JOSE request types.
-- Adding them orphans a component for every params-only request type and trips redocly's `no-unused-components`.
+- > **SUPERSEDED (2026-10-09).** In `internal/generator/openapi.go`, `referencedSchemaNames` deliberately does not scan non-JOSE request types. Now: it never marks a non-JOSE request's **own** name (that still orphans a component per params-only request type), but `addRequestFieldRefs` marks the `$ref` targets of every request's Fields. For a registered request that is exactly what `addFieldSchemaRefs` marks; for a struct Marshaler request (#111, not in the registry) it is the only marking its struct parameters get, or their `$ref`s dangle. Don't read `addRequestFieldRefs` as a violation of the old rule.
+- Marking a non-JOSE request's own name orphans a component for every params-only request type and trips redocly's `no-unused-components`.
 - Don't "optimize" the `schema == nil` check in `generateSchemasFromTypes` into a zero-properties check — it would drop the component and dangle a `requestBody` `$ref`.
 - The `json_excluded_request` golden locks this invariant.
 - The Constraint set (validate tag → OpenAPI keywords) lives only in `internal/generator/constraints.go`; the analyzer stops at the key→value map on `FieldInfo.Constraints`/`ElementConstraints`. `applyValidationConstraints` is the single entry point (collection rules onto the property, `dive` rules onto `Items`).

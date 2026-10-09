@@ -65,6 +65,34 @@ type StampD time.Time
 type Cx complex128
 type Fn func()
 type Ch chan int
+
+type Level int
+
+func (l Level) MarshalText() ([]byte, error) { return nil, nil }
+func (l *Level) UnmarshalText(b []byte) error { return nil }
+
+type MoneyT struct {
+	Amount int64 ` + "`json:\"amount\"`" + `
+}
+
+func (m MoneyT) MarshalText() ([]byte, error) { return nil, nil }
+func (m *MoneyT) UnmarshalText(b []byte) error { return nil }
+
+type WrapLevel struct {
+	Level
+	Note string ` + "`json:\"note\"`" + `
+}
+
+type Money struct {
+	Amount int64 ` + "`json:\"amount\"`" + `
+}
+
+func (m Money) MarshalJSON() ([]byte, error) { return nil, nil }
+
+type Stamped struct {
+	time.Time
+	Note string ` + "`json:\"note\"`" + `
+}
 `
 
 // parityRow is one payload and the field type whose schema it must emit:
@@ -99,11 +127,13 @@ func parityRows() []parityRow {
 		"map[string]decimal.Decimal", "StampD", "[]StampD", "Cx", "complex128", "[]error",
 		// U4 rows.
 		"map[string]Fn", "[][]Fn", "map[string]Ch",
+		// Marshaler types (#111).
+		"Level", "[]Level", "MoneyT", "WrapLevel", "Money", "[]Money", "Stamped",
 	)
 	for payload, field := range map[string]string{
 		"*Cents": "Cents", "PC": "int64", "*PC": "int64", "*Tags": "[]string", "*UserList": "UserList",
 		"*[]string": "[]string", "*[]byte": "[]byte", "*[4]byte": "[4]byte", "*interface{}": "interface{}",
-		"*Tier": "Tier", "*Missing": "Missing", "*[]Fn": "[]Fn",
+		"*Tier": "Tier", "*Missing": "Missing", "*[]Fn": "[]Fn", "*MoneyT": "MoneyT", "*Money": "Money",
 	} {
 		rows = append(rows, parityRow{payload: payload, field: field, wrap: "r"})
 	}

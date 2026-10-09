@@ -555,8 +555,13 @@ func classifyRoute(route *models.Route) routeClassification {
 // registered component, and a well-known type documented inline under its
 // kept name, are typed too.
 //
-// Requests reach it as well and are unchanged: a request carries no Shape, so
-// a request with a Name is typed and one without is not.
+// Requests reach it as well: a request carries no Shape, so a request with a
+// Name is typed and one without is not, except a struct Marshaler request with
+// a body (#111), which carries a Resolution and is typed exactly when it is a
+// string both ways. A params-only, non-JOSE one keeps its Name, so it stays
+// typed; a zero-field one is not params-only and is untyped unless it is a
+// text type. Text Marshaler payloads are typed (a Marshaler type other than a
+// text one is a fallback leaf).
 func isTypedPayload(ti *models.TypeInfo) bool {
 	return analyzer.IsTypedPayload(ti)
 }

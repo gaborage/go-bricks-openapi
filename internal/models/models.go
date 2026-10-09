@@ -94,7 +94,10 @@ type TypeInfo struct {
 	// a sentinel `_ struct{}` field. Routes whose request or response type is JOSE-tagged
 	// emit Content-Type: application/jose in the OpenAPI spec while keeping the documented
 	// plaintext schema as the source of truth (the on-the-wire compact JOSE serialization
-	// wraps that plaintext after decrypt-and-verify).
+	// wraps that plaintext after decrypt-and-verify). It is also set for a struct
+	// Marshaler payload whose struct carries a jose: tag, although that struct is
+	// not registered (#111): the route stays application/jose, and its plaintext
+	// goes undocumented.
 	JOSE bool
 	// NoContent is true when the response type is server.NoContentResult — the
 	// route returns 204 with no body. Such a TypeInfo carries no Name/Fields, so
@@ -130,9 +133,16 @@ type TypeInfo struct {
 	// with no per-type warning, exactly as a field of its type.
 	Shape *TypeShape
 	// Resolution is the payload's Shape with every named non-struct type of the
-	// module substituted by what it stands for and every struct leaf a ShapeRef
+	// module substituted by what it stands for and every struct leaf a ShapeRef,
+	// except a struct Marshaler type, which is a ShapeText or ShapeMarshaler leaf
 	// (CONTEXT.md, "Resolution"). Stamped by the analyzer on a payload that does
-	// not register as a struct; nil for a request, a registered struct payload,
+	// not register as a struct; nil for a request, except one whose type is a
+	// struct Marshaler type (#111) with a body (not params-only, or JOSE): its
+	// Resolution is its text or Marshaler leaf, its Name is cleared and its
+	// Fields are only its parameters. A params-only (at least one field, every
+	// one a parameter), non-JOSE one keeps its Name and parameter Fields and has
+	// no Resolution; a zero-field one is not params-only. Also nil for a
+	// registered struct payload,
 	// the NoContentResult marker, a payload whose root resolves to nothing, and
 	// a nameless composite whose resolution has an unmodelled leaf
 	// (map[string]Fn), which is typed from its Shape like the field of its type.
@@ -212,20 +222,31 @@ const (
 	// on width (#92). Name is the OpenAPI kind: integer, number, string or boolean.
 	ShapeKindOnly ShapeKind = "kind-only"
 	// ShapeMarshaler is a Marshaler type (CONTEXT.md) in a body position. Name
-	// is the type that declares the method. Elem is its underlying resolution,
-	// kept for #111. Nothing emits or registers what is under Elem.
+	// is the type as named at that position (an alias, or a struct promoting
+	// the method); its warning names the declaring type or the embed. Elem is
+	// the quietly resolved underlying form of a non-struct Marshaler type, kept
+	// for diagnostics and tests only (the byte-slice decision reads it before
+	// the leaf is built); a struct Marshaler leaf has no Elem. Nothing emits,
+	// registers or otherwise reads what is under Elem.
 	ShapeMarshaler ShapeKind = "marshaler"
 	// ShapeRecursive is a named type met again inside its own resolution, or
 	// past maxNamedResolutionDepth. Name is that type. The cut point emits {}.
 	ShapeRecursive ShapeKind = "recursive"
+	// ShapeText is a Marshaler type encoding/json writes and reads as a JSON
+	// string on every toolchain and in every position (#111): MarshalText in
+	// the value method set with no MarshalJSON or MarshalJSONTo, and
+	// UnmarshalText with no UnmarshalJSON or UnmarshalJSONFrom, declared or
+	// promoted. Name is the type. It emits
+	// {type: string} and takes no validate keyword.
+	ShapeText ShapeKind = "text"
 )
 
 // TypeShape is the syntactic container structure of a field's declared type,
 // decoded once from the AST at extraction. Purely syntactic — it carries no
 // registry knowledge. The registry outcome lives in FieldInfo.Resolution and
-// TypeInfo.Resolution, which reuse this vocabulary plus the four
+// TypeInfo.Resolution, which reuse this vocabulary plus the five
 // Resolution-only kinds (ShapeRef, ShapeKindOnly, ShapeMarshaler,
-// ShapeRecursive).
+// ShapeRecursive, ShapeText).
 // The zero value (Kind "") is treated everywhere as ShapeUnknown.
 type TypeShape struct {
 	Kind ShapeKind

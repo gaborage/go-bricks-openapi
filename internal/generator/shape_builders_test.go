@@ -50,6 +50,9 @@ func marshalerOf(name string, under models.TypeShape) models.TypeShape {
 func recursiveLeaf(name string) models.TypeShape {
 	return models.TypeShape{Kind: models.ShapeRecursive, Name: name}
 }
+func textLeaf(name string) models.TypeShape {
+	return models.TypeShape{Kind: models.ShapeText, Name: name}
+}
 
 // withResolution returns a copy of f whose Resolution is r.
 func withResolution(f *models.FieldInfo, r models.TypeShape) *models.FieldInfo {

@@ -130,6 +130,9 @@ type ProjectAnalyzer struct {
 	uintptrWarned    map[string]struct{}                // dedupes uintptr-field warnings by "file:line:col"
 	fieldWarned      map[string]struct{}                // dedupes field fallback warnings by "file:line:col"
 	fieldSites       map[*models.TypeShape]fieldSite    // field Resolution root -> where its ref leaves register
+	methodSetMemo    map[string]methodSet               // "home\x00typeKey\x00keep" -> a method set no cut shortened (methodSetOf)
+	methodSetCuts    int                                // cycle cuts methodSetOf has hit: a change marks a path-dependent set
+	methodSetWalks   int                                // method sets methodSetOf computed rather than recalled
 }
 
 // New creates a new project analyzer
@@ -251,6 +254,8 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	a.uintptrWarned = make(map[string]struct{})
 	a.fieldWarned = make(map[string]struct{})
 	a.fieldSites = make(map[*models.TypeShape]fieldSite)
+	a.methodSetMemo = nil
+	a.methodSetCuts = 0
 
 	// Discover project metadata from go.mod
 	a.discoverProjectMetadata(project)
@@ -3176,6 +3181,9 @@ func (a *ProjectAnalyzer) populateRequestType(h *handlerAnalysis, astFile *ast.F
 			adoptRegisteredType(h.request, registered)
 			return
 		}
+		if a.populateMarshalerRequest(h, astFile, filePath) {
+			return
+		}
 	}
 	if h.requestType == "" {
 		return
@@ -3189,8 +3197,13 @@ func (a *ProjectAnalyzer) populateRequestType(h *handlerAnalysis, astFile *ast.F
 
 // registerPayloadType registers a request/response TypeInfo's named type and
 // returns its registered TypeInfo, or nil when the name is not a resolvable
-// struct.
+// struct. A struct Marshaler type (#111) is not registered either: it returns
+// nil, after setting typeInfo.JOSE from the struct's jose tag.
 func (a *ProjectAnalyzer) registerPayloadType(typeInfo *models.TypeInfo, astFile *ast.File, filePath string) *models.TypeInfo {
+	if _, _, isMarshaler := a.marshalerNamed(typeInfo, astFile, filePath); isMarshaler {
+		typeInfo.JOSE = a.structMarshalerJOSE(typeInfo, astFile, filePath)
+		return nil
+	}
 	registered := a.registerType(typeInfo.Name, typeInfo.Package, astFile, filePath)
 	if registered == nil && typeInfo.Package != "" {
 		// A qualified request/response type (e.g. server.Result[types.Money]) arrives
