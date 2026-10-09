@@ -6,12 +6,15 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 
 # Pinned scanner versions — identical to CI so the local release gate matches.
 GOVULNCHECK_VERSION := v1.1.4
-GOSEC_VERSION := v2.26.1
+# gosec is pinned to an untagged master pseudo-version: every tagged release
+# through v2.29.0 depends on golang.org/x/tools <= v0.49.0, which cannot read
+# Go 1.27 export data and fails typechecking. Swap for the next tagged release.
+GOSEC_VERSION := v2.29.1-0.20261009120814-7b1b5cebe007
 
 # Pinned golangci-lint version — must stay in lockstep with ci.yml's
 # golangci-lint-action `version:` key. Bumping one without the other lets the
 # local and CI lint gates silently diverge.
-GOLANGCI_VERSION := v2.12.2
+GOLANGCI_VERSION := v2.14.0
 
 # Directory the pinned golangci-lint is installed into, resolved once the way
 # `go install` resolves it: GOBIN when set, otherwise the first NON-EMPTY
@@ -123,8 +126,8 @@ check: fmt lint test validate-cli ## Run fmt, lint, test, and CLI validation (pr
 vuln: ## Run govulncheck vulnerability scan
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
-sec: ## Run gosec security scanner (excludes testdata fixture modules, like CI)
-	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude-dir=testdata ./...
+sec: ## Run gosec security scanner (excludes testdata fixture modules like CI, plus local .claude worktrees)
+	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude-dir=testdata -exclude-dir=.claude ./...
 
 # Development helpers
 dev-deps: ## Install development dependencies

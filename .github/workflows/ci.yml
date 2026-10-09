@@ -30,7 +30,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
+          go-version: '1.27'
+          check-latest: true
           cache: true
           cache-dependency-path: go.sum
 
@@ -114,7 +115,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
+          go-version: '1.27'
+          check-latest: true
           cache: true
           cache-dependency-path: go.sum
 
@@ -174,14 +176,15 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
+          go-version: '1.27'
+          check-latest: true
           cache: true
           cache-dependency-path: go.sum
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@36fe29c8f9dc696b104db0f7d49d1a87d2bbcd5b
         with:
-          version: v2.12.2
+          version: v2.14.0
           args: --timeout=5m
 
   security:
@@ -196,12 +199,13 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
+          go-version: '1.27'
+          check-latest: true
           cache: true
           cache-dependency-path: go.sum
 
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.1-0.20261009120814-7b1b5cebe007
 
       - name: Run Gosec Security Scanner
         run: |
@@ -232,7 +236,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
+          go-version: '1.27'
+          check-latest: true
           cache: true
           cache-dependency-path: go.sum
 
