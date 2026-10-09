@@ -91,12 +91,11 @@ func TestConstraintSetApplyToWritesOnlySetFields(t *testing.T) {
 
 func TestConstraintsFor(t *testing.T) {
 	tests := []struct {
-		name           string
-		shape          models.TypeShape
-		underlyingKind string
-		constraints    map[string]string
-		want           OpenAPIProperty
-		description    string
+		name        string
+		shape       models.TypeShape
+		constraints map[string]string
+		want        OpenAPIProperty
+		description string
 	}{
 		{
 			name:        "email format",
@@ -299,30 +298,30 @@ func TestConstraintsFor(t *testing.T) {
 			want:        OpenAPIProperty{},
 			description: "should return empty array for no constraints",
 		},
-		// --- PR11: named-numeric via UnderlyingKind ---
+		// --- PR11: named-numeric (a kind-only leaf; a resolved named scalar is its builtin) ---
 		{
-			name: "named integer min/max via UnderlyingKind", shape: named("Cents"), underlyingKind: typeInteger,
+			name: "kind-only integer min/max", shape: kindOnlyLeaf(typeInteger),
 			constraints: map[string]string{"min": "100", "max": "1000"},
 			want:        OpenAPIProperty{Minimum: floatPtr(100), Maximum: floatPtr(1000)},
-			description: "type Cents int64 must map numeric constraints (was dropped)",
+			description: "a kind-only integer leaf maps min/max to numeric bounds",
 		},
 		{
-			name: "time.Duration gte via UnderlyingKind", shape: named("time.Duration"), underlyingKind: typeInteger,
+			name: "kind-only integer gte", shape: kindOnlyLeaf(typeInteger),
 			constraints: map[string]string{"gte": "1"},
 			want:        OpenAPIProperty{Minimum: floatPtr(1)},
-			description: "time.Duration maps numeric constraints",
+			description: "a kind-only integer leaf maps gte to minimum",
 		},
 		{
-			name: "named integer gt via UnderlyingKind", shape: named("Cents"), underlyingKind: typeInteger,
+			name: "kind-only integer gt", shape: kindOnlyLeaf(typeInteger),
 			constraints: map[string]string{"gt": "0"},
 			want:        OpenAPIProperty{Minimum: floatPtr(0), ExclusiveMinimum: boolPtr(true)},
-			description: "gt on named numeric emits minimum + exclusiveMinimum",
+			description: "gt on a kind-only integer leaf emits minimum + exclusiveMinimum",
 		},
 		{
-			name: "named integer oneof via UnderlyingKind", shape: named("Status"), underlyingKind: typeInteger,
+			name: "kind-only integer oneof", shape: kindOnlyLeaf(typeInteger),
 			constraints: map[string]string{"oneof": "1 2 3"},
 			want:        OpenAPIProperty{Enum: []any{int64(1), int64(2), int64(3)}},
-			description: "oneof on named numeric yields numeric enum",
+			description: "oneof on a kind-only integer leaf yields numeric enum",
 		},
 		// --- PR11: string length comparisons ---
 		{
@@ -635,7 +634,7 @@ func TestConstraintsFor(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var got OpenAPIProperty
-			constraintsFor(tt.shape, tt.underlyingKind, tt.constraints).applyTo(&got)
+			constraintsFor(tt.shape, tt.constraints).applyTo(&got)
 			assert.Equal(t, tt.want, got, tt.description)
 		})
 	}
@@ -651,7 +650,7 @@ func TestConstraintsForRepeatedKeywordLastSortedKeyWins(t *testing.T) {
 	// email < uuid4 so uuid wins; alphanum < regexp so regexp's pattern wins;
 	// eq < oneof so oneof's enum wins. Matches the retired applicators'
 	// last-writer-wins.
-	constraintsFor(prim("string"), "", map[string]string{
+	constraintsFor(prim("string"), map[string]string{
 		"email": "true", "uuid4": "true",
 		"alphanum": "true", "regexp": "x",
 		"eq": "a", "oneof": "b c",
@@ -713,7 +712,7 @@ func assertDeterministicConstraint(t *testing.T, shape models.TypeShape, constra
 	t.Helper()
 	for i := 0; i < 100; i++ {
 		var got OpenAPIProperty
-		constraintsFor(shape, "", constraints).applyTo(&got)
+		constraintsFor(shape, constraints).applyTo(&got)
 		require.Equal(t, *want, got, "iteration %d", i)
 	}
 }

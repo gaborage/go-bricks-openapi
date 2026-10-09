@@ -36,3 +36,47 @@ func payloadArray(s models.TypeShape) *models.TypeShape {
 	sh := arrayOf(s)
 	return &sh
 }
+
+// Resolution-only leaves, as the analyzer's resolver stamps them.
+func refTo(name string) models.TypeShape {
+	return models.TypeShape{Kind: models.ShapeRef, Name: name}
+}
+func kindOnlyLeaf(kind string) models.TypeShape {
+	return models.TypeShape{Kind: models.ShapeKindOnly, Name: kind}
+}
+func marshalerOf(name string, under models.TypeShape) models.TypeShape {
+	return models.TypeShape{Kind: models.ShapeMarshaler, Name: name, Elem: &under}
+}
+func recursiveLeaf(name string) models.TypeShape {
+	return models.TypeShape{Kind: models.ShapeRecursive, Name: name}
+}
+
+// withResolution returns a copy of f whose Resolution is r.
+func withResolution(f *models.FieldInfo, r models.TypeShape) *models.FieldInfo {
+	c := *f
+	c.Resolution = &r
+	return &c
+}
+
+// substNamed returns s with every ShapeNamed leaf replaced by leaf: the
+// Resolution the analyzer stamps when each named type resolves to leaf.
+func substNamed(s, leaf models.TypeShape) models.TypeShape {
+	switch s.Kind {
+	case models.ShapeNamed:
+		return leaf
+	case models.ShapePointer, models.ShapeSlice, models.ShapeArray, models.ShapeMap:
+		if s.Elem != nil {
+			e := substNamed(*s.Elem, leaf)
+			s.Elem = &e
+		}
+		return s
+	default:
+		return s
+	}
+}
+
+// resolvedTo returns a copy of f whose Resolution is its Shape with every
+// named leaf resolved to leaf.
+func resolvedTo(f *models.FieldInfo, leaf models.TypeShape) *models.FieldInfo {
+	return withResolution(f, substNamed(f.Shape, leaf))
+}

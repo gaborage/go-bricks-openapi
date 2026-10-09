@@ -1,0 +1,388 @@
+openapi: 3.0.1
+info:
+  title: Namedresolution API
+  version: 1.0.0
+  description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
+paths:
+  /resolved:
+    get:
+      operationId: namedresolutionGet
+      summary: GET /resolved
+      tags:
+        - resolved
+      parameters:
+        - name: tags
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+        - name: tagsPtr
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+        - name: ids
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: integer
+              format: int64
+        - name: flagB
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: amount
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: tagsM
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Resolved'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Address:
+      type: object
+      properties:
+        city:
+          type: string
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code (e.g. BAD_REQUEST, NOT_FOUND, INTERNAL_ERROR, or a custom business code)
+            details:
+              type: object
+              properties:
+                validationErrors:
+                  type: array
+                  description: Per-field validation failures (400 validation errors)
+                  items:
+                    type: object
+                    properties:
+                      field:
+                        type: string
+                        description: Field that failed validation
+                      message:
+                        type: string
+                        description: Violated validation rule
+                      value:
+                        description: Submitted value (any type)
+                  maxItems: 100
+              description: Contextual error payload, emitted in development environments only
+            message:
+              type: string
+              description: Human-readable error message
+          description: Error details
+        meta:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+              description: RFC3339 response timestamp
+            traceId:
+              type: string
+              description: W3C trace identifier for the request
+      required:
+        - error
+    Holder:
+      type: object
+      properties:
+        item:
+          $ref: '#/components/schemas/Item'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Item'
+    Item:
+      type: object
+      properties:
+        sku:
+          type: string
+    Member:
+      type: object
+      properties:
+        name:
+          type: string
+    Resolved:
+      type: object
+      properties:
+        amount:
+          type: string
+        anyD: {}
+        arr:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        attrs:
+          type: object
+          additionalProperties:
+            type: string
+        attrsV:
+          type: object
+          additionalProperties:
+            type: string
+          minProperties: 1
+        b2:
+          type: string
+          format: byte
+        blob:
+          type: string
+          format: byte
+        blobA:
+          type: string
+          format: byte
+        blobPtr:
+          type: string
+          format: byte
+        centsMap:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+        centsSM:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              type: integer
+              format: int64
+        chain:
+          type: array
+          items:
+            type: string
+        flagB:
+          type: boolean
+        flagGrid:
+          type: array
+          items:
+            type: string
+            format: byte
+        flagMap:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int32
+            minimum: 0
+        flagPtrs:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        flagSlice:
+          type: string
+          format: byte
+        flagUs:
+          type: string
+          format: byte
+        flagV:
+          type: string
+          format: byte
+          example: AQI=
+        flags:
+          type: string
+          format: byte
+        flags3:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        grid:
+          type: array
+          items:
+            type: array
+            items:
+              type: integer
+              format: int64
+        holder:
+          $ref: '#/components/schemas/Holder'
+        ida:
+          type: string
+          format: uuid
+        ids:
+          type: array
+          items:
+            type: integer
+            format: int64
+        key:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+        memberMap:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Member'
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/Member'
+        odd:
+          type: integer
+          format: int64
+        pAddr:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/Address'
+          nullable: true
+        pMember:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/Member'
+          nullable: true
+        pair:
+          type: array
+          items:
+            type: integer
+            format: int64
+        pc:
+          type: integer
+          format: int64
+          nullable: true
+        pcs:
+          type: array
+          items:
+            type: integer
+            format: int64
+        raw:
+          type: string
+          format: byte
+        rawA: {}
+        rawOfRaw:
+          type: string
+          format: byte
+        shaper: {}
+        stamp:
+          type: string
+          format: date-time
+        stamps:
+          type: array
+          items:
+            type: string
+            format: date-time
+        statusD:
+          type: integer
+          format: int64
+        tags:
+          type: array
+          items:
+            type: string
+        tagsA:
+          type: array
+          items:
+            type: string
+        tagsPtr:
+          type: array
+          items:
+            type: string
+        tagsV:
+          type: array
+          items:
+            type: string
+            maxLength: 5
+          minItems: 1
+        u8s:
+          type: string
+          format: byte
+        uGrid:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/User'
+        uGridPtr:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/User'
+        userMap:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/User'
+          minProperties: 1
+        users:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        usm:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              $ref: '#/components/schemas/User'
+    User:
+      type: object
+      properties:
+        name:
+          type: string
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+      description: Tenant identifier. Enforced only when the service runs with multitenancy enabled and a header-based tenant resolver; a missing or invalid tenant yields HTTP 400. Deployments resolving the tenant from the subdomain or URL path do not read this header.
+security:
+  - TenantID: []

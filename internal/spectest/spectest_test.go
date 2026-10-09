@@ -115,6 +115,8 @@ type Packet struct {
 	Size  Word   ` + "`json:\"size\"`" + `
 	Sizes []Word ` + "`json:\"sizes\"`" + `
 	Count UWord  ` + "`json:\"count\"`" + `
+	ByKey map[string]Word ` + "`json:\"byKey\"`" + `
+	Grid  [][]Word ` + "`json:\"grid\"`" + `
 }
 
 func (m *Module) get(ctx server.HandlerContext) (server.Result[Packet], server.IAPIError) {
@@ -130,8 +132,9 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 // validate pipeline over a project whose named scalars are declared in
 // build-tagged files. Build constraints are not evaluated, so when the
 // variants disagree on width the schema carries the type alone — no format,
-// no unsigned floor — rather than one target's width. When they agree, the
-// builtin's format and floor are kept.
+// no unsigned floor — rather than one target's width, in every position (map
+// values and nested slices included). When they agree, the builtin's format
+// and floor are kept.
 func TestNamedScalarBuildTaggedWidths(t *testing.T) {
 	integer := map[string]any{"type": "integer"}
 	cases := []struct {
@@ -183,6 +186,8 @@ func TestNamedScalarBuildTaggedWidths(t *testing.T) {
 			assert.Equal(t, c.size, props["size"], "size")
 			assert.Equal(t, c.count, props["count"], "count")
 			assert.Equal(t, map[string]any{"type": "array", "items": c.sizesItems}, props["sizes"], "sizes")
+			assert.Equal(t, map[string]any{"type": "object", "additionalProperties": c.sizesItems}, props["byKey"], "byKey")
+			assert.Equal(t, map[string]any{"type": "array", "items": map[string]any{"type": "array", "items": c.sizesItems}}, props["grid"], "grid")
 		})
 	}
 }
@@ -227,7 +232,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 // reach the schema (#89), on the field, on dive items, and through a local
 // wrapper. The generator's well-known entry alone would type them as integers
 // but drop the bounds: they apply only because the analyzer's
-// knownUnderlyingBuiltins classifies both as named scalars over int. Without a
+// knownUnderlyingBuiltins resolves both to int. Without a
 // validate tag no bound appears, since nothing clamps an out-of-range value.
 func TestWellKnownStdlibScalarBounds(t *testing.T) {
 	dir := t.TempDir()

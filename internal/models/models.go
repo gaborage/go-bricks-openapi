@@ -155,7 +155,12 @@ var WellKnownTypeNames = map[string]bool{
 	WellKnownTimeWeekday:  true,
 }
 
-// FieldInfo represents a struct field with validation metadata
+// UntypedBuiltinNames are the Go builtins with no JSON Schema form: the
+// generator types them as a bare object (setBasicTypeAndFormat's default),
+// and the analyzer warns on any field leaf that is one. uintptr is not here:
+// it has its own warning.
+var UntypedBuiltinNames = map[string]bool{"error": true, "complex64": true, "complex128": true}
+
 // ShapeKind classifies one level of a TypeShape. See CONTEXT.md: "Shape".
 type ShapeKind string
 
@@ -171,12 +176,32 @@ const (
 	ShapeNamed     ShapeKind = "named"     // a declared or qualified type name (Address, time.Time)
 	ShapePrimitive ShapeKind = "primitive" // a builtin (string, int64, byte, any, interface{})
 	ShapeUnknown   ShapeKind = "unknown"   // an AST shape the decoder does not model (chan, func, generics)
+
+	// Resolution-only kinds. The analyzer's resolver writes them into a
+	// Resolution; the Shape decoder never produces them, so a Shape stays
+	// purely syntactic.
+
+	// ShapeRef is a named struct that registers as a component. Name is its
+	// component name: the declared name until registerFieldRefAt stamps the
+	// final, collision-qualified one.
+	ShapeRef ShapeKind = "ref"
+	// ShapeKindOnly is a named scalar whose build-tagged declarations disagree
+	// on width (#92). Name is the OpenAPI kind: integer, number, string or boolean.
+	ShapeKindOnly ShapeKind = "kind-only"
+	// ShapeMarshaler is a Marshaler type (CONTEXT.md) in a body position. Name
+	// is the type that declares the method. Elem is its underlying resolution,
+	// kept for #111. Nothing emits or registers what is under Elem.
+	ShapeMarshaler ShapeKind = "marshaler"
+	// ShapeRecursive is a named type met again inside its own resolution, or
+	// past maxNamedResolutionDepth. Name is that type. The cut point emits {}.
+	ShapeRecursive ShapeKind = "recursive"
 )
 
 // TypeShape is the syntactic container structure of a field's declared type,
 // decoded once from the AST at extraction. Purely syntactic — it carries no
-// registry knowledge (that is Resolution: RefName/MapValueRefName/
-// UnderlyingBuiltin/UnderlyingKind).
+// registry knowledge. The registry outcome lives in FieldInfo.Resolution,
+// which reuses this vocabulary plus the four Resolution-only kinds (ShapeRef,
+// ShapeKindOnly, ShapeMarshaler, ShapeRecursive).
 // The zero value (Kind "") is treated everywhere as ShapeUnknown.
 type TypeShape struct {
 	Kind ShapeKind
@@ -190,6 +215,7 @@ type TypeShape struct {
 	Elem *TypeShape
 }
 
+// FieldInfo represents a struct field with validation metadata
 type FieldInfo struct {
 	Name string
 	// Shape is the field's decoded type structure. Stamped by the analyzer at
@@ -208,31 +234,19 @@ type FieldInfo struct {
 	// they apply to each ELEMENT of a slice/array (e.g. `min=1,dive,email` puts min=1
 	// on the array and email on each element). Nil when the field has no `dive`.
 	ElementConstraints map[string]string
-	// RefName is the schema name of the field's underlying named struct type when
-	// the field (or its slice/pointer element) resolves to one in the registry.
-	// Set, the property is emitted as a $ref (or items.$ref for a slice) rather
-	// than an inline object.
-	RefName string
-	// MapValueRefName is the schema name of a map field's value struct type when
-	// it resolves to one in the registry (e.g. map[string]Address). Set, the
-	// property is an object whose additionalProperties is a $ref to that schema.
-	// Distinct from RefName: a map field is never itself a $ref.
-	MapValueRefName string
-	// UnderlyingKind is the OpenAPI 3-way kind ("integer", "number", or "string")
-	// a named, non-struct scalar type resolves to — e.g. `type Cents int64` ->
-	// "integer", time.Duration -> "integer". Empty for builtin primitives (handled
-	// directly), structs, and unresolved types. Gates the generator's
-	// named-scalar path and drives the constraint mapper's string-vs-numeric
-	// rule decisions.
-	UnderlyingKind string
-	// UnderlyingBuiltin is the Go builtin a named, non-struct scalar resolves to
-	// — e.g. `type Cents int64` -> "int64", `type Flag byte` -> "byte",
-	// time.Duration -> "int64". The generator types a named scalar from this
-	// name, emitting the same type/format/unsigned minimum a bare field of that
-	// builtin does. Empty whenever UnderlyingKind is, and also left empty — with
-	// UnderlyingKind still set — when the type's declarations disagree on the
-	// builtin (build-tagged width variants: `type Word int64` in one file,
-	// `type Word int32` in another). The generator then emits the kind alone,
-	// with no format and no unsigned floor.
-	UnderlyingBuiltin string
+	// Resolution is the field's type with every local named non-struct type
+	// substituted by what it stands for, at every depth, and every struct leaf
+	// marked ShapeRef (CONTEXT.md, "Resolution"). Stamped by the analyzer for
+	// every field that reaches the document (never for a json:"-" body field).
+	// Read it only through ResolvedShape.
+	Resolution *TypeShape
+}
+
+// ResolvedShape returns the field's Resolution, or its syntactic Shape when
+// the field has none (a hand-built FieldInfo, or a json:"-" field).
+func (f *FieldInfo) ResolvedShape() TypeShape {
+	if f.Resolution != nil {
+		return *f.Resolution
+	}
+	return f.Shape
 }

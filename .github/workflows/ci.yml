@@ -42,7 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           # Test each package individually to avoid coverage-profile conflicts;
-          # the `models` package is struct-only (no tests).
+          # the `models` package is test-free (structs and trivial accessors).
           packages=$(go list ./... | grep -vE '/models$')
           if [ -n "$packages" ]; then
             for pkg in $packages; do

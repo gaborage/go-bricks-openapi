@@ -6,8 +6,9 @@ package analyzer
 // fact (Go's builtin numeric/string types) and change only when Go does.
 
 const (
-	// OpenAPI 3-way kind value (also a value of FieldInfo.UnderlyingKind).
+	// OpenAPI kind values (also the Name of a ShapeKindOnly Resolution leaf).
 	kindInteger = "integer"
+	kindBoolean = "boolean"
 
 	// Go primitive type names referenced for type discrimination
 	goTypeInt   = "int"
@@ -28,6 +29,9 @@ const (
 	goTypeInterface = "interface{}"
 	goTypeFloat32   = "float32"
 	goTypeFloat64   = "float64"
+	// The complex builtins have no JSON form (models.UntypedBuiltinNames).
+	goTypeComplex64  = "complex64"
+	goTypeComplex128 = "complex128"
 )
 
 // isStringType checks if the type is a string type

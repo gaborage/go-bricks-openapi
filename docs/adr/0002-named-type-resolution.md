@@ -1,9 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-09-28
 ---
-
-Status flips to accepted when the resolver PR (#109) lands.
 
 # Named types resolve into a separate Resolution; Marshaler types never resolve through their underlying type
 
@@ -21,3 +19,4 @@ A named non-struct type (`type Tags []string`, `type Cents int64`, `b.Cents`) wi
 - A pointer to a named slice or map (`*Tags`) will be documented exactly as the pointer to its underlying type (`*[]string`): no `nullable`.
 - A type whose marshal methods are all on its pointer is a Marshaler type in every position. `encoding/json` ignores such a method on a non-addressable value — a map value, or a payload returned by value — and writes the underlying type there. But one component serves every position and both `Result[T]` and `Result[*T]` routes, so modelling each position would make the shared schema wrong for one of them; `{}` accepts both forms.
 - `MarshalJSONTo`, `AppendText` and `UnmarshalJSONFrom` are consulted only by the jsonv2-backed `encoding/json`: opt-in through `GOEXPERIMENT=jsonv2` since Go 1.25, and the default build in Go 1.27.1, where this was verified. The classic implementation writes a type that has only those methods through its underlying type. The tool cannot see the target project's toolchain, so such a type is a Marshaler type either way; `{}` accepts both forms. For the same reason, a type that encodes as text only through `AppendText` is `{}`, not a string.
+- The decision lands in stages. The resolver PR (#109) ships field resolution with every Marshaler type documented as `{}`; the text-marshaler string rule, struct Marshaler types and promotion of an embedded type's methods land with #111, and payload resolution with #110.

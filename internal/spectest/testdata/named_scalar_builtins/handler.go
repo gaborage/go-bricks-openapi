@@ -25,7 +25,7 @@ type Packet struct {
 	// and unsigned floor included.
 	Flag Flag `json:"flag"` // -> {integer, int32, minimum 0}, as a bare byte
 	Code Code `json:"code"` // -> {integer, int32}, as a bare rune
-	Addr Addr `json:"addr"` // -> {object} (uintptr: never typed, see README)
+	Addr Addr `json:"addr"` // -> {object}, and one analyzer diagnostic (uintptr: never typed, see README)
 
 	// The builtins themselves carry type AND format.
 	Raw    byte    `json:"raw"`    // -> {integer, int32, minimum 0} (unsigned, no maximum)

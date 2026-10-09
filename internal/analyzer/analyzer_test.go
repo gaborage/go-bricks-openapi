@@ -3474,24 +3474,36 @@ func TestBaseTypeName(t *testing.T) {
 	}
 }
 
-func TestUnderlyingIdentString(t *testing.T) {
+// TestResolveDeclUnderlying pins resolveUnderlying on one declaration's
+// right-hand side (the cases of the retired identifier-only reader): a builtin is
+// itself, a qualified name with no kind-backed underlying leaves the declared
+// type unresolvable (noted as a defined type over that name), unmodeled expressions are unknown, and a composite
+// resolves as written — a []byte underlying is the base64 []byte, not "".
+func TestResolveDeclUnderlying(t *testing.T) {
+	dir := t.TempDir()
+	a := New(dir)
+	file, path := parseInDir(t, a, dir, "d.go", "package d\n")
 	tests := []struct {
-		name   string
-		expr   ast.Expr
-		want   string
-		wantOK bool
+		name     string
+		expr     ast.Expr
+		want     string
+		unresolv bool
 	}{
-		{"bare_ident", &ast.Ident{Name: "int64"}, "int64", true},
-		{"qualified", &ast.SelectorExpr{X: &ast.Ident{Name: "pkg"}, Sel: &ast.Ident{Name: "Name"}}, "pkg.Name", true},
-		{"selector_base_not_ident", &ast.SelectorExpr{X: &ast.SelectorExpr{X: &ast.Ident{Name: "a"}, Sel: &ast.Ident{Name: "b"}}, Sel: &ast.Ident{Name: "C"}}, "", false},
-		{"composite_struct", &ast.StructType{Fields: &ast.FieldList{}}, "", false},
-		{"composite_slice", &ast.ArrayType{Elt: &ast.Ident{Name: "byte"}}, "", false},
+		{"bare_ident", &ast.Ident{Name: "int64"}, "int64", false},
+		{"qualified", &ast.SelectorExpr{X: &ast.Ident{Name: "pkg"}, Sel: &ast.Ident{Name: "Name"}}, "Decl", true},
+		{"selector_base_not_ident", &ast.SelectorExpr{X: &ast.SelectorExpr{X: &ast.Ident{Name: "a"}, Sel: &ast.Ident{Name: "b"}}, Sel: &ast.Ident{Name: "C"}}, "unknown", false},
+		{"composite_struct", &ast.StructType{Fields: &ast.FieldList{}}, "unknown", false},
+		{"composite_slice", &ast.ArrayType{Elt: &ast.Ident{Name: "byte"}}, "[]byte", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := underlyingIdentString(tt.expr)
-			assert.Equal(t, tt.wantOK, ok)
-			assert.Equal(t, tt.want, got)
+			c := newResolveCtx(file, path, false)
+			got := a.resolveUnderlying("Decl", tt.expr, c)
+			assert.Equal(t, tt.want, renderShape(got))
+			assert.Equal(t, tt.unresolv, c.st.first.kind == fallbackDefinedOverQualified)
+			if tt.unresolv {
+				assert.Equal(t, fieldFallback{kind: fallbackDefinedOverQualified, typeName: "Decl", detail: "pkg.Name"}, c.st.first)
+			}
 		})
 	}
 }
@@ -3710,14 +3722,11 @@ func (m *Module) create(req Node, ctx server.HandlerContext) (server.Result[int]
 	require.Contains(t, project.Types, "Address")
 	assert.Len(t, project.Types, 2, "Node + Address; the recursive Node is registered once")
 
-	fields := map[string]models.FieldInfo{}
-	for _, f := range project.Types["Node"].Fields {
-		fields[f.Name] = f
-	}
-	assert.Equal(t, "Address", fields["Addr"].RefName, "nested struct field -> RefName")
-	assert.Equal(t, "Node", fields["Parent"].RefName, "pointer self-ref -> RefName")
-	assert.Equal(t, "Node", fields["Children"].RefName, "slice self-ref -> RefName")
-	assert.Empty(t, fields["Tags"].RefName, "[]string field must not get a RefName")
+	got := renders(t, project.Types["Node"])
+	assert.Equal(t, "$Address", got["Addr"], "nested struct field -> ref")
+	assert.Equal(t, "*$Node", got["Parent"], "pointer self-ref -> ref")
+	assert.Equal(t, "[]$Node", got["Children"], "slice self-ref -> ref")
+	assert.Equal(t, "[]string", got["Tags"], "[]string field has no ref")
 }
 
 // analyzeModuleProject writes src as a module file under a temp project and runs
@@ -3755,8 +3764,8 @@ func (m *Module) create(req A, ctx server.HandlerContext) (server.Result[int], s
 	require.Contains(t, project.Types, "A")
 	require.Contains(t, project.Types, "B")
 	assert.Len(t, project.Types, 2, "mutual recursion A<->B registers each type once")
-	assert.Equal(t, "B", project.Types["A"].Fields[0].RefName)
-	assert.Equal(t, "A", project.Types["B"].Fields[0].RefName)
+	assert.Equal(t, "*$B", renderShape(project.Types["A"].Fields[0].ResolvedShape()))
+	assert.Equal(t, "*$A", renderShape(project.Types["B"].Fields[0].ResolvedShape()))
 }
 
 func TestRegisterTypeSkipsJSONExcludedFields(t *testing.T) {
@@ -5415,7 +5424,7 @@ func TestStatusForConstructorEdgeCases(t *testing.T) {
 }
 
 // TestMapValueRefRegistration verifies a struct-valued map registers its value
-// type as a component and stamps MapValueRefName (not RefName) on the field.
+// type as a component and resolves to a map whose value is a ref.
 func TestMapValueRefRegistration(t *testing.T) {
 	src := `package mod
 import (
@@ -5442,13 +5451,9 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	_, ok := a.typeRegistry["Address"]
 	assert.True(t, ok, "Address (a map value struct) must be registered as a component")
 
-	byJSON := map[string]models.FieldInfo{}
-	for _, f := range book.Fields {
-		byJSON[f.JSONName] = f
-	}
-	assert.Equal(t, "Address", byJSON["addrs"].MapValueRefName, "struct-valued map stamps MapValueRefName")
-	assert.Empty(t, byJSON["addrs"].RefName, "a map field is never a whole-field $ref")
-	assert.Empty(t, byJSON["tags"].MapValueRefName, "primitive-valued map has no value ref")
+	got := renders(t, book)
+	assert.Equal(t, "map[string]$Address", got["addrs"], "struct-valued map refs its value")
+	assert.Equal(t, "map[string]string", got["tags"], "primitive-valued map has no value ref")
 }
 
 // fieldJSONNames returns the set of JSON names on a registered type's fields.
@@ -5509,7 +5514,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 		}
 	}
 	require.NotNil(t, baseField)
-	assert.Equal(t, "Base", baseField.RefName, "nested embedding is a $ref to the embedded type")
+	assert.Equal(t, "$Base", renderShape(baseField.ResolvedShape()), "nested embedding is a $ref to the embedded type")
 	_, ok := a.typeRegistry["Base"]
 	assert.True(t, ok, "nested-embedded Base is registered as a component")
 }
@@ -5625,27 +5630,26 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	assert.True(t, omit["tag"] && omit["only"], "name-less (,omitempty) embed still promotes")
 }
 
-// TestPrimitiveKind covers the 3-way mapping. The full integer/float/string
+// TestPrimitiveKind covers the kind mapping. The full integer/float/string
 // membership sets are exhaustively covered by constraints_test.go; here we only
-// assert primitiveKind's delegation and the non-primitive zero value.
+// assert primitiveKind's delegation, bool's boolean kind and the non-primitive
+// zero value.
 func TestPrimitiveKind(t *testing.T) {
 	assert.Equal(t, "integer", primitiveKind(goTypeInt64))
 	assert.Equal(t, "number", primitiveKind(goTypeFloat64))
 	assert.Equal(t, goTypeString, primitiveKind(goTypeString))
-	assert.Equal(t, "", primitiveKind("bool"))
+	assert.Equal(t, kindBoolean, primitiveKind(goTypeBool))
 	assert.Equal(t, "", primitiveKind("Widget"))
 }
 
-// TestResolveUnderlyingBuiltin covers named-scalar classification end-to-end:
+// TestResolveLocalNamedScalars covers named-scalar resolution end-to-end:
 // local `type Cents int64`, the qualified time.Duration, time.Month and
-// time.Weekday, and a plain builtin (which is NOT a named wrapper, so empty).
-// Each resolves to the Go builtin it bottoms out in, and the 3-way kind is
-// derived from that builtin. json.Number is deliberately unclassified: its Go
-// kind is string, but encoding/json writes it as a number, so a string kind
-// would document it as a string (with minLength from validate); the generator
-// types it from its well-known entry instead. A local wrapper of it is
-// written as a string, and stays unclassified too.
-func TestResolveUnderlyingBuiltin(t *testing.T) {
+// time.Weekday, and a plain builtin. Each resolves to the Go builtin it
+// bottoms out in. json.Number used directly stays its well-known leaf: its Go
+// kind is string, but encoding/json writes it as a number, so the generator
+// types it from its well-known entry. A local defined wrapper of it
+// (type Quantity json.Number) is written as a string and resolves to string.
+func TestResolveLocalNamedScalars(t *testing.T) {
 	src := `package mod
 import (
 	"encoding/json"
@@ -5690,39 +5694,27 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 `
 	a, _ := analyzeSingleModule(t, src)
-	money := a.typeRegistry["Money"]
-	require.NotNil(t, money)
-	kind := map[string]string{}
-	builtin := map[string]string{}
-	ref := map[string]string{}
-	for i := range money.Fields {
-		kind[money.Fields[i].JSONName] = money.Fields[i].UnderlyingKind
-		builtin[money.Fields[i].JSONName] = money.Fields[i].UnderlyingBuiltin
-		ref[money.Fields[i].JSONName] = money.Fields[i].RefName
-	}
+	got := renders(t, a.typeRegistry["Money"])
 	const u32 = "uint32" // one literal: goconst counts _test.go occurrences too
-	for _, c := range []struct{ field, builtin, kind, why string }{
-		{"amount", goTypeInt64, "integer", "type Cents int64"},
-		{"chained", goTypeInt64, "integer", "type Alias Cents -> chain to int64"},
-		{"wait", goTypeInt64, "integer", "type Timeout time.Duration (selector underlying)"},
-		{"ttl", goTypeInt64, "integer", "time.Duration marshals as its int64 ns count"},
-		{"month", goTypeInt, "integer", "time.Month is an int with no marshaler"},
-		{"workdays", goTypeInt, "integer", "[]time.Weekday carries the ELEMENT's builtin"},
-		{"fiscal", goTypeInt, "integer", "type FiscalMonth time.Month (selector underlying)"},
-		{"total", "", "", "json.Number is typed by the generator's well-known entry, never as a string"},
-		{"qty", "", "", "type Quantity json.Number is written as a string: not classified"},
-		{"count", u32, "integer", "type Count uint32"},
-		{"counts", u32, "integer", "[]Count carries the ELEMENT's builtin"},
-		{"ratio", goTypeFloat32, "number", "type Ratio float32"},
-		{"label", goTypeString, goTypeString, "type Label string"},
-		{"plain", "", "", "a builtin used directly is not a named wrapper"},
-		// A named STRUCT is a $ref, not a scalar underlying builtin.
-		{"nested", "", "", "named struct has no scalar underlying builtin"},
+	for _, c := range []struct{ field, want, why string }{
+		{"amount", goTypeInt64, "type Cents int64"},
+		{"chained", goTypeInt64, "type Alias Cents -> chain to int64"},
+		{"wait", goTypeInt64, "type Timeout time.Duration (selector underlying)"},
+		{"ttl", goTypeInt64, "time.Duration marshals as its int64 ns count"},
+		{"month", goTypeInt, "time.Month is an int with no marshaler"},
+		{"workdays", "[]" + goTypeInt, "[]time.Weekday resolves its element"},
+		{"fiscal", goTypeInt, "type FiscalMonth time.Month (selector underlying)"},
+		{"total", models.WellKnownJSONNumber, "json.Number is typed by the generator's well-known entry"},
+		{"qty", goTypeString, "type Quantity json.Number is written as a string"},
+		{"count", u32, "type Count uint32"},
+		{"counts", "[]" + u32, "[]Count resolves its element"},
+		{"ratio", goTypeFloat32, "type Ratio float32"},
+		{"label", goTypeString, "type Label string"},
+		{"plain", goTypeInt, "a builtin used directly"},
+		{"nested", "$Inner", "a named struct is a $ref"},
 	} {
-		assert.Equal(t, c.builtin, builtin[c.field], "%s: builtin (%s)", c.field, c.why)
-		assert.Equal(t, c.kind, kind[c.field], "%s: kind (%s)", c.field, c.why)
+		assert.Equal(t, c.want, got[c.field], "%s (%s)", c.field, c.why)
 	}
-	assert.Equal(t, "Inner", ref["nested"], "named struct is a $ref")
 }
 
 // TestSchemaKeyCollision locks the collision-qualification rule: same (pkg,type)
@@ -5803,10 +5795,11 @@ var _ = other.X
 	assert.Nil(t, a.registerQualifiedType("other.Missing", f), "in-module but dir/type absent -> nil")
 }
 
-// TestLocalTypeUnderlyingSiblingFile covers resolving a named type whose
-// declaration lives in a SIBLING file of the same package (the parsePackageDir
-// fallback), and the not-found / non-ident arms.
-func TestLocalTypeUnderlyingSiblingFile(t *testing.T) {
+// TestLocalTypeDeclsSiblingFile covers localTypeDecls finding a named type's
+// declaration in a SIBLING file of the same package (the parsePackageDir
+// fallback) and resolveLocal resolving through it, plus the not-found and
+// unreadable-dir arms.
+func TestLocalTypeDeclsSiblingFile(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"),
 		[]byte("package p\ntype User struct{ Amount Cents }\n"), 0600))
@@ -5816,34 +5809,39 @@ func TestLocalTypeUnderlyingSiblingFile(t *testing.T) {
 	aPath := filepath.Join(dir, "a.go")
 	af, err := parser.ParseFile(a.fileSet, aPath, nil, parser.ParseComments)
 	require.NoError(t, err)
+	resolve := func(file *ast.File, path, name string) string {
+		return renderShape(a.resolveLocal(models.TypeShape{Kind: models.ShapeNamed, Name: name}, newResolveCtx(file, path, false), identityMode))
+	}
 
 	// Cents is declared in b.go (a sibling file) — found via the per-dir parse.
-	assert.Equal(t, []string{goTypeInt64}, a.localTypeUnderlyings("Cents", af, aPath),
-		"named type in a sibling file resolves")
+	decls := a.localTypeDecls("Cents", af, aPath)
+	require.Len(t, decls, 1)
+	assert.Equal(t, filepath.Join(dir, "b.go"), decls[0].path, "named type in a sibling file is found")
+	assert.Equal(t, goTypeInt64, resolve(af, aPath, "Cents"))
 
-	// A named struct is declared, but has no bare-ident underlying -> "".
-	assert.Equal(t, []string{""}, a.localTypeUnderlyings("Wrapped", af, aPath),
-		"a named struct is not a scalar underlying")
+	// A named struct is a ref.
+	assert.Equal(t, "$Wrapped", resolve(af, aPath, "Wrapped"))
 
 	// Absent type -> no declarations.
-	assert.Empty(t, a.localTypeUnderlyings("Missing", af, aPath))
+	assert.Empty(t, a.localTypeDecls("Missing", af, aPath))
 
 	// An unreadable package dir still yields the current file's own declaration.
 	gone := filepath.Join(dir, "gone", "a.go")
 	own, err := parser.ParseFile(a.fileSet, gone, "package p\ntype Cents "+goTypeFloat32+"\n", 0)
 	require.NoError(t, err)
-	assert.Equal(t, []string{goTypeFloat32}, a.localTypeUnderlyings("Cents", own, gone))
+	assert.Len(t, a.localTypeDecls("Cents", own, gone), 1)
+	assert.Equal(t, goTypeFloat32, resolve(own, gone, "Cents"))
 }
 
-// TestLocalTypeUnderlyingBuildTaggedVariantsDeterministic locks what a named
+// TestLocalTypeDeclsBuildTaggedVariantsDeterministic locks what a named
 // scalar declared at different widths in GOARCH-specific files (word_amd64.go /
 // word_arm.go) resolves to. Build constraints are not evaluated, so no single
 // width is right on every target: every call must report both declarations in
-// sorted file order and resolve to the first one's builtin (which the 3-way
-// kind derives from) with agreed=false, which keeps the width out of the
-// emitted schema. Ranging the per-dir parse map directly would re-randomize
-// the order on every call, so the result is checked repeatedly.
-func TestLocalTypeUnderlyingBuildTaggedVariantsDeterministic(t *testing.T) {
+// sorted file order and resolve to the kind alone (kind:integer), which keeps
+// the width out of the emitted schema. Ranging the per-dir parse map directly
+// would re-randomize the order on every call, so the result is checked
+// repeatedly.
+func TestLocalTypeDeclsBuildTaggedVariantsDeterministic(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "handler.go"),
 		[]byte("package p\ntype Packet struct{ Size Word }\n"), 0600))
@@ -5857,19 +5855,23 @@ func TestLocalTypeUnderlyingBuildTaggedVariantsDeterministic(t *testing.T) {
 	hf, err := parser.ParseFile(a.fileSet, hPath, nil, parser.ParseComments)
 	require.NoError(t, err)
 
+	want := []string{filepath.Join(dir, "word_amd64.go"), filepath.Join(dir, "word_arm.go")}
 	for i := 0; i < 200; i++ {
-		require.Equal(t, []string{goTypeInt64, armWidth}, a.localTypeUnderlyings("Word", hf, hPath),
-			"call %d: every variant, in sorted file order", i)
-		require.Equal(t, scalarBuiltin{name: goTypeInt64, agreed: false}, a.resolveUnderlyingBuiltin("Word", hf, hPath),
-			"call %d: the first variant names the builtin, and the disagreement is reported", i)
+		paths := make([]string, 0, len(want))
+		for _, d := range a.localTypeDecls("Word", hf, hPath) {
+			paths = append(paths, d.path)
+		}
+		require.Equal(t, want, paths, "call %d: every variant, in sorted file order", i)
+		got := a.resolveLocal(models.TypeShape{Kind: models.ShapeNamed, Name: "Word"}, newResolveCtx(hf, hPath, false), identityMode)
+		require.Equal(t, "kind:integer", renderShape(got), "call %d: the widths disagree, so the kind alone", i)
 	}
 }
 
-// TestLocalTypeUnderlyingsSkipsOtherPackages pins that a same-named type in a
+// TestLocalTypeDeclsSkipsOtherPackages pins that a same-named type in a
 // file of another package sharing the directory — typically a
 // `//go:build ignore` generator in package main — is not read as a variant, so
 // it can neither turn the width into a disagreement nor change the kind.
-func TestLocalTypeUnderlyingsSkipsOtherPackages(t *testing.T) {
+func TestLocalTypeDeclsSkipsOtherPackages(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "handler.go"),
 		[]byte("package p\ntype Packet struct{ K Kind }\n"), 0600))
@@ -5882,8 +5884,9 @@ func TestLocalTypeUnderlyingsSkipsOtherPackages(t *testing.T) {
 	hf, err := parser.ParseFile(a.fileSet, hPath, nil, parser.ParseComments)
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{goTypeInt64}, a.localTypeUnderlyings("Kind", hf, hPath))
-	assert.Equal(t, scalarBuiltin{name: goTypeInt64, agreed: true}, a.resolveUnderlyingBuiltin("Kind", hf, hPath))
+	assert.Len(t, a.localTypeDecls("Kind", hf, hPath), 1)
+	got := a.resolveLocal(models.TypeShape{Kind: models.ShapeNamed, Name: "Kind"}, newResolveCtx(hf, hPath, false), identityMode)
+	assert.Equal(t, goTypeInt64, renderShape(got))
 }
 
 // TestParseValidationTagDive covers the collection/element scope split at `dive`.
@@ -6645,13 +6648,13 @@ func (m *Module) get(ctx server.HandlerContext) (server.Result[widgets.Widget], 
 	assert.True(t, ok, "a normal in-module subpackage type must resolve into the registry")
 }
 
-// TestResolveUnderlyingBuiltinPredeclaredAliases covers named scalars over Go's
+// TestResolveLocalNamedScalarsOverPredeclaredAliases covers named scalars over Go's
 // predeclared aliases: `type Flag byte` and `type Code rune` resolve to their
-// alias name (so the generator emits exactly what a bare byte/rune does) and
-// the integer kind, instead of falling through to the object fallback.
-// `type Ptr uintptr` stays unclassified — a uintptr is a machine address, not
-// an API value.
-func TestResolveUnderlyingBuiltinPredeclaredAliases(t *testing.T) {
+// alias name (so the generator emits exactly what a bare byte/rune does),
+// instead of falling through to the object fallback. `type Ptr uintptr`
+// resolves to uintptr — a machine address, not an API value — and raises the
+// uintptr warning (named wrappers are covered, README).
+func TestResolveLocalNamedScalarsOverPredeclaredAliases(t *testing.T) {
 	src := `package mod
 import (
 	"github.com/gaborage/go-bricks/app"
@@ -6675,38 +6678,32 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 `
 	a, _ := analyzeSingleModule(t, src)
-	packet := a.typeRegistry["Packet"]
-	require.NotNil(t, packet)
-	kind := map[string]string{}
-	builtin := map[string]string{}
-	for i := range packet.Fields {
-		kind[packet.Fields[i].JSONName] = packet.Fields[i].UnderlyingKind
-		builtin[packet.Fields[i].JSONName] = packet.Fields[i].UnderlyingBuiltin
+	got := renders(t, a.typeRegistry["Packet"])
+	assert.Equal(t, goTypeByte, got["flag"], "type Flag byte keeps its builtin")
+	assert.Equal(t, goTypeRune, got["code"], "type Code rune keeps its builtin")
+	assert.Equal(t, goTypeUintptr, got["ptr"], "type Ptr uintptr resolves to uintptr")
+	if w := fieldWarnings(a, "Ptr"); assert.Len(t, w, 1) {
+		assert.Contains(t, w[0], "holds a uintptr")
 	}
-	assert.Equal(t, "integer", kind["flag"], "type Flag byte -> integer")
-	assert.Equal(t, goTypeByte, builtin["flag"], "type Flag byte keeps its builtin")
-	assert.Equal(t, "integer", kind["code"], "type Code rune -> integer")
-	assert.Equal(t, goTypeRune, builtin["code"], "type Code rune keeps its builtin")
-	assert.Equal(t, "", kind["ptr"], "type Ptr uintptr stays unclassified")
-	assert.Equal(t, "", builtin["ptr"], "type Ptr uintptr has no builtin")
 }
 
-// TestResolveUnderlyingBuiltinUnclassified covers the chains that bottom out in
-// no builtin: an unknown qualified underlying and a cycle stopped by the depth
-// cap. Neither names a builtin, and neither is a disagreement.
-func TestResolveUnderlyingBuiltinUnclassified(t *testing.T) {
+// TestResolveLocalUnresolvableChains covers the chains resolveLocal cannot
+// resolve: an unknown qualified underlying leaves the defined type
+// unresolvable (a chain through it ends at that same leaf), and a cycle is cut.
+func TestResolveLocalUnresolvableChains(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.go")
 	src := "package p\ntype Ext other.Foo\ntype Via Ext\ntype A B\ntype B A\n"
 	a := New(dir)
 	f, err := parser.ParseFile(a.fileSet, path, src, 0)
 	require.NoError(t, err)
-	for _, name := range []string{"Ext", "Via", "A"} {
-		assert.Equal(t, scalarBuiltin{agreed: true}, a.resolveUnderlyingBuiltin(name, f, path), name)
+	for name, want := range map[string]string{"Ext": "Ext", "Via": "Ext", "A": "cycle:A"} {
+		got := a.resolveLocal(models.TypeShape{Kind: models.ShapeNamed, Name: name}, newResolveCtx(f, path, false), identityMode)
+		assert.Equal(t, want, renderShape(got), name)
 	}
 }
 
-// widthVariantModule is the module file of TestResolveUnderlyingBuiltinBuildTaggedVariants:
+// widthVariantModule is the module file of TestResolveLocalBuildTaggedVariants:
 // Packet uses Word directly, as slice items, and through a local chain (Span),
 // while each case declares Word itself in build-tagged sibling files.
 const widthVariantModule = `package mod
@@ -6730,25 +6727,25 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 `
 
-// TestResolveUnderlyingBuiltinBuildTaggedVariants runs the analyzer over a
+// TestResolveLocalBuildTaggedVariants runs the analyzer over a
 // project that declares Word in several build-tagged files. Build constraints
 // are not evaluated, so when the variants disagree on the builtin (or one is
-// not a scalar) no width is advertised: UnderlyingBuiltin stays empty and
-// UnderlyingKind still comes from the first scalar declaration (the field's
-// own file, then sibling files in sorted path order). Variants that agree,
+// not a scalar) no width is advertised: the field resolves to a kind-only
+// leaf whose kind comes from the first scalar declaration (the field's own
+// file, then sibling files in sorted path order). Variants that agree,
 // directly, through different chains, or by spelling one builtin two ways
 // (byte/uint8, rune/int32), keep the builtin; a struct variant makes the field
-// a $ref with no builtin at all. Every case covers the direct field, []Word
-// items, and a chain through Word.
-func TestResolveUnderlyingBuiltinBuildTaggedVariants(t *testing.T) {
+// a $ref. Every case covers the direct field, []Word items, and a chain
+// through Word.
+func TestResolveLocalBuildTaggedVariants(t *testing.T) {
 	variant := func(constraint, decls string) string {
 		return "//go:build " + constraint + "\n\npackage mod\n\n" + decls + "\n"
 	}
 	cases := []struct {
-		name          string
-		own           string            // extra declarations in module.go, the fields' own file
-		files         map[string]string // build-tagged sibling files under mod/
-		kind, builtin string
+		name  string
+		own   string            // extra declarations in module.go, the fields' own file
+		files map[string]string // build-tagged sibling files under mod/
+		leaf  string            // the resolved leaf of size, span and sizes' items
 	}{
 		{
 			name: "widths disagree",
@@ -6756,7 +6753,7 @@ func TestResolveUnderlyingBuiltinBuildTaggedVariants(t *testing.T) {
 				"word_amd64.go": variant("amd64", "type Word int64"),
 				"word_386.go":   variant("386", "type Word int32"),
 			},
-			kind: kindInteger,
+			leaf: "kind:" + kindInteger,
 		},
 		{
 			name: "widths agree",
@@ -6764,7 +6761,7 @@ func TestResolveUnderlyingBuiltinBuildTaggedVariants(t *testing.T) {
 				"word_amd64.go": variant("amd64", "type Word int64"),
 				"word_arm64.go": variant("arm64", "type Word int64"),
 			},
-			kind: kindInteger, builtin: goTypeInt64,
+			leaf: goTypeInt64,
 		},
 		{
 			name: "different chains agree on the builtin",
@@ -6772,7 +6769,7 @@ func TestResolveUnderlyingBuiltinBuildTaggedVariants(t *testing.T) {
 				"word_amd64.go": variant("amd64", "type Word int64"),
 				"word_386.go":   variant("386", "type Word Cents\ntype Cents int64"),
 			},
-			kind: kindInteger, builtin: goTypeInt64,
+			leaf: goTypeInt64,
 		},
 		{
 			name: "a chain whose target disagrees",
@@ -6781,7 +6778,7 @@ func TestResolveUnderlyingBuiltinBuildTaggedVariants(t *testing.T) {
 				"cents_amd64.go": variant("amd64", "type Cents int64"),
 				"cents_386.go":   variant("386", "type Cents int32"),
 			},
-			kind: kindInteger,
+			leaf: "kind:" + kindInteger,
 		},
 		{
 			name: "the own file's declaration still meets a disagreeing sibling",
@@ -6789,7 +6786,7 @@ func TestResolveUnderlyingBuiltinBuildTaggedVariants(t *testing.T) {
 			files: map[string]string{
 				"word_386.go": variant("386", "type Word int32"),
 			},
-			kind: kindInteger,
+			leaf: "kind:" + kindInteger,
 		},
 		{
 			name: "a non-scalar variant disagrees",
@@ -6797,7 +6794,7 @@ func TestResolveUnderlyingBuiltinBuildTaggedVariants(t *testing.T) {
 				"word_amd64.go": variant("amd64", "type Word int64"),
 				"word_js.go":    variant("js", "type Word []int"),
 			},
-			kind: kindInteger,
+			leaf: "kind:" + kindInteger,
 		},
 		{
 			name: "the kind follows the first declaration",
@@ -6805,7 +6802,7 @@ func TestResolveUnderlyingBuiltinBuildTaggedVariants(t *testing.T) {
 				"word_js.go":    variant("js", "type Word string"),
 				"word_linux.go": variant("linux", "type Word int64"),
 			},
-			kind: goTypeString,
+			leaf: "kind:" + goTypeString,
 		},
 		{
 			name: "the kind skips a leading non-scalar declaration",
@@ -6813,7 +6810,7 @@ func TestResolveUnderlyingBuiltinBuildTaggedVariants(t *testing.T) {
 				"word_a_js.go":    variant("js", "type Word []int"),
 				"word_b_linux.go": variant("linux", "type Word string"),
 			},
-			kind: goTypeString,
+			leaf: "kind:" + goTypeString,
 		},
 		{
 			// byte is Go's predeclared alias of uint8: one type, one schema.
@@ -6822,7 +6819,7 @@ func TestResolveUnderlyingBuiltinBuildTaggedVariants(t *testing.T) {
 				"word_386.go":   variant("386", "type Word "+goTypeUint8),
 				"word_amd64.go": variant("amd64", "type Word "+goTypeByte),
 			},
-			kind: kindInteger, builtin: goTypeUint8,
+			leaf: goTypeUint8,
 		},
 		{
 			// rune is Go's predeclared alias of int32.
@@ -6831,7 +6828,7 @@ func TestResolveUnderlyingBuiltinBuildTaggedVariants(t *testing.T) {
 				"word_386.go":   variant("386", "type Word "+goTypeRune),
 				"word_amd64.go": variant("amd64", "type Word "+goTypeInt32),
 			},
-			kind: kindInteger, builtin: goTypeRune,
+			leaf: goTypeRune,
 		},
 		{
 			// registerTypeAt resolves the struct variant first, and a $ref
@@ -6853,13 +6850,12 @@ func TestResolveUnderlyingBuiltinBuildTaggedVariants(t *testing.T) {
 				files[filepath.Join("mod", name)] = src
 			}
 			packet := analyzeDirectiveProject(t, files).typeRegistry["Packet"]
-			require.NotNil(t, packet)
 			require.Len(t, packet.Fields, 3)
-			for i := range packet.Fields {
-				f := &packet.Fields[i]
-				assert.Equal(t, c.kind, f.UnderlyingKind, "%s: kind", f.JSONName)
-				assert.Equal(t, c.builtin, f.UnderlyingBuiltin, "%s: builtin", f.JSONName)
+			want := map[string]string{"size": c.leaf, "sizes": "[]" + c.leaf, "span": c.leaf}
+			if c.leaf == "" { // the struct variant
+				want = map[string]string{"size": "$Word", "sizes": "[]$Word", "span": "$Span"}
 			}
+			assert.Equal(t, want, renders(t, packet))
 		})
 	}
 }
@@ -6914,14 +6910,9 @@ func TestPromotedNamedScalarResolvesInDeclaringPackage(t *testing.T) {
 					"\tSplits []Units `json:\"splits\"`\n}\n",
 			})
 			for _, owner := range []string{"Wrap", "Outer"} {
-				ti := a.typeRegistry[owner]
-				require.NotNil(t, ti, owner)
-				got := map[string][2]string{}
-				for i := range ti.Fields {
-					got[ti.Fields[i].JSONName] = [2]string{ti.Fields[i].UnderlyingKind, ti.Fields[i].UnderlyingBuiltin}
-				}
-				assert.Equal(t, [2]string{kindInteger, u64}, got["amount"], "%s.amount: types.Units", owner)
-				assert.Equal(t, [2]string{kindInteger, u64}, got["splits"], "%s.splits: []types.Units items", owner)
+				got := renders(t, a.typeRegistry[owner])
+				assert.Equal(t, u64, got["amount"], "%s.amount: types.Units", owner)
+				assert.Equal(t, "[]"+u64, got["splits"], "%s.splits: []types.Units items", owner)
 			}
 		})
 	}

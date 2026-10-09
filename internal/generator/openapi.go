@@ -1382,9 +1382,9 @@ func payloadNamesComponent(ti *models.TypeInfo) bool {
 	return !inline
 }
 
-// addFieldSchemaRefs marks every component named by a field or map-value $ref
-// across all registered types, so a type reachable only from another type's
-// field (rather than from a route) is still emitted.
+// addFieldSchemaRefs marks every component named by a $ref leaf of a field's
+// Resolution, at any depth, across all registered types, so a type reachable
+// only from another type's field (rather than from a route) is still emitted.
 //
 // Nil entries are skipped. This guard is load-bearing: referencedSchemaNames is
 // evaluated as an ARGUMENT to generateSchemasFromTypes, so this scan runs first
@@ -1396,13 +1396,24 @@ func addFieldSchemaRefs(out map[string]bool, types map[string]*models.TypeInfo) 
 			continue
 		}
 		for j := range ti.Fields {
-			if n := ti.Fields[j].RefName; n != "" {
-				out[n] = true
-			}
-			if n := ti.Fields[j].MapValueRefName; n != "" {
-				out[n] = true
-			}
+			addRefNames(out, ti.Fields[j].ResolvedShape())
 		}
+	}
+}
+
+// addRefNames records every ShapeRef leaf of s, descending through pointer,
+// slice, array and map elements. A Marshaler leaf's Elem is never descended:
+// nothing under it is emitted, so its refs would orphan components.
+func addRefNames(out map[string]bool, s models.TypeShape) {
+	switch s.Kind {
+	case models.ShapePointer, models.ShapeSlice, models.ShapeArray, models.ShapeMap:
+		if s.Elem != nil {
+			addRefNames(out, *s.Elem)
+		}
+	case models.ShapeRef:
+		out[s.Name] = true
+	default:
+		// Leaves that reference no component, Marshaler and recursive ones included.
 	}
 }
 
@@ -1509,8 +1520,8 @@ func (g *OpenAPIGenerator) typeInfoToSchema(typeInfo *models.TypeInfo) *OpenAPIS
 
 // fieldInfoToProperty builds a field's schema and then applies its example.
 // The example is applied here, after the property is fully built, because
-// coercion needs the RESOLVED type — several paths inside buildFieldProperty
-// return early without ever reaching setTypeAndFormat.
+// coercion needs the RESOLVED type — and buildFieldProperty's $ref path
+// (refProperty) returns early without ever reaching setTypeAndFormat.
 func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPIProperty {
 	prop := g.buildFieldProperty(field)
 	applyExample(prop, field.Example)
@@ -1518,101 +1529,46 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 }
 
 // buildFieldProperty converts a FieldInfo to an OpenAPI property, without
-// applying its example — see fieldInfoToProperty, the wrapper that does.
+// applying its example — see fieldInfoToProperty, the wrapper that does. It
+// types the field's Resolution (ResolvedShape): every named type already
+// substituted, every struct leaf a ShapeRef.
 func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIProperty {
-	// A field whose underlying type is a registered struct is a $ref (or an array
-	// of $ref). A $ref must stand alone — it carries no sibling type/format or
-	// constraint keywords — so return early.
-	if field.RefName != "" {
-		return g.refProperty(field)
+	resolved := field.ResolvedShape()
+	target := stripPointers(resolved)
+	// A struct field is a $ref. A $ref must stand alone — it carries no
+	// sibling type/format or constraint keywords — so return early.
+	if target.Kind == models.ShapeRef {
+		return refProperty(field, target.Name)
 	}
 
-	prop := &OpenAPIProperty{
-		Description: field.Description,
-	}
-
-	// A struct-valued map (map[string]Address) is an object whose
-	// additionalProperties is a $ref to the value component. Handle it here, where
-	// the analyzer-resolved MapValueRefName is available (setTypeAndFormat sees
-	// only the shape and so can only type primitive-valued maps). A map of
-	// slices (map[string][]Address) wraps the $ref in an array.
-	unwrapped := shapeAfterPointer(field.Shape)
-	if unwrapped.Kind == models.ShapeMap && field.MapValueRefName != "" {
-		ref := &OpenAPIProperty{Ref: refPath(field.MapValueRefName)}
-		prop.Type = typeObject
-		// The old code ran isSliceType over the VALUE string, which itself
-		// stripped one leading "*" — hence the inner unwrap, so
-		// map[string]*[]Address still wraps the $ref in an array.
-		if unwrapped.Elem != nil && isSequence(shapeAfterPointer(*unwrapped.Elem)) {
-			prop.AdditionalProperties = &OpenAPIProperty{Type: typeArray, Items: ref}
-		} else {
-			prop.AdditionalProperties = ref
-		}
-		return prop
-	}
-
-	// A named, non-struct scalar (e.g. `type Cents int64`) carries its resolved
-	// underlying builtin from the analyzer; type it exactly as a bare field of
-	// that builtin (see setNamedScalarType) instead of the object fallback
-	// setTypeAndFormat would pick for an unrecognized type name. For a slice of
-	// a named scalar ([]Cents) the resolved builtin is the ELEMENT's, so emit an
-	// array whose items carry it (and the dive element constraints). Either way
-	// the builtin mapping runs before applyValidationConstraints, so an explicit
-	// bound still overwrites the unsigned floor.
-	if field.UnderlyingKind != "" {
-		if isSequence(unwrapped) {
-			prop.Type = typeArray
-			prop.Items = namedScalarItems(unwrapped.Elem, field)
-			applyValidationConstraints(prop, field) // minItems/maxItems on the array, dive rules on items
-			return prop
-		}
-		// Path 5 — named scalar (Cents). The slice branch is false here, and
-		// setNamedScalarType always sets prop.Type (UnderlyingKind is non-empty),
-		// so a `nullable` emitted here always has a declared type to extend.
-		setNamedScalarType(prop, field)
-		applyValidationConstraints(prop, field)
-		prop.Nullable = isPointerField(field)
-		return prop
-	}
-
-	// Map the Go type shape to OpenAPI type and format
-	g.setTypeAndFormat(prop, field.Shape)
+	prop := &OpenAPIProperty{Description: field.Description}
+	g.setTypeAndFormat(prop, resolved)
 
 	// Apply the field's validate-tag constraints: collection/scalar rules onto
 	// prop (incl. minItems/maxItems for slices), element-scope (dive) rules onto
 	// the array's items.
 	applyValidationConstraints(prop, field)
 
-	// Pointer to a scalar / well-known type only. NOT pointer-to-slice
-	// (*[]string) or pointer-to-map (*map[string]int) — out of scope. isPointerField
-	// tests the raw shape, while unwrapped has already shed that one pointer. The
-	// prop.Type != "" term keeps `nullable` off a typeless schema (plan 017
-	// made any/interface{} emit no type), where it would have nothing to extend.
-	if isPointerField(field) && !isSequence(unwrapped) &&
-		unwrapped.Kind != models.ShapeMap && prop.Type != "" {
+	// JSON null only for a pointer to a scalar / well-known type: never to a
+	// slice or map (out of scope), and never on a typeless ({}) schema, where
+	// it would have nothing to extend (any/interface{}, Marshaler and
+	// recursive leaves).
+	if isPointerField(field) && !isSequence(target) && target.Kind != models.ShapeMap && prop.Type != "" {
 		prop.Nullable = true
 	}
 
 	return prop
 }
 
-// refProperty builds the property for a field whose underlying type is a
-// registered struct: a bare $ref, or an array whose items are that $ref.
-// A $ref must stand alone — it carries no sibling type/format or constraint
-// keywords — which is why this is a distinct path.
-func (g *OpenAPIGenerator) refProperty(field *models.FieldInfo) *OpenAPIProperty {
-	ref := &OpenAPIProperty{Ref: refPath(field.RefName)}
-	if isSequence(shapeAfterPointer(field.Shape)) {
-		// The inner $ref must stand alone, but the array wrapper carries the
-		// field's documentation and cardinality (minItems/maxItems). Element-scope
-		// (dive) rules have nowhere valid to go on a $ref element, so they drop.
-		arr := &OpenAPIProperty{Type: typeArray, Items: ref, Description: field.Description}
-		applyExample(arr, field.Example)
-		// Items.Ref is set here, so applyValidationConstraints' own guard skips
-		// the element (dive) path — this is what keeps rules off the $ref item.
-		applyValidationConstraints(arr, field)
-		return arr
-	}
+// refProperty builds the property for a field whose type (after every
+// pointer) is a registered struct: a bare $ref, or, for a body pointer, the
+// $ref wrapped in allOf so `nullable` has a declared type to extend. A $ref
+// must stand alone — it carries no sibling type/format or constraint keywords
+// — which is why this is a distinct path. A slice or map of structs takes the
+// generic path; its $ref items stand alone there through
+// applyValidationConstraints' Items.Ref guard.
+func refProperty(field *models.FieldInfo, name string) *OpenAPIProperty {
+	ref := &OpenAPIProperty{Ref: refPath(name)}
 	if isPointerField(field) {
 		// *Struct: `nullable` beside a bare $ref is ignored in OpenAPI 3.0, so
 		// wrap the $ref in allOf. `type: object` is required for `nullable` to
@@ -1628,21 +1584,33 @@ func (g *OpenAPIGenerator) refProperty(field *models.FieldInfo) *OpenAPIProperty
 }
 
 // isPointerField reports whether a field serializes JSON null (a Go pointer),
-// which OpenAPI 3.0 models with `nullable: true`.
+// which OpenAPI 3.0 models with `nullable: true`. It reads the Resolution, so
+// a named pointer type (type PC *int64) counts.
 //
-// Parameters are excluded deliberately: extractParameters (openapi.go:1719)
-// builds Parameter.Schema through fieldInfoToProperty too, and a path/query/
-// header parameter carries URL or header text — never a JSON null. The two
-// callers partition exactly on ParamType (typeInfoToSchema skips every field
-// with ParamType != ""), so this guard suppresses the parameter caller and
-// nothing else.
+// Parameters are excluded deliberately: extractParameters builds
+// Parameter.Schema through fieldInfoToProperty too, and a path/query/header
+// parameter carries URL or header text — never a JSON null. The two callers
+// partition exactly on ParamType (typeInfoToSchema skips every field with
+// ParamType != ""), so this guard suppresses the parameter caller and nothing
+// else.
 func isPointerField(field *models.FieldInfo) bool {
-	return field.ParamType == "" && field.Shape.Kind == models.ShapePointer
+	return field.ParamType == "" && field.ResolvedShape().Kind == models.ShapePointer
 }
 
-// shapeAfterPointer unwraps ONE pointer level — the generator's uniform
-// discipline, mirroring the single strings.TrimPrefix(goType, "*") every
-// retired string helper here used.
+// stripPointers sheds every pointer level: JSON has no pointer, and the
+// retired named-scalar path and shapeBaseName's $ref lookup both ignored
+// pointer depth, so **Cents and **Address keep their schema (and **int64 is
+// typed as *int64 is: #120's field rows).
+func stripPointers(s models.TypeShape) models.TypeShape {
+	for s.Kind == models.ShapePointer && s.Elem != nil {
+		s = *s.Elem
+	}
+	return s
+}
+
+// shapeAfterPointer unwraps ONE pointer level. Payload typing still uses it
+// (until #120's payload half); field typing sheds every level through
+// stripPointers.
 func shapeAfterPointer(s models.TypeShape) models.TypeShape {
 	if s.Kind == models.ShapePointer && s.Elem != nil {
 		return *s.Elem
@@ -1677,8 +1645,9 @@ type wellKnownType struct {
 //     number, array, boolean, null or object), exactly like any/interface{}.
 //     The entry is empty but must stay. Without it the name falls to the
 //     object fallback in setBasicTypeAndFormat, and a []json.RawMessage
-//     payload's items to a dangling element $ref. Its underlying []byte is
-//     invisible to the AST-only analyzer, so the base64 branch never sees it.
+//     payload's items to a dangling element $ref. A defined type over it
+//     (type Raw json.RawMessage) is resolved by the analyzer to []byte; the
+//     alias and direct uses keep this entry.
 //   - json.Number    -> number, with no format: encoding/json writes the number
 //     literal it holds, at any precision. Its Go kind is string, so it must
 //     stay out of the analyzer's knownUnderlyingBuiltins — a string kind would
@@ -1688,8 +1657,9 @@ type wellKnownType struct {
 //     written as their number, unclamped (a zero Month is 0), so no range
 //     bound is stamped. The analyzer also maps both to int in
 //     knownUnderlyingBuiltins, so validate bounds and local wrappers resolve;
-//     this entry types the positions that classification skips (map values,
-//     payloads).
+//     this entry types the positions that classification skips (payloads,
+//     until #110; fields resolve through knownUnderlyingBuiltins at every
+//     depth).
 //
 // NOTE: matching is by the analyzer's qualified type string (pkg-local alias +
 // "." + name), so an aliased import (import t "time" -> "t.Time") is not yet
@@ -1727,9 +1697,14 @@ func wellKnownShape(s models.TypeShape) (wellKnownType, bool) {
 	return wellKnownType{}, false
 }
 
-// setTypeAndFormat maps a field's Shape to OpenAPI type and format.
+// setTypeAndFormat maps a field's resolved shape to OpenAPI type and format,
+// recursing through slice, array and map elements. Every pointer level is
+// shed first (stripPointers). The Resolution-only leaves type as: a ref, a
+// $ref; a kind-only scalar, its kind alone (#92: no format, no unsigned
+// floor); a Marshaler or recursive leaf, {} (any JSON value), never
+// descending into a Marshaler's Elem.
 func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, shape models.TypeShape) {
-	s := shapeAfterPointer(shape)
+	s := stripPointers(shape)
 
 	// Well-known types first: []byte must win over the generic []T array branch,
 	// and time.Time/uuid.UUID over the qualified-type object fallback.
@@ -1738,63 +1713,29 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, shape models.
 		return
 	}
 
-	// Handle slices and fixed-size arrays
-	if isSequence(s) {
+	switch s.Kind {
+	case models.ShapeSlice, models.ShapeArray:
 		prop.Type = typeArray
 		prop.Items = &OpenAPIProperty{}
 		if s.Elem != nil {
 			g.setTypeAndFormat(prop.Items, *s.Elem)
 		}
-		return
-	}
-
-	// Handle maps as objects with a typed additionalProperties (string-keyed).
-	// Struct-valued maps emit a $ref via fieldInfoToProperty; this nested path
-	// (maps inside slices/maps) recurses on the value shape. The recursive call
-	// strips one pointer at its head, so map[string]*int unwraps as before.
-	if s.Kind == models.ShapeMap {
+	case models.ShapeMap:
+		// Maps are objects with a typed additionalProperties (string-keyed).
 		prop.Type = typeObject
 		prop.AdditionalProperties = &OpenAPIProperty{}
 		if s.Elem != nil {
 			g.setTypeAndFormat(prop.AdditionalProperties, *s.Elem)
 		}
-		return
+	case models.ShapeRef:
+		prop.Ref = refPath(s.Name)
+	case models.ShapeKindOnly:
+		prop.Type = s.Name
+	case models.ShapeMarshaler, models.ShapeRecursive:
+		return // {}: any JSON value
+	default:
+		setBasicTypeAndFormat(prop, s.Name)
 	}
-
-	setBasicTypeAndFormat(prop, s.Name)
-}
-
-// namedScalarItems builds the items schema of a slice of a named scalar. The
-// analyzer resolves the builtin through every slice and pointer level, so each
-// further slice level here is one more nested array ([][]Cents is an array of
-// arrays, as [][]int64 is), shedding one pointer per level exactly as
-// setTypeAndFormat's recursion does. Only the innermost schema takes the
-// builtin.
-func namedScalarItems(elem *models.TypeShape, field *models.FieldInfo) *OpenAPIProperty {
-	items := &OpenAPIProperty{}
-	if elem != nil {
-		if s := shapeAfterPointer(*elem); isSequence(s) {
-			items.Type = typeArray
-			items.Items = namedScalarItems(s.Elem, field)
-			return items
-		}
-	}
-	setNamedScalarType(items, field)
-	return items
-}
-
-// setNamedScalarType types prop for a named scalar field (UnderlyingKind set):
-// exactly as a bare field of its UnderlyingBuiltin (type, format, unsigned
-// minimum: 0), or — when the analyzer left the builtin empty because the
-// type's build-tagged declarations disagree on width — from the 3-way kind
-// alone, with no format and no floor, since no single width holds on every
-// target.
-func setNamedScalarType(prop *OpenAPIProperty, field *models.FieldInfo) {
-	if field.UnderlyingBuiltin == "" {
-		prop.Type = field.UnderlyingKind
-		return
-	}
-	setBasicTypeAndFormat(prop, field.UnderlyingBuiltin)
 }
 
 // setBasicTypeAndFormat maps a leaf type NAME to its OpenAPI type and format.
