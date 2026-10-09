@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.4.1](https://github.com/gaborage/go-bricks-openapi/compare/v0.4.0...v0.4.1) (2026-10-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **analyzer:** generated component names can change. A route-package struct can lose its bare name to a same-named struct now registered through another package's named type (User becomes QualifiednamedtypesUser), and a second package sharing a clause, or a named type over a struct sharing a name with one in the struct's package, gets `<Pkg><Name>` (ModelItem, BUser). $refs and generated client type names move; regenerate clients.
+* **analyzer:** payload data schemas move from object to typed schemas, and specs gain components for structs reached only through a payload. A struct registered through a payload can now take a short name first, so a same-named struct of another package registered later is renamed (User becomes `<Pkg>User`), moving $refs and generated client type names; regenerate clients. Request-less routes with a map, nested-slice or pointer-to-container payload gain their 201/202/NewResult success code and inferred error responses.
+* **analyzer:** struct Marshaler types and structs that promote a Marshaler method lose their components; their $refs become {} or {type: string}, which moves generated client types, and routes whose payload or request is a non-text Marshaler type newly count as untyped and fail generate --strict, a zero-field request included. Such a type no longer holds its short component name, so a same-named struct of another package that was qualified is renamed to it (BMoney becomes Money, and Money now holds that struct), moving $refs and generated client type names; regenerate clients.
+
+### Added
+
+* **analyzer:** add openapi:errors directive for declared errors ([#85](https://github.com/gaborage/go-bricks-openapi/issues/85)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **analyzer:** infer error responses from handler constructor calls ([#87](https://github.com/gaborage/go-bricks-openapi/issues/87)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **analyzer:** warn on directives detached from a registration ([#91](https://github.com/gaborage/go-bricks-openapi/issues/91)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **commands:** report unresolved routes in generate and doctor output ([#86](https://github.com/gaborage/go-bricks-openapi/issues/86)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **generate:** print warning count in the run summary ([#73](https://github.com/gaborage/go-bricks-openapi/issues/73)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+
+
+### Fixed
+
+* **analyzer:** document [N]byte as an integer array, not base64 ([#126](https://github.com/gaborage/go-bricks-openapi/issues/126)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **analyzer:** document bare handler returns like Result[T] ([#124](https://github.com/gaborage/go-bricks-openapi/issues/124)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **analyzer:** resolve group registrar prefixes positionally ([#94](https://github.com/gaborage/go-bricks-openapi/issues/94)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **analyzer:** resolve local named types in every field position ([#128](https://github.com/gaborage/go-bricks-openapi/issues/128)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **analyzer:** resolve named types from other in-module packages ([#129](https://github.com/gaborage/go-bricks-openapi/issues/129)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **analyzer:** resolve route paths from scoped consts and concatenation ([#82](https://github.com/gaborage/go-bricks-openapi/issues/82)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **analyzer:** resolve success status through local result bindings ([#74](https://github.com/gaborage/go-bricks-openapi/issues/74)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **analyzer:** type named and composite response payloads like fields ([#130](https://github.com/gaborage/go-bricks-openapi/issues/130)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **analyzer:** type text Marshaler types as strings, never $ref one ([#131](https://github.com/gaborage/go-bricks-openapi/issues/131)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **analyzer:** warn on non-struct handler request types ([#127](https://github.com/gaborage/go-bricks-openapi/issues/127)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **generator:** drop date and date-time examples kin rejects ([#106](https://github.com/gaborage/go-bricks-openapi/issues/106)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **generator:** emit builtin format and floor for named scalars ([#92](https://github.com/gaborage/go-bricks-openapi/issues/92)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **generator:** emit format byte for []byte and drop non-base64 examples ([#90](https://github.com/gaborage/go-bricks-openapi/issues/90)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **generator:** emit untyped schema for json.RawMessage ([#93](https://github.com/gaborage/go-bricks-openapi/issues/93)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **generator:** map byte and rune named scalars to integer ([#80](https://github.com/gaborage/go-bricks-openapi/issues/80)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **generator:** render slice result payloads as typed arrays ([#76](https://github.com/gaborage/go-bricks-openapi/issues/76)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **generator:** stop emitting dangling $ref for non-struct payloads ([#108](https://github.com/gaborage/go-bricks-openapi/issues/108)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **generator:** type json.Number, time.Month and time.Weekday ([#125](https://github.com/gaborage/go-bricks-openapi/issues/125)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **generator:** widen int, uint and uint32 to format int64 ([#105](https://github.com/gaborage/go-bricks-openapi/issues/105)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+* **release:** build with Go 1.27.2 and lint with golangci-lint v2.14.0 ([#133](https://github.com/gaborage/go-bricks-openapi/issues/133)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+
+
+### Changed
+
+* **analyzer:** drop unread TypeInfo.IsPointer ([#72](https://github.com/gaborage/go-bricks-openapi/issues/72)) ([e4dad56](https://github.com/gaborage/go-bricks-openapi/commit/e4dad5623158fd63e81f58dcd030ca93b8020c12))
+
 ## [0.4.0](https://github.com/gaborage/go-bricks-openapi/compare/v0.3.1...v0.4.0) (2026-10-09)
 
 
