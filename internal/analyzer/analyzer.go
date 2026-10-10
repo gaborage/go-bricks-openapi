@@ -3534,8 +3534,9 @@ type qualifiedStruct struct {
 
 // resolveQualifiedStruct resolves a pkg.Type reference against astFile's imports.
 // It parses the in-module target package (with a per-dir cache) and finds the
-// named struct. Returns ok=false for stdlib/third-party imports, unknown aliases,
-// or names that are not a struct in the target package.
+// named struct among the files of its package (packageClause, inPackage).
+// Returns ok=false for stdlib/third-party imports, unknown aliases, a directory
+// with no importable file, or names that are not a struct in the target package.
 func (a *ProjectAnalyzer) resolveQualifiedStruct(qualified string, astFile *ast.File) (qualifiedStruct, bool) {
 	dot := strings.LastIndex(qualified, ".")
 	if dot < 0 {
@@ -3554,10 +3555,19 @@ func (a *ProjectAnalyzer) resolveQualifiedStruct(qualified string, astFile *ast.
 	if err != nil {
 		return qualifiedStruct{}, false
 	}
-	// Iterate files in a stable order so the resolved definition is deterministic
-	// even when several files in the dir could match (e.g. build-tagged variants).
+	clause, ok, sure := packageClause(files)
+	if !ok {
+		return qualifiedStruct{}, false // no importable file: only generators and tools
+	}
+	// Search only the package's files (inPackage: a package main generator's
+	// struct is never the package's), in a stable order so the resolved
+	// definition is deterministic even when several files in the dir could
+	// match (e.g. build-tagged variants).
 	for _, path := range slices.Sorted(maps.Keys(files)) {
 		file := files[path]
+		if !inPackage(path, file, clause, sure) {
+			continue
+		}
 		if st := a.findStructInFile(file, typeName); st != nil {
 			return qualifiedStruct{typeName: typeName, pkg: file.Name.Name, st: st, file: file, filePath: path}, true
 		}
@@ -3641,10 +3651,10 @@ func (a *ProjectAnalyzer) inModuleDir(importPath string) (string, bool) {
 // (e.g. `foo "path/bar"`) is used verbatim. For an unaliased import, Go references
 // the package by its DECLARED `package` clause name, which is not always the path's
 // last segment (e.g. `import "transport/httpapi"` whose files say `package http`).
-// We resolve the declared name from the already-parsed in-module package (cached,
-// no new parse on the hot path) and fall back to the path base for external/stdlib
-// imports whose declared name is unknowable here. Blank (_) and dot (.) imports are
-// skipped.
+// unaliasedImportName resolves that name from the already-parsed in-module package
+// (cached, no new parse on the hot path) and falls back to the path base for
+// external/stdlib imports whose declared name is unknowable here. Blank (_) and dot
+// (.) imports are skipped.
 func (a *ProjectAnalyzer) fileImports(astFile *ast.File) map[string]string {
 	out := make(map[string]string, len(astFile.Imports))
 	for _, imp := range astFile.Imports {
@@ -3662,10 +3672,12 @@ func (a *ProjectAnalyzer) fileImports(astFile *ast.File) map[string]string {
 }
 
 // unaliasedImportName returns the local name an unaliased import is referenced by:
-// the imported package's declared `package` clause name when it is in-module and
-// resolvable, else filepath.Base(path) for external/stdlib imports. Uses the same
-// cached helpers as resolveQualifiedStruct (inModuleDir + parsePackageDir), so it
-// adds no new parse cost on the hot path.
+// for an in-module package, the package clause of its importable files
+// (importableClause), so a package main generator or a build-ignored tool that
+// sorts first in the directory never renames it; else filepath.Base(path), for
+// external/stdlib imports, an unreadable directory, or one with no importable
+// file. Uses the same cached helpers as resolveQualifiedStruct (inModuleDir +
+// parsePackageDir), so it adds no new parse cost on the hot path.
 func (a *ProjectAnalyzer) unaliasedImportName(path string) string {
 	dir, ok := a.inModuleDir(path)
 	if !ok {
@@ -3675,12 +3687,8 @@ func (a *ProjectAnalyzer) unaliasedImportName(path string) string {
 	if err != nil {
 		return filepath.Base(path)
 	}
-	// All files in a valid package dir share one `package` clause; the first
-	// resolvable name is authoritative. Iterate in a stable order for determinism.
-	for _, p := range slices.Sorted(maps.Keys(files)) {
-		if f := files[p]; f.Name != nil && f.Name.Name != "" {
-			return f.Name.Name
-		}
+	if clause, ok := importableClause(files); ok {
+		return clause
 	}
 	return filepath.Base(path)
 }

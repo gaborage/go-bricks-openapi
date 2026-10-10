@@ -301,10 +301,9 @@ nested Go module, is not.
   `type ID uuid.UUID`) — is documented as an untyped object with a warning (so
   `--strict` fails on it). Named types from other packages of the project,
   under a default or aliased import (not a dot import), are resolved in their
-  own package like local ones —
-  except through an unaliased import of a directory whose first file by name
-  has another package clause (a `package main` generator or another
-  build-ignored file), which falls back with that warning (#122).
+  own package like local ones, except in a package whose every buildable file
+  carries a build constraint and whose first one by name has another package
+  clause (see Build constraints below).
 - `int` and `uint` are documented as 64-bit (`format: int64`), which is wrong
   for a 32-bit build, where they hold only 32 bits.
 - `uint64` is documented as `format: int64` with `minimum: 0`, so values of
@@ -391,12 +390,39 @@ nested Go module, is not.
   directive above that `.Add` is reported as detached. This is read where the
   `.Add` is: a local that is a group registrar only in a sibling block, or
   only from a later write in its own block, is not one there.
-- Build constraints (`//go:build`) are ignored, except `ignore`, which only
-  decides which files are searched for an imported package's named non-struct
-  types (struct lookups still scan every file): a build-ignored file of
-  another package clause (a generator or tool) is skipped, while one sharing
-  the package's clause is still merged (an unaliased import of such a
-  directory is the #122 exception above). When a registration helper is
+- Build constraints (`//go:build` lines and GOOS/GOARCH file-name suffixes
+  such as `_linux.go`) are not evaluated, except `ignore`. An imported
+  package's clause is read from its directory, skipping the files the go
+  command never builds into a package (`package main`, `package
+  documentation`, and names starting with `_` or `.`): the first remaining
+  file by name with no constraint (no `//go:build` line and no such suffix)
+  names it, or, when every remaining file is constrained, the first that is
+  not build-ignored. That clause names an unaliased import, and only files
+  with it are searched for the package's named types. When a file with no
+  constraint named it, only those files are searched for its structs too,
+  so a generator or tool of another clause (`package main`, or under
+  `//go:build ignore` or `//go:build tools`) is skipped, while a file
+  sharing the package's clause is still merged, even when build-ignored or
+  named `_…`. A struct found this way competes for its short component
+  name like any other: reached before a same-named struct of another
+  package, it takes the short one (`Addr`), and that struct's component is
+  qualified (`ModAddr`), so its `$ref`s and generated client type name
+  move. When every file is constrained, the first remaining file can be
+  one of another clause under another constraint (`//go:build tools`, or a
+  name such as `x_windows.go`), even when a skipped file of the package's
+  own clause sorts before it. It then names the package. Through an
+  unaliased import of it, fields and named types fall back with a warning,
+  an embedded struct loses its promoted fields silently, and a request gets
+  no `requestBody`. Under an aliased import, a named non-struct type falls
+  back with a warning, or, when that file declares the same name, takes
+  that file's declaration silently. Its structs are searched in every file
+  the go command can build, whichever clause named the package, so a
+  same-named struct in a file of another clause stands in for the
+  package's when that file sorts before the one declaring the package's
+  own.
+  A registration method or helper function is looked up in every file of
+  its directory.
+  When a registration helper is
   declared in several build-tagged files, only one copy is walked — the one in
   the calling file (for a delegate in another package, the file declaring its
   type) if that file declares one, otherwise the one in the first file by name —

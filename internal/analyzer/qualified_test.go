@@ -256,22 +256,24 @@ func TestQualifiedLookupDegenerate(t *testing.T) {
 	assert.False(t, ok)
 }
 
-// TestQualifiedBuildTaggedVariants pins that every declaration of a
-// qualified name in its package is merged, as for a local name (#92): b.Width
-// in two build-tagged files of b, reached directly, as slice items and as a
-// map value. A //go:build ignore generator in package main, or a
-// //go:build ignore tool of another clause, that sorts FIRST in the directory
-// never contributes a declaration; the import is aliased so fileImports'
-// first-sorted-file clause (#122) is not exercised.
-func TestQualifiedBuildTaggedVariants(t *testing.T) {
+// widthCase is one layout of package w's files for the build-tagged variant
+// tests, with the rendered leaf every w.Width position resolves to.
+type widthCase struct {
+	name  string
+	files map[string]string
+	leaf  string
+}
+
+// widthCases are the layouts of the build-tagged variant tests: Width in two
+// build-tagged files of w, and a file of another clause that w never builds
+// sorting FIRST beside it: a //go:build ignore generator in package main, a
+// //go:build ignore or //go:build tools file, a file named _ or . first, or a
+// package documentation file.
+func widthCases() []widthCase {
 	variant := func(constraint, decl string) string {
 		return "//go:build " + constraint + "\n\npackage w\n\n" + decl + "\n"
 	}
-	cases := []struct {
-		name  string
-		files map[string]string
-		leaf  string
-	}{
+	return []widthCase{
 		{"widths disagree", map[string]string{"width_amd64.go": variant("amd64", "type Width int64"), "width_386.go": variant("386", "type Width int32")}, "kind:" + kindInteger},
 		{"widths agree", map[string]string{"width_amd64.go": variant("amd64", "type Width int64"), "width_arm64.go": variant("arm64", "type Width int64")}, goTypeInt64},
 		{"a package main generator sorts first", map[string]string{
@@ -282,16 +284,39 @@ func TestQualifiedBuildTaggedVariants(t *testing.T) {
 			"aaa_tool.go": "//go:build ignore\n\npackage tool\n\ntype Width string\n",
 			"width.go":    "package w\n\ntype Width int64\n",
 		}, goTypeInt64},
+		{"a tools-tagged file of another clause sorts first", map[string]string{
+			"aaa_tools.go": "//go:build tools\n\npackage tools\n\ntype Width string\n",
+			"width.go":     "package w\n\ntype Width int64\n",
+		}, goTypeInt64},
+		{"an underscore-named file of another clause sorts first", map[string]string{
+			"_tool.go": "package tool\n\ntype Width string\n",
+			"width.go": "package w\n\ntype Width int64\n",
+		}, goTypeInt64},
+		{"a dot-named file of another clause sorts first", map[string]string{
+			".tool.go": "package tool\n\ntype Width string\n",
+			"width.go": "package w\n\ntype Width int64\n",
+		}, goTypeInt64},
+		{"a package documentation file sorts first", map[string]string{
+			"doc.go":   "package documentation\n\ntype Width string\n",
+			"width.go": "package w\n\ntype Width int64\n",
+		}, goTypeInt64},
 	}
-	for _, c := range cases {
+}
+
+// runWidthCases analyzes each widthCase with w's files in dir, imported by
+// importLine and referenced as qual.Width directly, as slice items and as a
+// map value.
+func runWidthCases(t *testing.T, dir, importLine, qual string) {
+	t.Helper()
+	for _, c := range widthCases() {
 		t.Run(c.name, func(t *testing.T) {
 			files := map[string]string{
 				"go.mod": resolveGoMod,
-				filepath.Join("mod", "module.go"): rowsModule("\tww \"github.com/example/app/w\"\n", "",
-					"\tW ww.Width `json:\"w\"`\n\tWS []ww.Width `json:\"ws\"`\n\tWM map[string]ww.Width `json:\"wm\"`\n"),
+				filepath.Join("mod", "module.go"): rowsModule(importLine, "",
+					"\tW "+qual+".Width `json:\"w\"`\n\tWS []"+qual+".Width `json:\"ws\"`\n\tWM map[string]"+qual+".Width `json:\"wm\"`\n"),
 			}
 			for name, src := range c.files {
-				files[filepath.Join("w", name)] = src
+				files[filepath.Join(dir, name)] = src
 			}
 			a := analyzeDirectiveProject(t, files)
 			got := renders(t, a.typeRegistry["Rows"])
@@ -301,6 +326,337 @@ func TestQualifiedBuildTaggedVariants(t *testing.T) {
 			assert.Empty(t, a.Warnings(t.Context()))
 		})
 	}
+}
+
+// TestQualifiedBuildTaggedVariants pins that every declaration of a
+// qualified name in its package is merged, as for a local name (#92), and
+// that a generator or tool sorting first never contributes one, under an
+// aliased import.
+func TestQualifiedBuildTaggedVariants(t *testing.T) {
+	runWidthCases(t, "w", "\tww \"github.com/example/app/w\"\n", "ww")
+}
+
+// TestQualifiedBuildTaggedVariantsUnaliased is the unaliased twin (#122): an
+// unaliased import of a directory (width) whose base is not its package
+// clause (w) is named after its importable files' clause, so a generator or
+// tool sorting first neither renames the import nor lends a declaration.
+func TestQualifiedBuildTaggedVariantsUnaliased(t *testing.T) {
+	runWidthCases(t, "width", "\t\"github.com/example/app/width\"\n", "w")
+}
+
+// TestUnaliasedImportName pins the name of an unaliased import: its
+// directory's importable clause, else the import path's last element.
+func TestUnaliasedImportName(t *testing.T) {
+	gen := "//go:build ignore\n\npackage main\n\nfunc main() {}\n"
+	tagged := "//go:build tools\n\npackage tools\n"
+	a := analyzeDirectiveProject(t, map[string]string{
+		"go.mod": resolveGoMod,
+		filepath.Join("toolsfirst", "aaa_tools.go"): tagged,
+		filepath.Join("toolsfirst", "y.go"):         "package y\n",
+		filepath.Join("tagonly", "aaa_tools.go"):    tagged,
+		filepath.Join("tagonly", "z.go"):            "//go:build linux\n\npackage z\n",
+		filepath.Join("skipped", ".a.go"):           "package dot\n",
+		filepath.Join("skipped", "_b.go"):           "package under\n",
+		filepath.Join("skipped", "doc.go"):          "package documentation\n",
+		filepath.Join("skipped", "types.go"):        "package real\n",
+		filepath.Join("width", "aaa_gen.go"):        gen,
+		filepath.Join("width", "width.go"):          "package w\n",
+		filepath.Join("tools", "aaa_tool.go"):       "//go:build ignore\n\npackage tool\n",
+		filepath.Join("tools", "x.go"):              "package x\n",
+		filepath.Join("genonly", "gen.go"):          gen,
+		filepath.Join("ignored", "s.go"):            "//go:build ignore\n\npackage s\n",
+	})
+	for path, want := range map[string]string{
+		"github.com/example/app/width":      "w",
+		"github.com/example/app/tools":      "x",
+		"github.com/example/app/genonly":    "genonly", // no importable file
+		"github.com/example/app/ignored":    "ignored", // its only file is build-ignored
+		"github.com/example/app/nope":       "nope",    // no such directory
+		"github.com/example/app/toolsfirst": "y",       // an unconstrained file names it
+		"github.com/example/app/tagonly":    "tools",   // every file constrained: residual
+		"github.com/example/app/skipped":    "real",    // _, . and documentation files never build
+		"encoding/json":                     "json",    // not in the module
+	} {
+		assert.Equal(t, want, a.unaliasedImportName(path), path)
+	}
+}
+
+// TestQualifiedStructImportablePackage pins that a struct reference resolves
+// among its package's importable files only (#122): b's first file is a
+// package main generator declaring its own Addr, which neither renames b's
+// unaliased import nor replaces b's Addr under an aliased one, and a
+// directory holding only such a generator resolves no struct.
+func TestQualifiedStructImportablePackage(t *testing.T) {
+	gen := "//go:build ignore\n\npackage main\n\ntype Addr struct {\n\tWrong int `json:\"wrong\"`\n}\n\nfunc main() {}\n"
+	a := analyzeDirectiveProject(t, map[string]string{
+		"go.mod":                         resolveGoMod,
+		filepath.Join("b", "aaa_gen.go"): gen,
+		filepath.Join("b", "b.go"): "package b\n\ntype Addr struct {\n\tStreet string `json:\"street\"`\n}\n\n" +
+			"type Base struct {\n\tCreated string `json:\"created\"`\n}\n",
+		filepath.Join("g", "gen.go"): gen,
+		filepath.Join("mod", "module.go"): rowsModule(
+			"\t\"github.com/example/app/b\"\n\tbb \"github.com/example/app/b\"\n\tgg \"github.com/example/app/g\"\n", "",
+			"\tb.Base\n\tAddr b.Addr `json:\"addr\"`\n\tAliased bb.Addr `json:\"aliased\"`\n\tOnlyGen gg.Addr `json:\"onlyGen\"`\n"),
+	})
+	got := renders(t, a.typeRegistry["Rows"])
+	assert.Equal(t, "$Addr", got["addr"])
+	assert.Equal(t, "$Addr", got["aliased"])
+	assert.Equal(t, goTypeString, got["created"])
+	assert.Equal(t, "gg.Addr", got["onlyGen"])
+	require.Contains(t, a.typeRegistry, "Addr")
+	assert.Equal(t, map[string]string{"street": goTypeString}, renders(t, a.typeRegistry["Addr"]))
+	assert.Equal(t, "b", a.typeRegistry["Addr"].Package)
+	if w := fieldWarnings(a, "OnlyGen"); assert.Len(t, w, 1) {
+		assert.Contains(t, w[0], "gg.Addr resolves to no schema")
+	}
+	assert.Empty(t, fieldWarnings(a, "Addr"))
+	assert.Empty(t, fieldWarnings(a, "Aliased"))
+}
+
+// TestQualifiedToolsFileSortsFirst pins that a file of another clause that b
+// never builds, sorting first in b, neither names b nor stands in for b's
+// structs under either import, although it declares its own Addr: a
+// //go:build tools file (types.go has no build constraint, so its clause is
+// b's), a file named _ or . first, and a package documentation file (go/build
+// skips the last three whatever the tags).
+func TestQualifiedToolsFileSortsFirst(t *testing.T) {
+	standIn := "\n\ntype Addr struct {\n\tWrong int `json:\"wrong\"`\n}\n"
+	for _, first := range []struct{ name, src string }{
+		{"aaa_tools.go", "//go:build tools\n\npackage tools" + standIn},
+		{"_tools.go", "package tools" + standIn},
+		{".tools.go", "package tools" + standIn},
+		{"doc.go", "package documentation" + standIn},
+	} {
+		t.Run(first.name, func(t *testing.T) {
+			a := analyzeDirectiveProject(t, map[string]string{
+				"go.mod":                       resolveGoMod,
+				filepath.Join("b", first.name): first.src,
+				filepath.Join("b", "types.go"): "package b\n\ntype Addr struct {\n\tStreet string `json:\"street\"`\n}\n\n" +
+					"type Base struct {\n\tCreated string `json:\"created\"`\n}\n",
+				filepath.Join("mod", "module.go"): rowsModule(
+					"\t\"github.com/example/app/b\"\n\tbb \"github.com/example/app/b\"\n", "",
+					"\tbb.Base\n\tAliased bb.Addr `json:\"aliased\"`\n\tUnaliased b.Addr `json:\"unaliased\"`\n"),
+			})
+			got := renders(t, a.typeRegistry["Rows"])
+			assert.Equal(t, "$Addr", got["aliased"])
+			assert.Equal(t, "$Addr", got["unaliased"])
+			assert.Equal(t, goTypeString, got["created"])
+			require.Contains(t, a.typeRegistry, "Addr")
+			assert.Equal(t, map[string]string{"street": goTypeString}, renders(t, a.typeRegistry["Addr"]))
+			assert.Empty(t, a.Warnings(t.Context()))
+		})
+	}
+}
+
+// TestQualifiedAllConstrainedToolsFirst pins that when every file of b
+// carries a build constraint, a //go:build tools file of package tools that
+// sorts first still cannot hide b's structs under an aliased import: they are
+// searched in every file the go command can build, as before. Named
+// non-struct types still take that file's clause, as before: bb.Cents falls
+// back with a warning, or, when the tools file declares its own Cents, takes
+// that declaration silently. An unaliased import of b is still named tools.
+func TestQualifiedAllConstrainedToolsFirst(t *testing.T) {
+	for _, row := range []struct {
+		name, tools, cents string
+	}{
+		{"fallback", "", "bb.Cents"},
+		{"stand-in", "\ntype Cents string\n", goTypeString},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			a := analyzeDirectiveProject(t, map[string]string{
+				"go.mod":                           resolveGoMod,
+				filepath.Join("b", "aaa_tools.go"): "//go:build tools\n\npackage tools\n" + row.tools,
+				filepath.Join("b", "b.go"): "//go:build !plan9\n\npackage b\n\ntype Addr struct {\n\tStreet string `json:\"street\"`\n}\n\n" +
+					"type Base struct {\n\tCreated string `json:\"created\"`\n}\n\ntype Cents int64\n",
+				filepath.Join("mod", "module.go"): rowsModule("\tbb \"github.com/example/app/b\"\n", "",
+					"\tbb.Base\n\tAliased bb.Addr `json:\"aliased\"`\n\tCents bb.Cents `json:\"cents\"`\n"),
+			})
+			got := renders(t, a.typeRegistry["Rows"])
+			assert.Equal(t, "$Addr", got["aliased"])
+			assert.Equal(t, goTypeString, got["created"])
+			require.Contains(t, a.typeRegistry, "Addr")
+			assert.Equal(t, "b", a.typeRegistry["Addr"].Package)
+			assert.Equal(t, row.cents, got["cents"])
+			assert.Empty(t, fieldWarnings(a, "Aliased"))
+			w := fieldWarnings(a, "Cents")
+			if row.tools != "" {
+				assert.Empty(t, w)
+			} else if assert.Len(t, w, 1) {
+				assert.Contains(t, w[0], "bb.Cents resolves to no schema")
+				assert.Contains(t, w[0], "an in-module package whose buildable files all carry a build constraint and whose first one by name has another package clause")
+			}
+			assert.Equal(t, "tools", a.unaliasedImportName("github.com/example/app/b"))
+		})
+	}
+}
+
+// TestQualifiedAllConstrainedStandIns pins that when b's only real file
+// carries a build constraint, a file beside it that b never builds, or one of
+// another clause built only on a platform b's file excludes, neither names b
+// nor stands in for b's types, although it declares its own Addr: a file named
+// _ first, a package documentation file, a //go:build ignore tool, a package
+// main generator under a tag other than ignore, and a z_plan9.go of another
+// clause with no //go:build line. Its name constrains z_plan9.go, so it never
+// names b as an unconstrained file would; it is still searched for structs,
+// after types.go.
+func TestQualifiedAllConstrainedStandIns(t *testing.T) {
+	standIn := "\n\ntype Addr struct {\n\tWrong int `json:\"wrong\"`\n}\n"
+	for _, other := range []struct{ name, src string }{
+		{"_old.go", "package old" + standIn},
+		{"doc.go", "package documentation" + standIn},
+		{"aaa_tool.go", "//go:build ignore\n\npackage tool" + standIn},
+		{"aaa_gen.go", "//go:build generate\n\npackage main" + standIn + "\nfunc main() {}\n"},
+		{"z_plan9.go", "package bplan9" + standIn},
+	} {
+		t.Run(other.name, func(t *testing.T) {
+			a := analyzeDirectiveProject(t, map[string]string{
+				"go.mod":                       resolveGoMod,
+				filepath.Join("b", other.name): other.src,
+				filepath.Join("b", "types.go"): "//go:build !plan9\n\npackage b\n\ntype Addr struct {\n\tStreet string `json:\"street\"`\n}\n\n" +
+					"type Base struct {\n\tCreated string `json:\"created\"`\n}\n\ntype Cents int64\n",
+				filepath.Join("mod", "module.go"): rowsModule(
+					"\t\"github.com/example/app/b\"\n\tbb \"github.com/example/app/b\"\n", "",
+					"\tbb.Base\n\tAliased bb.Addr `json:\"aliased\"`\n\tUnaliased b.Addr `json:\"unaliased\"`\n\tCents bb.Cents `json:\"cents\"`\n"),
+			})
+			got := renders(t, a.typeRegistry["Rows"])
+			assert.Equal(t, "$Addr", got["aliased"])
+			assert.Equal(t, "$Addr", got["unaliased"])
+			assert.Equal(t, goTypeString, got["created"])
+			assert.Equal(t, goTypeInt64, got["cents"])
+			require.Contains(t, a.typeRegistry, "Addr")
+			assert.Equal(t, map[string]string{"street": goTypeString}, renders(t, a.typeRegistry["Addr"]))
+			assert.Equal(t, "b", a.typeRegistry["Addr"].Package)
+			assert.Equal(t, "b", a.unaliasedImportName("github.com/example/app/b"))
+			assert.Empty(t, a.Warnings(t.Context()))
+		})
+	}
+}
+
+// TestQualifiedAllConstrainedOwnClauseFirst pins the known regression of
+// this fix (R16), so a later fix flips it deliberately. Every file of b the
+// go command can build carries a build constraint, and a file of b's own
+// clause that it never builds (_old.go, or a //go:build ignore a_gen.go)
+// sorts before a //go:build tools file of package tools. packageClause skips
+// the first and takes tools, not sure: an unaliased import of b is named
+// tools, so b.Addr and b.Cents fall back with a warning and the embedded
+// b.Base promotes nothing, and bb.Cents takes the same clause: it falls back
+// too, or, when the tools file declares its own Cents (the stand-in row),
+// takes that declaration silently, where main resolved b's. Struct
+// references through the aliased import still resolve.
+func TestQualifiedAllConstrainedOwnClauseFirst(t *testing.T) {
+	constrained := "//go:build !plan9\n\npackage b\n\ntype Addr struct {\n\tStreet string `json:\"street\"`\n}\n\n" +
+		"type Base struct {\n\tCreated string `json:\"created\"`\n}\n\ntype Cents int64\n"
+	toolsFile := "//go:build tools\n\npackage tools\n"
+	oldFile := "package b\n\nfunc deprecated() {}\n"
+	for _, row := range []struct {
+		name    string
+		files   map[string]string
+		standIn bool // the tools file declares its own Cents
+	}{
+		{"_old.go", map[string]string{"_old.go": oldFile, "aaa_tools.go": toolsFile, "b.go": constrained}, false},
+		{"a_gen.go", map[string]string{"a_gen.go": "//go:build ignore\n\npackage b\n", "tools.go": toolsFile, "types.go": constrained}, false},
+		{"_old.go stand-in", map[string]string{"_old.go": oldFile, "aaa_tools.go": toolsFile + "\ntype Cents string\n", "b.go": constrained}, true},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			files := map[string]string{
+				"go.mod": resolveGoMod,
+				filepath.Join("mod", "module.go"): rowsModule(
+					"\t\"github.com/example/app/b\"\n\tbb \"github.com/example/app/b\"\n", "",
+					"\tb.Base\n\tUnaliased b.Addr `json:\"unaliased\"`\n\tUCents b.Cents `json:\"ucents\"`\n"+
+						"\tAliased bb.Addr `json:\"aliased\"`\n\tCents bb.Cents `json:\"cents\"`\n"),
+			}
+			for name, src := range row.files {
+				files[filepath.Join("b", name)] = src
+			}
+			a := analyzeDirectiveProject(t, files)
+			got := renders(t, a.typeRegistry["Rows"])
+			assert.Equal(t, "$Addr", got["aliased"])
+			require.Contains(t, a.typeRegistry, "Addr")
+			assert.Equal(t, map[string]string{"street": goTypeString}, renders(t, a.typeRegistry["Addr"]))
+			assert.Equal(t, "b", a.typeRegistry["Addr"].Package)
+			assert.Empty(t, fieldWarnings(a, "Aliased"))
+			assert.NotContains(t, got, "created")
+			assert.Equal(t, "tools", a.unaliasedImportName("github.com/example/app/b"))
+			assert.Equal(t, "b.Addr", got["unaliased"])
+			assert.Equal(t, "b.Cents", got["ucents"])
+			warned := []string{"Unaliased", "UCents", "Cents"}
+			if row.standIn {
+				assert.Equal(t, goTypeString, got["cents"])
+				assert.Empty(t, fieldWarnings(a, "Cents"))
+				warned = warned[:2]
+			} else {
+				assert.Equal(t, "bb.Cents", got["cents"])
+			}
+			for _, field := range warned {
+				if w := fieldWarnings(a, field); assert.Len(t, w, 1, field) {
+					assert.Contains(t, w[0], "resolves to no schema", field)
+				}
+			}
+		})
+	}
+}
+
+// TestOSArchSuffixed pins go/build's file-name constraint as osArchSuffixed
+// reads it: the element after the last underscore, cut at the first dot.
+func TestOSArchSuffixed(t *testing.T) {
+	for name, want := range map[string]bool{
+		"z_windows.go":         true,
+		"x_amd64.go":           true,
+		"x_linux_arm64.go":     true,
+		"linux_amd64.go":       true,  // the part before the first _ is a prefix, amd64 a suffix
+		"x_linux.pb.go":        true,  // cut at the first dot
+		"x_windows_test.pb.go": true,  // a trailing _test element is dropped first
+		"linux.go":             false, // no underscore: no suffix
+		"x_unix.go":            false, // unix is a build tag only
+		"x_tools.go":           false,
+		"types.go":             false,
+	} {
+		assert.Equal(t, want, osArchSuffixed(name), name)
+	}
+}
+
+// TestDelegateBehindGenerator pins that a route delegate in another package
+// is found through an unaliased import when a package main generator sorts
+// first in its directory (#122): its routes are discovered and typed.
+func TestDelegateBehindGenerator(t *testing.T) {
+	_, routes := analyzeProjectRoutes(t, map[string]string{
+		"go.mod":                         resolveGoMod,
+		filepath.Join("h", "aaa_gen.go"): "//go:build ignore\n\npackage main\n\nfunc main() {}\n",
+		filepath.Join("h", "h.go"): `package h
+
+import "github.com/gaborage/go-bricks/server"
+
+type Handler struct{}
+type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
+
+func (x *Handler) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/things", x.list)
+}
+func (x *Handler) list(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) {
+	return server.Result[Thing]{}, nil
+}
+`,
+		filepath.Join("mod", "module.go"): `package mod
+
+import (
+	"github.com/example/app/h"
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{ hd *h.Handler }
+
+func (m *Module) Name() string                    { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	m.hd.RegisterRoutes(hr, r)
+}
+`,
+	})
+	list := routeByPath(t, routes, "/things")
+	require.NotNil(t, list.Response)
+	assert.Equal(t, "Thing", list.Response.Name)
 }
 
 // TestBuildIgnored pins which build constraints keep a file out of its

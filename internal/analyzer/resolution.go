@@ -35,8 +35,8 @@ const (
 	depthCapFieldWarning  = "field %s at %s has type %s: its named types nest more than %d deep, so %s is cut to an untyped " +
 		"schema ({}) as if it were recursive"
 	unresolvableFieldWarning = "field %s at %s has type %s: %s resolves to no schema (a type from outside the module, " +
-		"a well-known type under an aliased import, an unaliased in-module import whose directory's first file has another " +
-		"package clause, or a name with no declaration in its package) — emitting an untyped object"
+		"a well-known type under an aliased import, an in-module package whose buildable files all carry a build constraint " +
+		"and whose first one by name has another package clause, or a name with no declaration in its package) — emitting an untyped object"
 	definedOverQualifiedFieldWarning = "field %s at %s has type %s: %s is a defined type over %s, which resolves to no schema " +
 		"(a defined type drops its target's methods, and a type from outside the module is not resolved) — emitting an untyped object"
 	declsDisagreeFieldWarning = "field %s at %s has type %s: %s's build-tagged declarations disagree on shape (no common " +
@@ -344,16 +344,103 @@ func (a *ProjectAnalyzer) inModuleTypeSite(qualified string, file *ast.File) (si
 }
 
 // importableClause returns the package clause of the package a directory's
-// files build: that of the first file in sorted path order that is neither
-// package main (never importable) nor build-ignored (a //go:build ignore
-// generator or tool, whatever its clause). ok is false when no file qualifies.
+// files build (packageClause, without its certainty). ok is false when no
+// file qualifies.
 func importableClause(files map[string]*ast.File) (string, bool) {
+	clause, ok, _ := packageClause(files)
+	return clause, ok
+}
+
+// packageClause returns the package clause of the package a directory's files
+// build. Files the go command never builds into an importable package
+// (neverImportable) are skipped. Of the rest, a file with no build constraint
+// (no //go:build line and no GOOS/GOARCH file-name suffix, osArchSuffixed) is
+// in every build, so on valid code its clause is the package's: the first
+// such file in sorted path order names it, and sure is true. When every
+// remaining file is constrained, the first that is not build-ignored names it
+// (a //go:build ignore generator or tool, whatever its clause, never does),
+// and sure is false: a file of another clause under a constraint other than
+// ignore (//go:build tools) may have been taken for the package. ok is false
+// when no file qualifies.
+func packageClause(files map[string]*ast.File) (clause string, ok, sure bool) {
 	for _, p := range slices.Sorted(maps.Keys(files)) {
-		if f := files[p]; f.Name.Name != mainPackageName && !buildIgnored(f) {
-			return f.Name.Name, true
+		f := files[p]
+		if neverImportable(p, f) {
+			continue
+		}
+		if fileBuildConstraint(f) == nil && !osArchSuffixed(filepath.Base(p)) {
+			return f.Name.Name, true, true
+		}
+		if !ok && !buildIgnored(f) {
+			clause, ok = f.Name.Name, true
 		}
 	}
-	return "", false
+	return clause, ok, false
+}
+
+// documentationPackageName is the package clause go/build never builds,
+// whatever the tags: a file declaring it documents a directory and is no
+// part of its package.
+const documentationPackageName = "documentation"
+
+// neverImportable reports whether the go command never builds the file at
+// path into an importable package, whatever the tags: package main, package
+// documentation, or a file whose name starts with _ or . (go/build skips
+// both as editor or temporary files).
+func neverImportable(path string, f *ast.File) bool {
+	base := filepath.Base(path)
+	return f.Name.Name == mainPackageName || f.Name.Name == documentationPackageName ||
+		strings.HasPrefix(base, "_") || strings.HasPrefix(base, ".")
+}
+
+// knownOS and knownArch are go/build's GOOS and GOARCH values for file-name
+// matching (internal/syslist, which is not importable): past, present and
+// future ports, never removed. unix is a build tag only, not a file suffix.
+var (
+	knownOS = map[string]bool{
+		"aix": true, "android": true, "darwin": true, "dragonfly": true, "freebsd": true, "hurd": true,
+		"illumos": true, "ios": true, "js": true, "linux": true, "nacl": true, "netbsd": true,
+		"openbsd": true, "plan9": true, "solaris": true, "wasip1": true, "windows": true, "zos": true,
+	}
+	knownArch = map[string]bool{
+		"386": true, "amd64": true, "amd64p32": true, "arm": true, "armbe": true, "arm64": true,
+		"arm64be": true, "loong64": true, "mips": true, "mipsle": true, "mips64": true, "mips64le": true,
+		"mips64p32": true, "mips64p32le": true, "ppc": true, "ppc64": true, "ppc64le": true, "riscv": true,
+		"riscv64": true, "s390": true, "s390x": true, "sparc": true, "sparc64": true, "wasm": true,
+	}
+)
+
+// osArchSuffixed reports whether the file name base carries go/build's
+// implicit build constraint (goodOSArchFile): cut at its first dot and with a
+// trailing _test element dropped, the element after its last underscore is a
+// known GOOS or GOARCH (x_linux.go, x_amd64.go, x_linux_amd64.go,
+// x_windows_test.pb.go; not linux.go or x_unix.go). Only its presence is read,
+// never which platforms it selects. parsePackageDir skips only names ending in
+// _test.go, so it does read a name such as x_windows_test.pb.go, which
+// go/build constrains.
+func osArchSuffixed(base string) bool {
+	name, _, _ := strings.Cut(base, ".")
+	name = strings.TrimSuffix(name, "_test")
+	i := strings.LastIndex(name, "_")
+	if i < 0 {
+		return false
+	}
+	suffix := name[i+1:]
+	return knownOS[suffix] || knownArch[suffix]
+}
+
+// inPackage reports whether resolveQualifiedStruct searches the file at path
+// for a struct of the package packageClause named. A file of that clause is
+// always searched. When the clause is sure (an unconstrained file named it),
+// no other file is. When it is not, any other file the go command can build
+// (not neverImportable, not build-ignored) is searched too: a sorted-first
+// file of another clause under a constraint other than ignore may have named
+// the package.
+func inPackage(path string, f *ast.File, clause string, sure bool) bool {
+	if f.Name.Name == clause {
+		return true
+	}
+	return !sure && !neverImportable(path, f) && !buildIgnored(f)
 }
 
 // buildIgnored reports whether f's build constraint requires the ignore tag:
