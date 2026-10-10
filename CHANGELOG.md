@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/gaborage/go-bricks-openapi/compare/v0.4.2...v0.5.0) (2026-10-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* **analyzer:** in an imported in-module directory whose every file the go command can build carries a build constraint, where a file of the package's own clause that it never builds (a leading _ or . in its name, or //go:build ignore) sorts before a file of another clause under another constraint (//go:build tools, or a GOOS/GOARCH-suffixed name such as a_windows.go), an unaliased import of the package now falls back: fields and named types are untyped objects with a warning, embedded structs lose their promoted fields silently, requests get no requestBody, and generate --strict fails. An unaliased import of a real package of that other clause, placed earlier in the same file, falls back the same way, because the misnamed import replaces its entry. Behind a file whose name starts with _ or ., named non-struct types under an aliased import fall back too, or, when the other clause's file declares the same name, silently take its declaration, so generate --strict passes on a wrong schema. Generated component names can change: a struct that newly resolves through an import this fix repairs (such as one behind a sorted-first generator or tool) can take the bare name, so a same-named struct of another package becomes `<Pkg><Name>` (Addr becomes ModAddr); $refs and generated client type names move; regenerate clients.
+
+### Fixed
+
+* **analyzer:** resolve imported packages from their importable files ([#140](https://github.com/gaborage/go-bricks-openapi/issues/140)) ([09293e7](https://github.com/gaborage/go-bricks-openapi/commit/09293e766527e5532ef999e823e7fbddc1601d61)), closes [#122](https://github.com/gaborage/go-bricks-openapi/issues/122)
+
 ## [0.4.2](https://github.com/gaborage/go-bricks-openapi/compare/v0.4.1...v0.4.2) (2026-10-09)
 
 
