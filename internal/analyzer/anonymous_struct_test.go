@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -297,24 +298,26 @@ func TestAnonymousStructBuildTaggedLimit(t *testing.T) {
 	tagged := func(tag string) string {
 		return "//go:build " + tag + "\n\npackage mod\n\ntype T []struct{ A Q1 `json:\"a\"` }\n"
 	}
+	module := rowsModule("", "", "\tW struct{ T T `json:\"t\"` } `json:\"w\"`\n\tW1 struct{ T T1 `json:\"t\"` } `json:\"w1\"`\n")
 	a, _ := analyzeProjectRoutes(t, map[string]string{
 		"go.mod":        resolveGoMod,
 		"mod/t_a.go":    tagged("linux"),
 		"mod/t_b.go":    tagged("!linux"),
 		"mod/one.go":    "package mod\n\n" + decls.String() + "type T1 []struct{ A Q1 `json:\"a\"` }\n",
-		"mod/module.go": rowsModule("", "", "\tW struct{ T T `json:\"t\"` } `json:\"w\"`\n\tW1 struct{ T T1 `json:\"t\"` } `json:\"w1\"`\n"),
+		"mod/module.go": module,
 	})
 	got := renders(t, a.typeRegistry["Rows"])
 	assert.Equal(t, maxLiteralExtractions, extractedLiterals(map[string]string{"w1": got["w1"]}), "one declaration")
 	assert.Equal(t, got["w1"], got["w"], "two declarations")
-	assert.Equal(t, []string{fmt.Sprintf(literalLimitWarning, maxLiteralExtractions)}, a.Warnings(t.Context()))
+	root := anonLoc(t, module, "struct{ T T ")
+	assert.Equal(t, []string{fmt.Sprintf(literalLimitWarning, root, maxLiteralExtractions)}, a.Warnings(t.Context()))
 }
 
 // TestAnonymousStructUnextractedBuildTagged pins that build-tagged
 // declarations of a named type over a literal, written differently, still
 // merge where the literal is not extracted: a query parameter keeps its
-// array type with no warning, and a payload keeps its untyped fallback and
-// its named non-struct warning.
+// array type with no warning. A payload extracts it, so there they disagree,
+// with the payload's warning.
 func TestAnonymousStructUnextractedBuildTagged(t *testing.T) {
 	tagged := func(tag, name string) string {
 		return "//go:build " + tag + "\n\npackage mod\n\ntype BD []struct{ A int `json:\"" + name + "\"` }\n"
@@ -344,8 +347,9 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	assert.Equal(t, "[]struct{…}", renderShape(req.Fields[0].ResolvedShape()))
 	resp := routeByPath(t, routes, "/list").Response
 	require.NotNil(t, resp)
-	assert.Nil(t, resp.Resolution)
-	assert.Equal(t, []string{namedNonStructWarning("BD")}, a.Warnings(t.Context()))
+	require.NotNil(t, resp.Resolution)
+	assert.Equal(t, "[]BD", renderShape(*resp.Resolution))
+	assert.Equal(t, []string{fmt.Sprintf(declsDisagreePayloadWarning, "[]BD", "BD")}, a.Warnings(t.Context()))
 }
 
 // TestSameLiteral pins literalText's sense of "written alike": names, types
@@ -423,7 +427,7 @@ func TestAnonymousStructInnerGenericField(t *testing.T) {
 }
 
 // payloadOverLiteralModule is a module whose routes return and take named
-// types over anonymous structs, which stay untyped in this part of issue 118.
+// types over anonymous structs, and return a slice of one.
 const payloadOverLiteralModule = `package mod
 
 import (
@@ -473,28 +477,36 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 `
 
-// TestPayloadOverLiteralStaysUntyped pins the seam of this part of issue
-// 118: a payload or request rooted outside a field never extracts the
-// anonymous struct it holds, so it keeps today's untyped fallback and
-// warnings exactly — a Marshaler literal included, which would otherwise
-// become a typed Marshaler leaf.
-func TestPayloadOverLiteralStaysUntyped(t *testing.T) {
+// TestPayloadOverLiteralResolves pins that a payload over an anonymous
+// struct, through a named slice or written as a slice, is documented as a
+// field of its type is (issue 118): extracted inline, a Marshaler
+// literal a Marshaler leaf with the payload's one warning, and its fields
+// warning as fields (a malformed tag). A named slice request over one is
+// still a non-struct request (F26).
+func TestPayloadOverLiteralResolves(t *testing.T) {
 	a, routes := analyzeSingleModule(t, payloadOverLiteralModule)
-	for _, path := range []string{"/rows", "/mrows", "/bad"} {
+	for path, want := range map[string]string{
+		"/rows":  "[]struct{A int}",
+		"/mrows": "[]marshal:struct{…}(unknown)",
+		"/bad":   "[]struct{a int}",
+		"/list":  "[]struct{A int}",
+	} {
 		r := routeByPath(t, routes, path)
 		require.NotNil(t, r.Response, path)
-		assert.Nil(t, r.Response.Resolution, path)
 		assert.Empty(t, r.Response.Name, path)
+		if assert.NotNil(t, r.Response.Resolution, path) {
+			assert.Equal(t, want, renderShape(*r.Response.Resolution), path)
+		}
 	}
-	assert.Nil(t, routeByPath(t, routes, "/list").Response, "a nameless composite over a literal stays nil")
 	req := routeByPath(t, routes, "/req").Request
 	require.NotNil(t, req)
 	assert.Empty(t, req.Name)
-	named := "request/response type %s is a named non-struct type — emitting an untyped schema (annotate or restructure it as a struct for a typed spec)"
-	assert.ElementsMatch(t, []string{
-		fmt.Sprintf(named, "Rows"), fmt.Sprintf(named, "MRows"), fmt.Sprintf(named, "BadRows"),
-		fmt.Sprintf(nonStructRequestWarning, "ReqRows"),
-	}, a.Warnings(t.Context()))
+	warnings := a.Warnings(t.Context())
+	require.Len(t, warnings, 3)
+	assert.Contains(t, warnings, fmt.Sprintf(marshalerPromotedPayloadWarning, "MRows", anonStructDisplay, methodMarshalJSON, "time.Time"))
+	assert.Contains(t, warnings, fmt.Sprintf(nonStructRequestWarning, "ReqRows"))
+	tag := "struct tag on field A at " + anonLoc(t, payloadOverLiteralModule, "`json:\"a\"\tquery")
+	assert.True(t, slices.ContainsFunc(warnings, func(w string) bool { return strings.HasPrefix(w, tag) }), warnings)
 	assert.Empty(t, a.openLiterals)
 }
 
@@ -593,7 +605,8 @@ func TestAnonymousStructSiblingCycles(t *testing.T) {
 // TestAnonymousStructExpansionLimit pins maxLiteralExtractions: named slices
 // over anonymous structs that each hold two fields of the next unfold
 // 2^n - 1 literals with no cycle, so one field's extraction stops at the
-// limit, the rest cut to {}, with one latched warning.
+// limit, the rest cut to {}, with one latched warning naming the first
+// field's outermost anonymous struct, Q1's.
 func TestAnonymousStructExpansionLimit(t *testing.T) {
 	const n = 11 // 2047 literals
 	var decls strings.Builder
@@ -601,9 +614,11 @@ func TestAnonymousStructExpansionLimit(t *testing.T) {
 		fmt.Fprintf(&decls, "type Q%d []struct{ A Q%d `json:\"a\"`; B Q%d `json:\"b\"` }\n", i, i+1, i+1)
 	}
 	fmt.Fprintf(&decls, "type Q%d []struct{ X int `json:\"x\"` }\n", n)
-	a, got := analyzeRows(t, "", decls.String(), "\tF Q1 `json:\"f\"`\n\tG Q1 `json:\"g\"`\n")
+	rows := "\tF Q1 `json:\"f\"`\n\tG Q1 `json:\"g\"`\n"
+	a, got := analyzeRows(t, "", decls.String(), rows)
 	assert.Equal(t, 2*maxLiteralExtractions, extractedLiterals(got), "each field gets the whole limit")
-	assert.Equal(t, []string{fmt.Sprintf(literalLimitWarning, maxLiteralExtractions)}, a.Warnings(t.Context()))
+	root := anonLoc(t, rowsModule("", decls.String(), rows), "struct{ A Q2 ")
+	assert.Equal(t, []string{fmt.Sprintf(literalLimitWarning, root, maxLiteralExtractions)}, a.Warnings(t.Context()))
 
 	_, small := analyzeRows(t, "", "type P1 []struct{ A P2 `json:\"a\"`; B P2 `json:\"b\"` }\ntype P2 []struct{ X int `json:\"x\"` }\n",
 		"\tF P1 `json:\"f\"`\n")

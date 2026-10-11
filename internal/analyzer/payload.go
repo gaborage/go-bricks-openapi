@@ -49,12 +49,17 @@ const (
 // screenUnresolvedPayload. A resolved payload names no component (its Name
 // and Fields are cleared) unless its base is a well-known type, which keeps
 // its name; the structs it reaches register in the file their names were
-// written in, and its one fallback, if any, is warned about.
+// written in, and its one fallback, if any, is warned about. An anonymous
+// struct it holds is extracted and documented inline, as in a field of its
+// type (issue 118), its fields warning and registering as fields, one
+// registration level below the payload's root. A payload whose root is a
+// jose-tagged one never gets here (joseLiteralPayload).
 func (a *ProjectAnalyzer) resolvePayload(ti *models.TypeInfo, written string, astFile *ast.File, filePath string) bool {
 	if ti.Shape == nil {
 		return false
 	}
 	c := newResolveCtx(astFile, filePath, false)
+	c.st.inline = true
 	r := a.resolveShape(*ti.Shape, c)
 	if !payloadResolves(&r) {
 		return a.screenGenericPayload(ti, written, c.st.first)
@@ -65,6 +70,7 @@ func (a *ProjectAnalyzer) resolvePayload(ti *models.TypeInfo, written string, as
 		ti.Fields = nil
 	}
 	warned := a.warnPayload(written, &r, c.st.first)
+	a.warnInlineFields(&r)
 	a.registerPayloadRefs(&r, c.st.refSites, pkgFile{file: astFile, path: filePath}, written, warned)
 	return true
 }
@@ -126,9 +132,18 @@ func (a *ProjectAnalyzer) warnPayload(written string, r *models.TypeShape, fb fi
 // registerPayloadRefs registers every ShapeRef leaf of a payload's resolution
 // r in the file its name was written in (sites), else in the payload's own
 // file (def). A leaf that cannot register is demoted to a named leaf (it emits
-// object) and warns once, unless the payload already warned.
+// object) and warns once, unless the payload already warned. The fields of an
+// anonymous struct leaf register their refs as fields, one level deeper
+// (registerInlineRefs), and warn as fields. That mirrors registerResolutionRefs
+// for a field at the payload root's depth, 0: inline fields register at depth
+// 1, and def is only the defensive default, as there, for a leaf with no
+// recorded site (recordRef records one for every ref leaf).
 func (a *ProjectAnalyzer) registerPayloadRefs(r *models.TypeShape, sites map[string]pkgFile, def pkgFile, written string, warned bool) {
 	walkResolvedLeaves(r, func(leaf *models.TypeShape) {
+		if leaf.Kind == models.ShapeStruct && leaf.Struct != nil {
+			a.registerInlineRefs(leaf.Struct.Fields, def.file, def.path, 1)
+			return
+		}
 		if leaf.Kind != models.ShapeRef {
 			return
 		}
@@ -147,7 +162,8 @@ func (a *ProjectAnalyzer) registerPayloadRefs(r *models.TypeShape, sites map[str
 // IsTypedPayload reports whether the generator documents a request or response
 // payload with a resolved schema: a registered struct (or a well-known type
 // that keeps its name), or a payload whose schema has no fallback leaf. So
-// Result[AnyD] ({}) is typed and Result[Tier] ({}) is not. doctor and
+// Result[AnyD] ({}) is typed and Result[Tier] ({}) is not, and an anonymous
+// struct, like a registered one, is typed whatever its fields hold. doctor and
 // generate's route count classify routes by it.
 func IsTypedPayload(ti *models.TypeInfo) bool {
 	if ti == nil {
@@ -170,13 +186,16 @@ func IsTypedPayload(ti *models.TypeInfo) bool {
 // isFallbackLeaf reports whether a schema leaf is a fallback: a named type
 // outside WellKnownTypeNames (an unresolved name, or a demoted ref), a uintptr
 // or untyped builtin, a Marshaler type, a recursion cut, or an unmodelled leaf.
+// An anonymous struct is no fallback, like a ref: a fallback among its fields
+// warns as a field and leaves the payload typed, as it would in a registered
+// struct.
 func isFallbackLeaf(leaf *models.TypeShape) bool {
 	switch leaf.Kind {
 	case models.ShapeNamed:
 		return !models.WellKnownTypeNames[leaf.Name]
 	case models.ShapePrimitive:
 		return leaf.Name == goTypeUintptr || models.UntypedBuiltinNames[leaf.Name]
-	case models.ShapeRef, models.ShapeKindOnly, models.ShapeText:
+	case models.ShapeRef, models.ShapeKindOnly, models.ShapeText, models.ShapeStruct:
 		return false
 	default:
 		return true

@@ -310,9 +310,10 @@ func payloadRows() []payloadRow {
 		{result: "server.Result[Fn]", warn: namedNonStructWarning("Fn")},
 		{result: "server.Result[[]Fn]", warn: namedNonStructWarning("Fn")},
 		{result: "server.Result[[]Ch]", warn: namedNonStructWarning("Ch")},
-		// U2: a literal unmodelled leaf keeps a nil response.
-		{result: "server.Result[struct{ A int }]", nilResp: true},
-		{result: "server.Result[[]struct{ A int }]", nilResp: true},
+		// U2: a func or chan literal leaf keeps a nil response; an anonymous
+		// struct is documented inline (issue 118).
+		{result: "server.Result[struct{ A int }]", res: "struct{A int}", shape: "struct{…}"},
+		{result: "server.Result[[]struct{ A int }]", res: "[]struct{A int}", shape: "[]struct{…}"},
 		{result: "server.Result[map[string]func()]", nilResp: true},
 		{result: "server.Result[map[string]chan int]", nilResp: true},
 		// Issue 138: an Instantiation keeps the nil response and warns.
@@ -478,9 +479,9 @@ func TestPayloadResolvesRejects(t *testing.T) {
 
 // TestRequestlessCompositePayloadKeepsStatuses pins Impact 12: a handler with
 // no request parameter whose payload is newly carried (a map, wrapped or
-// bare, or a U4 map over a named func type) is found as the handler, so its
-// success status and inferred error statuses are kept; a literal unmodelled
-// payload (struct{...}) still is not, and loses them.
+// bare, a U4 map over a named func type, or an anonymous struct, issue 118)
+// is found as the handler, so its success status and inferred error statuses
+// are kept.
 func TestRequestlessCompositePayloadKeepsStatuses(t *testing.T) {
 	_, routes := analyzeSingleModule(t, resolveModuleHead+`
 type Fn func()
@@ -525,32 +526,36 @@ func (m *Module) anon(ctx server.HandlerContext) (server.Result[struct{ A int }]
 	assert.Contains(t, fnMap.ErrorStatuses, 404)
 
 	anon := routeByPath(t, routes, "/anon")
-	assert.Nil(t, anon.Response)
-	assert.Zero(t, anon.SuccessStatus)
-	assert.Empty(t, anon.ErrorStatuses)
+	assert.NotNil(t, anon.Response)
+	assert.Equal(t, 201, anon.SuccessStatus)
+	assert.Equal(t, []int{404}, anon.ErrorStatuses)
 }
 
 // TestCompositePayloadTypeInfo pins extraction of composite payloads through
-// payloadTypeInfo: maps, nested slices and pointers to a container are carried
-// nameless with their Shape; a literal unmodelled leaf is not; a pointer
-// element is kept. A written **T root is pinned in
+// payloadTypeInfo: maps, nested slices, pointers to a container and anonymous
+// structs are carried nameless with their Shape; a func literal leaf is not;
+// a pointer element is kept. A written **T root is pinned in
 // multi_pointer_payload_test.go.
 func TestCompositePayloadTypeInfo(t *testing.T) {
 	a := New("")
 	extract := func(src string) *models.TypeInfo {
 		return a.payloadTypeInfo(mustParse(t, src), "mod", map[string]struct{}{})
 	}
-	for _, src := range []string{"map[string]func()", "[]struct{A int}", "[]server.IAPIError"} {
+	for _, src := range []string{"map[string]func()", "[]server.IAPIError"} {
 		assert.Nil(t, extract(src), src)
 	}
 	for src, want := range map[string]string{
-		"map[string]Fn": "map[string]Fn",
-		"*[]string":     "*[]string",
-		"*interface{}":  "*interface{}",
-		"*[4]byte":      "*[N]byte",
-		"*map[string]A": "*map[string]A",
-		"[]*[]string":   "[]*[]string",
-		"[]**int64":     "[]**int64",
+		"map[string]Fn":   "map[string]Fn",
+		"*[]string":       "*[]string",
+		"*interface{}":    "*interface{}",
+		"*[4]byte":        "*[N]byte",
+		"*map[string]A":   "*map[string]A",
+		"[]*[]string":     "[]*[]string",
+		"[]**int64":       "[]**int64",
+		"struct{A int}":   "struct{…}",
+		"*struct{A int}":  "*struct{…}",
+		"**struct{A int}": "**struct{…}",
+		"[]struct{A int}": "[]struct{…}",
 	} {
 		ti := extract(src)
 		if assert.NotNil(t, ti, src) {

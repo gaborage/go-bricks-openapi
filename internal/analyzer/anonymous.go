@@ -9,33 +9,47 @@ import (
 )
 
 // Anonymous structs (issue 118; CONTEXT.md, "Resolution"). A struct literal
-// written as a field's type, at any depth, decodes as a ShapeStruct carrying
-// its literal. A field's resolution extracts the literal's fields exactly as
-// a named struct's are extracted (tags, validate constraints, embedded
-// promotion), in the file the literal was written in, and the generator
-// documents it inline: it has no name, so it gets no component. Its fields
-// warn and register their refs as a named struct's fields do. A field is
-// resolved only once it survives its own struct's dominance rule and
-// parameter deduplication (dropDominatedFields, dropDuplicateParams), so a
-// literal is extracted, and raises its warnings, only for a field that
-// reaches the document.
+// written as a field's or a payload's type, at any depth, decodes as a
+// ShapeStruct carrying its literal. A field's or a payload's resolution
+// extracts the literal's fields exactly as a named struct's are extracted
+// (tags, validate constraints, embedded promotion), in the file the literal
+// was written in, and the generator documents it inline: it has no name, so
+// it gets no component. Its fields warn and register their refs as a named
+// struct's fields do. A field is resolved only once it survives its own
+// struct's dominance rule and parameter deduplication (dropDominatedFields,
+// dropDuplicateParams), so a literal is extracted, and raises its warnings,
+// only for a field that reaches the document; a payload's is extracted as
+// soon as the payload resolves. A request of anonymous struct type is not
+// documented yet (issue 171): it warns (anonymousRequestWarning), unless it
+// has no field.
 //
-// Accepted residual: every build-tagged declaration of a named type over a
-// literal is extracted, so a malformed tag or a dropped embed in it warns
-// once per declaration, though only the first is documented.
+// Accepted residuals:
+//   - every build-tagged declaration of a named type over a literal is
+//     extracted, so a malformed tag or a dropped embed in it warns once per
+//     declaration, though only the first is documented;
+//   - a jose tag inside an anonymous struct payload is ignored, as before,
+//     tracked in issue 171: the route stays application/json, and a payload
+//     whose root, every written pointer shed, is such a struct still resolves
+//     to nothing (joseLiteralPayload), keeping the untyped fallback, rather
+//     than document its plaintext as JSON.
 
 // maxLiteralExtractions bounds how many anonymous structs one outermost
-// extraction expands, itself included. closesLiteralCycle bounds a cycle; this
-// bounds what no cycle guard can see: named types over anonymous structs that
-// reach one another many ways (type Q1 []struct{ A, B Q2 }, Q2 over Q3, and
-// so on) unfold 2^n inline objects, where a named struct would be one $ref.
-// Set far above any realistic field; past it the rest are {} with one
-// latched warning.
+// extraction, a field's or a payload's, expands, itself included.
+// closesLiteralCycle bounds a cycle; this bounds what no cycle guard can see:
+// named types over anonymous structs that reach one another many ways (type
+// Q1 []struct{ A, B Q2 }, Q2 over Q3, and so on) unfold 2^n inline objects,
+// where a named struct would be one $ref.
+// Set far above any realistic field or payload; past it the rest are {} with
+// one latched warning.
 const maxLiteralExtractions = 1000
 
-// literalLimitWarning is maxLiteralExtractions' latched warning.
-const literalLimitWarning = "a field's anonymous structs expand to more than %d inline objects — the rest are truncated to an untyped schema ({}); " +
-	"check for named slice or map types over anonymous structs that reach one another many ways"
+// literalLimitWarning is maxLiteralExtractions' latched warning. It names
+// the outermost anonymous struct of the first extraction to pass the limit,
+// in a field's type or a payload's (literalRoot), and that only the first is
+// reported.
+const literalLimitWarning = "the anonymous struct at %s, with the anonymous structs it reaches, expands to more than %d inline objects — " +
+	"the rest are truncated to an untyped schema ({}); check for named slice or map types over anonymous structs that reach one another many ways " +
+	"(only the first such expansion is reported)"
 
 // anonStructDisplay is how a warning names an anonymous struct where its
 // resolution stopped. The warning's head already prints the declared type,
@@ -43,15 +57,15 @@ const literalLimitWarning = "a field's anonymous structs expand to more than %d 
 const anonStructDisplay = "struct{…}"
 
 // resolveStruct resolves an anonymous struct. Outside a resolution that
-// documents it inline (a parameter, which is bound by kind; a quiet run; a
-// resolution that only classifies a type) it is returned as is, sharing the
-// Shape's AnonymousStruct, which nothing may write into. Otherwise one that
-// embeds a Marshaler type is itself one (ADR 0002), a text or noted Marshaler
-// leaf; one that closes a cycle (closesLiteralCycle) is cut like a recursion,
-// noted; one past maxTypeRegistrationDepth is cut with the name-less depth
-// warning; and one past maxLiteralExtractions in its outermost extraction is
-// cut with that limit's latched warning. Any other is extracted
-// (extractLiteral).
+// documents it inline, a body field's or a payload's (so in a parameter,
+// which is bound by kind, a quiet run, or a resolution that only classifies a
+// type), it is returned as is, sharing the Shape's AnonymousStruct, which
+// nothing may write into. Otherwise one that embeds a Marshaler type is
+// itself one (ADR 0002), a text or noted Marshaler leaf; one that closes a
+// cycle (closesLiteralCycle) is cut like a recursion, noted; one past
+// maxTypeRegistrationDepth is cut with the name-less depth warning; and one
+// past maxLiteralExtractions in its outermost extraction is cut with that
+// limit's latched warning. Any other is extracted (extractLiteral).
 func (a *ProjectAnalyzer) resolveStruct(s models.TypeShape, c resolveCtx) models.TypeShape {
 	if !c.st.inline || s.Struct == nil || s.Struct.Literal == nil {
 		return s
@@ -90,7 +104,7 @@ func (a *ProjectAnalyzer) resolveStruct(s models.TypeShape, c resolveCtx) models
 // from an unextracted one.
 func (a *ProjectAnalyzer) extractLiteral(lit *ast.StructType, key string, c resolveCtx, depth int) []models.FieldInfo {
 	if len(a.openLiterals) == 0 {
-		a.literalExtracts = 0
+		a.literalExtracts, a.literalRoot = 0, lit
 	}
 	a.openLiterals = append(a.openLiterals, key)
 	a.literalExtracts++
@@ -134,7 +148,7 @@ func (a *ProjectAnalyzer) warnLiteralLimit() {
 		return
 	}
 	a.literalWarned = true
-	a.addWarningf(literalLimitWarning, maxLiteralExtractions)
+	a.addWarningf(literalLimitWarning, a.nodeLoc(a.literalRoot), maxLiteralExtractions)
 }
 
 // closesLiteralCycle reports whether the anonymous struct key closes a cycle

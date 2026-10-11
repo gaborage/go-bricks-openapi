@@ -135,6 +135,7 @@ type ProjectAnalyzer struct {
 	openLiterals     []string                           // structIdentity of each anonymous struct being extracted, outermost first (resolveStruct's cycle guard)
 	literalCycles    map[string]string                  // anonymous struct -> another on a cycle the outermost open one's extraction found (closesLiteralCycle's union-find forest)
 	literalExtracts  int                                // anonymous structs the outermost open one's extraction has expanded, itself included (maxLiteralExtractions)
+	literalRoot      *ast.StructType                    // the outermost open anonymous struct, which maxLiteralExtractions' warning names
 	literalWarned    bool                               // once-latch: maxLiteralExtractions already warned this run
 	methodSetMemo    map[string]methodSet               // "home\x00typeKey\x00keep" -> a method set no cut shortened (methodSetOf)
 	methodSetCuts    int                                // cycle cuts methodSetOf has hit: a change marks a path-dependent set
@@ -264,6 +265,7 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	a.openLiterals = nil
 	a.literalCycles = make(map[string]string)
 	a.literalExtracts = 0
+	a.literalRoot = nil
 	a.literalWarned = false
 	a.methodSetMemo = nil
 	a.methodSetCuts = 0
@@ -1547,9 +1549,10 @@ func receiverVarName(recv *ast.FieldList) string {
 //
 // requestType is the request parameter's type as written (`*string`,
 // `[]Item`), or "" when the handler takes no request. It is set even when
-// request is nil — a type-literal parameter ([]T, map, interface{}) or a
-// generic instantiation (Box[A]) resolves to no TypeInfo — so
-// populateRequestType can still screen it. requestExpr is that type's
+// request is nil — a type-literal parameter ([]T, map, interface{}), an
+// anonymous struct (struct{…}, *struct{…}) or a generic instantiation
+// (Box[A]) resolves to no TypeInfo — so populateRequestType can still screen
+// it. requestExpr is that type's
 // expression, nil when there is no request.
 //
 // responseInst is the Instantiation, as written, a payload that resolved to
@@ -2415,24 +2418,43 @@ func (a *ProjectAnalyzer) handleResultWrapper(x, index ast.Expr, packageName str
 // result — to a TypeInfo carrying its Shape. go-bricks sends both under the
 // same data key (or as the whole body with WithRawResponse()), so both must be
 // documented alike: a slice or fixed-size array is an array payload, anything
-// else a scalar one. A map, a nested slice and a pointer to a slice, array, map
-// or interface{} are carried nameless with their Shape, on this payload path
-// only: a slice or map handler PARAMETER keeps resolving to nil through
-// typeInfoFromExpr. A written root of any pointer depth (**T, ***T) resolves
-// exactly as *T does (#120): its pointee is tested, and named, through
-// singlePointer, while its Shape keeps every level.
+// else a scalar one. A map, a nested slice, an anonymous struct and a pointer
+// to a slice, array, map, interface{} or anonymous struct are carried nameless
+// with their Shape, on this payload path only: a slice, map or anonymous
+// struct handler PARAMETER keeps resolving to nil through typeInfoFromExpr.
+// A jose-tagged anonymous struct at the root resolves to nil
+// (joseLiteralPayload). A written root of any pointer depth (**T, ***T)
+// resolves exactly as *T does (#120): its pointee is tested, and named,
+// through singlePointer, while its Shape keeps every level.
 func (a *ProjectAnalyzer) payloadTypeInfo(expr ast.Expr, packageName string, serverAliases map[string]struct{}) *models.TypeInfo {
+	if joseLiteralPayload(expr) {
+		return nil
+	}
 	switch e := expr.(type) {
 	case *ast.ArrayType:
 		return a.slicePayloadTypeInfo(e, packageName, serverAliases)
-	case *ast.MapType:
+	case *ast.MapType, *ast.StructType:
 		return a.compositePayloadTypeInfo(e, packageName)
 	case *ast.StarExpr:
-		if isCompositePointee(singlePointer(e).X) { // *[]T, **[N]T, *map[K]V, *interface{}
+		if isCompositePointee(singlePointer(e).X) { // *[]T, **[N]T, *map[K]V, *interface{}, *struct{…}
 			return a.compositePayloadTypeInfo(e, packageName)
 		}
 	}
 	return a.scalarPayloadTypeInfo(expr, packageName, serverAliases)
+}
+
+// joseLiteralPayload reports whether a payload's root, every written pointer
+// shed, is an anonymous struct with a jose tag (hasJOSETag). Such a payload
+// is not documented yet (issue 171): payloadTypeInfo resolves it to no
+// TypeInfo, as before anonymous struct payloads were documented, so its
+// route keeps the untyped fallback under application/json, and nothing
+// under it registers or warns.
+func joseLiteralPayload(expr ast.Expr) bool {
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = singlePointer(star).X
+	}
+	lit, ok := expr.(*ast.StructType)
+	return ok && hasJOSETag(lit)
 }
 
 // singlePointer peels a written pointer chain (**T, ***T) down to its last
@@ -2450,13 +2472,14 @@ func singlePointer(e *ast.StarExpr) *ast.StarExpr {
 }
 
 // isCompositePointee reports whether a pointer payload's pointee is a slice,
-// array, map or interface{} literal, which payloadTypeInfo carries nameless.
+// array, map, interface{} or anonymous struct literal, which payloadTypeInfo
+// carries nameless.
 // A named pointee (*Item, *q.T) keeps the scalar path. payloadTypeInfo passes
 // the pointee of a chain's last level, so **[]T is composite and **Item is
 // not.
 func isCompositePointee(x ast.Expr) bool {
 	switch x.(type) {
-	case *ast.ArrayType, *ast.MapType, *ast.InterfaceType:
+	case *ast.ArrayType, *ast.MapType, *ast.InterfaceType, *ast.StructType:
 		return true
 	default:
 		return false
@@ -2464,10 +2487,10 @@ func isCompositePointee(x ast.Expr) bool {
 }
 
 // compositePayloadTypeInfo carries a composite payload (a map, a nested slice,
-// a pointer to a container) nameless with its Shape, so populateTypeFields can
-// resolve it like a field of its type. A literal unmodelled leaf
-// (map[string]func(), []struct{...}, a generic instantiation) returns nil,
-// keeping the pre-existing nil response (#118, #114).
+// an anonymous struct, a pointer to a container) nameless with its Shape, so
+// populateTypeFields can resolve it like a field of its type. A literal
+// unmodelled leaf (map[string]func(), a generic instantiation) returns nil,
+// keeping the pre-existing nil response (#114).
 func (a *ProjectAnalyzer) compositePayloadTypeInfo(expr ast.Expr, packageName string) *models.TypeInfo {
 	shape := a.typeShape(expr)
 	if hasUnknownLeaf(&shape) {
@@ -2478,14 +2501,11 @@ func (a *ProjectAnalyzer) compositePayloadTypeInfo(expr ast.Expr, packageName st
 
 // hasUnknownLeaf reports whether any emitted leaf of s is unmodelled
 // (ShapeUnknown, the zero Kind, or an Instantiation, which is not resolved:
-// #114). An anonymous struct counts too, for now: issue 118 documents one
-// inline as a field, and anonymous struct payloads land with their own
-// change, so until then a payload holding one keeps its untyped fallback.
+// #114). An anonymous struct is modelled: it is documented inline.
 func hasUnknownLeaf(s *models.TypeShape) bool {
 	found := false
 	walkResolvedLeaves(s, func(leaf *models.TypeShape) {
-		found = found || leaf.Kind == models.ShapeUnknown || leaf.Kind == "" || leaf.Kind == models.ShapeInstantiation ||
-			leaf.Kind == models.ShapeStruct
+		found = found || leaf.Kind == models.ShapeUnknown || leaf.Kind == "" || leaf.Kind == models.ShapeInstantiation
 	})
 	return found
 }
@@ -2576,9 +2596,9 @@ func payloadBaseShape(s models.TypeShape) models.TypeShape {
 // array, not base64, so the Shape must keep it apart from []byte. A named
 // element (one pointer level shed) names the TypeInfo after it, so []Item and
 // []*Item register Item; a builtin element names nothing. Any other element
-// shape ([][]T, []map[K]V, []**T, []*[]T) is carried nameless
-// (compositePayloadTypeInfo), and a literal unmodelled element
-// ([]struct{...}, []func()) still returns nil.
+// shape ([][]T, []map[K]V, []**T, []*[]T, []struct{…}) is carried nameless
+// (compositePayloadTypeInfo), and a literal unmodelled element ([]func())
+// still returns nil.
 //
 // This lives on the payload path rather than in typeInfoFromExpr's own switch
 // on purpose: only a response (a Result/ResultWithMeta type argument or a bare
@@ -2697,7 +2717,9 @@ func (a *ProjectAnalyzer) handleSelectorExprType(t *ast.SelectorExpr, serverAlia
 // [N]T, map, interface{}, func, chan) is the request too, but resolves to a
 // nil TypeInfo — the request-body path has no shape to emit for it — with
 // only its type text returned, so populateRequestType can warn about it. So
-// is a parameter written with two or more pointer levels (**T), screened
+// is an anonymous struct (struct{…}, *struct{…}), which go-bricks binds but
+// this tool does not document yet, and a parameter written with two or more
+// pointer levels (**T), screened
 // before typeInfoFromExpr so its pointers are never peeled to resolve **T as
 // T, and a generic instantiation (Box[A], *Box[A]), which is not resolved
 // (#114). Returns nil, "" and nil when the handler takes no request.
@@ -2715,7 +2737,7 @@ func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName 
 		if ti := a.typeInfoFromExpr(p.Type, packageName, serverAliases); ti != nil {
 			return ti, types.ExprString(p.Type), p.Type
 		}
-		if isNonStructTypeLiteral(p.Type) {
+		if isNonStructTypeLiteral(p.Type) || isAnonymousStruct(p.Type) {
 			return nil, types.ExprString(p.Type), p.Type
 		}
 	}
@@ -2746,6 +2768,24 @@ func isNonStructTypeLiteral(expr ast.Expr) bool {
 		return true
 	}
 	return false
+}
+
+// isAnonymousStruct reports whether expr, parentheses and one pointer level
+// shed, is an anonymous struct (struct{…}, *struct{…}). No framework
+// parameter is one, so as a handler parameter it is the request. Behind two
+// pointers it is not: isMultiPointer screens that first.
+func isAnonymousStruct(expr ast.Expr) bool {
+	return anonymousStruct(expr) != nil
+}
+
+// anonymousStruct returns the struct literal expr is, parentheses and one
+// pointer level shed (struct{…}, *struct{…}), or nil.
+func anonymousStruct(expr ast.Expr) *ast.StructType {
+	if star, ok := ast.Unparen(expr).(*ast.StarExpr); ok {
+		expr = star.X
+	}
+	lit, _ := ast.Unparen(expr).(*ast.StructType)
+	return lit
 }
 
 // isMultiPointer reports whether expr is written with two or more pointer
@@ -3285,6 +3325,14 @@ func (a *ProjectAnalyzer) populateHandler(h *handlerAnalysis, astFile *ast.File,
 const nonStructRequestWarning = "request type %s is not a struct: go-bricks binds requests by struct fields and panics on any other type, " +
 	"at request time before v0.69.0 and at route registration from v0.69.0 (F26, gaborage/go-bricks#1811); no requestBody emitted"
 
+// anonymousRequestWarning is the one warning a route raises when its request
+// type is an anonymous struct with a field, which go-bricks binds by its
+// fields but this tool does not document yet; the argument is the type as
+// written. A field-less one (struct{}) raises nothing (warnNonStructRequest).
+const anonymousRequestWarning = "request type %s is an anonymous struct: go-bricks binds it, but this tool does not document one yet " +
+	"— no requestBody and no query or header parameters are emitted, and path parameters fall back to strings " +
+	"(declare it as a named struct for a typed spec)"
+
 // populateRequestType resolves a handler's request type the way
 // populateTypeFields resolves a response, except for what does not register
 // as a struct. go-bricks binds every request by its struct fields and panics
@@ -3296,7 +3344,8 @@ const nonStructRequestWarning = "request type %s is not a struct: go-bricks bind
 // is what makes doctor count it as an untyped request. A generic
 // instantiation request, or one declared as one, is left untyped the same
 // way, with the generic request warning instead of F26 unless its generic
-// type is a non-struct (warnNonStructRequest).
+// type is a non-struct, and so is an anonymous struct request, with the
+// anonymous request warning, or none when it has no field (warnNonStructRequest).
 func (a *ProjectAnalyzer) populateRequestType(h *handlerAnalysis, astFile *ast.File, filePath string) {
 	if h.request != nil {
 		if registered := a.registerPayloadType(h.request, astFile, filePath); registered != nil {
