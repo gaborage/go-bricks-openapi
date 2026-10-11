@@ -230,6 +230,14 @@ nested Go module, is not.
   which also silences the warning. The diagnostic covers every field whose type
   holds a `uintptr` at any depth — `[]uintptr`, a map value
   (`map[string]uintptr`) and a named wrapper (`type Addr uintptr`) alike.
+- A generic type instantiation (`Page[Address]`, `pg.List[string]`, or a
+  named type declared as one, `type AddrPage Page[Address]`) is not resolved
+  until #114 substitutes its type arguments. A field or a path, query or
+  header parameter holding one at any depth (`[]Box[int]`,
+  `map[string]Box[int]`) is documented as an untyped object and reported as a
+  warning (so `--strict` fails on it). That includes a generic text marshaler
+  (`TBox[int]`), whose wire form is a string, and a recursive generic type
+  (`type Tree[T any] map[string]Tree[T]`).
 - A Marshaler type (one with a `MarshalJSON`, `MarshalJSONTo`, `MarshalText`,
   `AppendText`, `UnmarshalJSON`, `UnmarshalJSONFrom` or `UnmarshalText` method
   with the exact `encoding/json` signature, on the type or its pointer, or on a
@@ -381,9 +389,17 @@ nested Go module, is not.
   as untyped, so only the aggregate untyped-route warning reports it, and
   `--strict` fails only when the route has no typed request. A
   plain `[]Fn` payload, like `Fn` itself, still raises the named non-struct
-  warning. Anonymous struct and generic payloads
-  (`server.Result[struct{ A int }]`, `server.Result[Page[User]]`) stay
-  untyped (#118, #114).
+  warning. Anonymous struct payloads (`server.Result[struct{ A int }]`) stay
+  untyped (#118). Generic payloads (`server.Result[Page[User]]`,
+  `server.Result[[]Page[User]]`, a bare `Pair[string, int]`, or a named type
+  declared as one, `type UserPage Page[User]`) stay untyped too (#114), but
+  each raises one warning, so `--strict` fails on it. A handler with a
+  generic request parameter (`Box[User]`), whatever its payload (an anonymous
+  struct included), or a request-less handler whose payload holds a generic
+  instantiation, is now recognised as the route's handler, so its success
+  status and inferred error statuses are documented. A pointer to a result
+  wrapper (`*server.Result[T]`) is not unwrapped: its payload stays untyped
+  with no warning of its own, whatever `T` is.
 - A handler whose request type is not a struct — a builtin (`string`,
   `*int64`), `any` or `interface{}`, a well-known or third-party type
   (`json.RawMessage`, `decimal.Decimal`), an undeclared name, a slice, map or
@@ -393,7 +409,15 @@ nested Go module, is not.
   it). go-bricks binds requests by struct fields and panics on any other
   type — at request time before v0.69.0, at route registration from v0.69.0
   (its known gap F26, gaborage/go-bricks#1811) — so there is no body contract
-  to document.
+  to document. A generic request whose generic type is a non-struct
+  (`List[Address]` with `type List[T any] []T`) is one of these. A generic
+  request over a struct (`Box[Address]`, `type AddrPage Page[Address]`, with
+  or without a `MarshalJSON`-style method of its own), or one whose generic
+  type cannot be located (outside the module, undeclared), also gets no
+  `requestBody` and counts as untyped, but with an
+  unresolved-generic warning instead (#114). A named pointer type over one
+  (`type PP *Page[Address]`) gets the not-a-struct warning, like any named
+  pointer type (`type PA *Address`).
 - A route path built from a `var` (including a `:=` local) is an Unresolved
   route: only `const` declarations resolve. The route is dropped from the spec
   with a warning.

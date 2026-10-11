@@ -5,7 +5,7 @@ Static analysis of a go-bricks project's source (AST only, never compiled or exe
 ## Language
 
 **Shape**:
-The syntactic container structure of a declared type — pointer, slice, array, map, named, primitive, or unknown — decoded once from the AST at extraction. A fixed-size array (`[N]T`, its length not recorded) is a container kind distinct from a slice, because `encoding/json` base64-encodes a `[]byte` but writes a `[N]byte` as numbers; every rule other than that base64 one treats the two alike. Carried by every struct field, and by every response payload (a result wrapper's type argument, as in `server.Result[[]Item]` or `server.Result[time.Time]`, or a handler's bare first result of the same type), so a payload that does not register as a project struct is resolved (see **Resolution**) and typed like a field of its type rather than `$ref`'d — except a non-slice payload that registers as a project struct, which sheds its Shape so it is `$ref`'d even when its short name collides with a well-known type (`uuid.UUID`). Purely syntactic; carries no registry knowledge.
+The syntactic container structure of a declared type — pointer, slice, array, map, named, primitive, instantiation, or unknown — decoded once from the AST at extraction. A fixed-size array (`[N]T`, its length not recorded) is a container kind distinct from a slice, because `encoding/json` base64-encodes a `[]byte` but writes a `[N]byte` as numbers; every rule other than that base64 one treats the two alike. Carried by every struct field, and by every response payload (a result wrapper's type argument, as in `server.Result[[]Item]` or `server.Result[time.Time]`, or a handler's bare first result of the same type), so a payload that does not register as a project struct is resolved (see **Resolution**) and typed like a field of its type rather than `$ref`'d — except a non-slice payload that registers as a project struct, which sheds its Shape so it is `$ref`'d even when its short name collides with a well-known type (`uuid.UUID`). Purely syntactic; carries no registry knowledge.
 _Avoid_: type string, kind (overloaded with OpenAPI's `type` keyword)
 
 **Resolution**:
@@ -13,7 +13,7 @@ The registry outcome for a declared type — of a field or of a payload — at a
 _Avoid_: lookup, ref info
 
 **Instantiation**:
-A generic type written with its type arguments (`Page[Address]`, `pg.List[string]`), whose Resolution substitutes those arguments into the generic declaration.
+A generic type written with its type arguments (`Page[Address]`, `pg.List[string]`), whose Resolution substitutes those arguments into the generic declaration. Its Shape keeps the generic type and the arguments' Shapes as written, and never reads as the bare generic type. Until that substitution lands (#114), an Instantiation is not resolved: it is documented as an untyped object, wherever it is written, and raises a warning.
 _Avoid_: generic type (that names the declaration), specialization
 
 **Marshaler type**:

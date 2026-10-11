@@ -42,13 +42,14 @@ const (
 )
 
 // resolvePayload resolves a payload that did not register as a project struct
-// in the file it was written in, and reports whether it stamped a Resolution.
-// A payload whose root resolves to nothing, or whose resolution has an
-// unmodelled leaf, is left untouched for screenUnresolvedPayload. A resolved
-// payload names no component (its Name and Fields are cleared) unless its base
-// is a well-known type, which keeps its name; the structs it reaches register
-// in the file their names were written in, and its one fallback, if any, is
-// warned about.
+// in the file it was written in, and reports whether it handled it: stamped a
+// Resolution, or warned about the Instantiation its resolution stopped at
+// (screenGenericPayload). Any other payload whose root resolves to nothing,
+// or whose resolution has an unmodelled leaf, is left untouched for
+// screenUnresolvedPayload. A resolved payload names no component (its Name
+// and Fields are cleared) unless its base is a well-known type, which keeps
+// its name; the structs it reaches register in the file their names were
+// written in, and its one fallback, if any, is warned about.
 func (a *ProjectAnalyzer) resolvePayload(ti *models.TypeInfo, written string, astFile *ast.File, filePath string) bool {
 	if ti.Shape == nil {
 		return false
@@ -56,7 +57,7 @@ func (a *ProjectAnalyzer) resolvePayload(ti *models.TypeInfo, written string, as
 	c := newResolveCtx(astFile, filePath, false)
 	r := a.resolveShape(*ti.Shape, c)
 	if !payloadResolves(&r) {
-		return false
+		return a.screenGenericPayload(ti, written, c.st.first)
 	}
 	ti.Resolution = &r
 	if !isWellKnownLeaf(payloadBaseShape(*ti.Shape)) {

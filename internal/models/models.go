@@ -221,7 +221,14 @@ const (
 	ShapeMap       ShapeKind = "map"
 	ShapeNamed     ShapeKind = "named"     // a declared or qualified type name (Address, time.Time)
 	ShapePrimitive ShapeKind = "primitive" // a builtin (string, int64, byte, any, interface{})
-	ShapeUnknown   ShapeKind = "unknown"   // an AST shape the decoder does not model (chan, func, generics)
+	ShapeUnknown   ShapeKind = "unknown"   // an AST shape the decoder does not model (chan, func, struct literals)
+	// ShapeInstantiation is a generic type written with its type arguments
+	// (G[A], G[A, B], q.G[A]): CONTEXT.md, "Instantiation". Inst carries the
+	// generic type and the arguments; Name stays empty, so no consumer that
+	// reads a leaf's Name ever sees the bare generic type G. It is not
+	// resolved (#114): every consumer treats it as unmodelled, and it emits
+	// an untyped object.
+	ShapeInstantiation ShapeKind = "instantiation"
 
 	// Resolution-only kinds. The analyzer's resolver writes them into a
 	// Resolution; the Shape decoder never produces them, so a Shape stays
@@ -256,7 +263,8 @@ const (
 
 // TypeShape is the syntactic container structure of a field's declared type,
 // decoded once from the AST at extraction. Purely syntactic — it carries no
-// registry knowledge. The registry outcome lives in FieldInfo.Resolution and
+// registry knowledge, and an Instantiation's arguments are decoded but never
+// substituted. The registry outcome lives in FieldInfo.Resolution and
 // TypeInfo.Resolution, which reuse this vocabulary plus the five
 // Resolution-only kinds (ShapeRef, ShapeKindOnly, ShapeMarshaler,
 // ShapeRecursive, ShapeText).
@@ -271,6 +279,23 @@ type TypeShape struct {
 	// Elem is the pointed-to / element / map-value shape (ShapePointer, ShapeSlice,
 	// ShapeArray, ShapeMap).
 	Elem *TypeShape
+	// Inst is the instantiation a ShapeInstantiation carries; nil for every
+	// other kind. It hangs off one pointer so TypeShape stays small enough to
+	// pass by value.
+	Inst *Instantiation
+}
+
+// Instantiation is a generic type with its type arguments, as written
+// (CONTEXT.md, "Instantiation"). Purely syntactic, like the Shape holding it.
+type Instantiation struct {
+	// Base is the generic type as written, qualified for a selector
+	// ("Page", "pg.Page").
+	Base string
+	// Args are the type arguments' Shapes, in order.
+	Args []TypeShape
+	// Written is the whole instantiation as written, its type arguments
+	// separated by ", " ("Pair[string, int]", "pg.Page[Address]").
+	Written string
 }
 
 // FieldInfo represents a struct field with validation metadata

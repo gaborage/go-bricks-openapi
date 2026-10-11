@@ -240,7 +240,8 @@ func TestNonStructRequestInSiblingFileWarnsOnce(t *testing.T) {
 // TestExtractRequestTypeNilParams pins that a missing parameter list is no
 // request: no TypeInfo and no type text, so nothing is screened.
 func TestExtractRequestTypeNilParams(t *testing.T) {
-	ti, typeText := New(t.TempDir()).extractRequestType(nil, "mod", nil)
+	ti, typeText, typeExpr := New(t.TempDir()).extractRequestType(nil, "mod", nil)
 	assert.Nil(t, ti)
 	assert.Empty(t, typeText)
+	assert.Nil(t, typeExpr)
 }
