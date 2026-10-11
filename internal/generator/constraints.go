@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gaborage/go-bricks-openapi/internal/models"
 )
@@ -376,13 +377,12 @@ var formatTagMap = map[string]string{
 }
 
 // applyFormatConstraint maps boolean format tags to OpenAPI `format`. datetime is
-// value-aware: a date-only layout maps to `date`, otherwise `date-time`.
+// value-aware (see datetimeFormat) and always claims its key: a layout with no
+// format writes nothing, leaving any format another tag set.
 func applyFormatConstraint(s *constraintSet, key, value string) bool {
 	if key == validatorDatetime {
-		if value == "" || value == boolTrueString {
-			s.setFormat(formatDateTime)
-		} else {
-			s.setFormat(datetimeFormat(value))
+		if format := datetimeFormat(value); format != "" {
+			s.setFormat(format)
 		}
 		return true
 	}
@@ -652,15 +652,23 @@ func tokenizeOneOf(s string) []string {
 	return out
 }
 
-// datetimeFormat inspects a Go time layout: a layout with no clock/time tokens is
-// date-only (-> "date"); anything with a clock/zone token is "date-time".
+// datetimeFormat returns the OpenAPI format for a validate:"datetime=<layout>"
+// layout, which the validator applies as time.Parse(layout, v): "date" for
+// exactly time.DateOnly, "date-time" for exactly time.RFC3339 or
+// time.RFC3339Nano, and "" for every other layout. A format is emitted only
+// when the layout accepts the values the format describes, so a strict subset
+// of RFC 3339 (a literal Z, a fixed .000 fraction, a -07:00 offset) gets none.
+// So does the analyzer's "true": a bare datetime parses with the empty layout
+// (accepting only "") and datetime=true with the literal layout "true".
 func datetimeFormat(layout string) string {
-	for _, tok := range []string{"15", "03", "3:", "04", "05", ".000", "PM", "pm", "Z07", "-07", "-0700"} {
-		if strings.Contains(layout, tok) {
-			return formatDateTime
-		}
+	switch layout {
+	case time.DateOnly:
+		return formatDate
+	case time.RFC3339, time.RFC3339Nano:
+		return formatDateTime
+	default:
+		return ""
 	}
-	return formatDate
 }
 
 // applyPatternConstraint maps the 'regexp' tag to an OpenAPI pattern.

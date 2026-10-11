@@ -1874,8 +1874,10 @@ func coerceExample(raw string, prop *OpenAPIProperty) any {
 // the format is dropped: `byte` (see isBase64Text), `date` (see isDateText) and
 // `date-time` (see isDateTimeText). The format is the property's FINAL one — a
 // []byte field's and a validate:"base64" string's alike, a time.Time field's
-// and a validate:"datetime=<layout>" string's alike. Examples under any other
-// format (uuid, email, …) are not checked by the validator and stay verbatim.
+// and the string format a full-date or RFC 3339 validate:"datetime=<layout>"
+// stamps alike (any other layout stamps no format, see datetimeFormat).
+// Examples under any other format (uuid, email, …), or under none, are not
+// checked by the validator and stay verbatim.
 func coerceStringExample(raw string, prop *OpenAPIProperty) any {
 	if !stringFitsFormat(raw, prop.Format) {
 		return nil
