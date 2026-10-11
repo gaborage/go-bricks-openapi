@@ -269,6 +269,41 @@ func isMarshalerLeaf(s models.TypeShape) bool {
 	return k == models.ShapeMarshaler || k == models.ShapeText
 }
 
+// isQuotedScalar reports whether encoding/json writes a body field as a JSON
+// string because its json tag carries ",string" (#115). prop is already typed
+// from the field's Resolution, and the option quotes it when it is a boolean,
+// integer or number: a named scalar (Cents), a well-known number (json.Number,
+// time.Duration) and a kind-only scalar count by what they resolve to. A
+// Marshaler leaf is {} or a string, so it never counts. Both encoding/json
+// engines ignore the option past one pointer, so the Resolution may hold at
+// most one pointer level, written in the field's own declaration (*int64,
+// *Cents). A parameter is bound by its own tag, never by json.
+//
+// A named pointer type (type PI *int64) is left unquoted: the classic engine
+// (Go 1.26, the go.mod floor) ignores the option on it, Go 1.27's default
+// engine quotes it, and the schema cannot follow the toolchain. An alias of a
+// pointer type (type PA = *int64) has the same Shape and Resolution, so it is
+// left unquoted too, although both engines quote it.
+//
+// This is the one place the generator reads the syntactic Shape where a
+// Resolution exists (ADR 0002 has every consumer read the Resolution): the
+// Resolution of *int64 and of type PI *int64 is the same pointer, and only
+// the Shape tells a pointer written in the field's own declaration from one
+// reached through a named type.
+func isQuotedScalar(field *models.FieldInfo, prop *OpenAPIProperty) bool {
+	if !field.JSONString || field.ParamType != "" {
+		return false
+	}
+	if prop.Type != typeBoolean && !isEffectiveNumeric(prop.Type) {
+		return false
+	}
+	r := field.ResolvedShape()
+	if r.Kind != models.ShapePointer {
+		return true
+	}
+	return field.Shape.Kind == models.ShapePointer && r.Elem != nil && r.Elem.Kind != models.ShapePointer
+}
+
 // sortedKeys returns the keys of m in lexicographic order so callers can iterate
 // deterministically (Go map iteration order is randomized).
 func sortedKeys(m map[string]string) []string {
