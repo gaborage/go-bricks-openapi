@@ -96,7 +96,8 @@ func analyzeNonStructRequest(t *testing.T, params, result string) (route models.
 
 // wantNonStructRequestWarning is the one warning a non-struct request type T raises.
 func wantNonStructRequestWarning(typ string) string {
-	return "request type " + typ + " is not a struct: go-bricks binds requests by struct fields and panics at request time (F26, gaborage/go-bricks#1811); no requestBody emitted"
+	return "request type " + typ + " is not a struct: go-bricks binds requests by struct fields and panics on any other type, " +
+		"at request time before v0.69.0 and at route registration from v0.69.0 (F26, gaborage/go-bricks#1811); no requestBody emitted"
 }
 
 // assertUntypedRequest asserts a request resolved to nothing the generator or
@@ -114,7 +115,8 @@ func assertUntypedRequest(t *testing.T, req *models.TypeInfo) {
 }
 
 // TestNonStructRequestWarnsOnce pins #102: go-bricks binds every request by
-// struct fields and panics at request time on any other type (F26,
+// struct fields and panics on any other type — at request time before
+// v0.69.0, at route registration from v0.69.0 (F26,
 // gaborage/go-bricks#1811). Each non-struct request family therefore raises
 // exactly one warning per route, whichever position the request parameter
 // takes, and resolves to an untyped request so no requestBody is emitted and
