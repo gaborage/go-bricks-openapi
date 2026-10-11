@@ -130,6 +130,7 @@ type ProjectAnalyzer struct {
 	tagWarned        map[string]struct{}                // dedupes malformed-struct-tag warnings by "file:line:col"
 	uintptrWarned    map[string]struct{}                // dedupes uintptr-field warnings by "file:line:col"
 	fieldWarned      map[string]struct{}                // dedupes field fallback warnings by "file:line:col"
+	quietEmbeds      bool                               // requestParamFields is reading a Marshaler request: dropped embeds do not warn
 	fieldSites       map[*models.TypeShape]fieldSite    // field Resolution root -> where its ref leaves register
 	methodSetMemo    map[string]methodSet               // "home\x00typeKey\x00keep" -> a method set no cut shortened (methodSetOf)
 	methodSetCuts    int                                // cycle cuts methodSetOf has hit: a change marks a path-dependent set
@@ -3436,7 +3437,7 @@ func (a *ProjectAnalyzer) registerViaTypeSpecAt(name, pkg string, astFile *ast.F
 		keyPkg, keyDir = resolvedPkg, filepath.Dir(path)
 	}
 	key := a.schemaKey(name, keyPkg, keyDir)
-	return a.registerStructKeyed(key, name, resolvedPkg, st, file, path, depth)
+	return a.registerStructKeyed(key, resolvedPkg, st, file, path, depth)
 }
 
 // isSameNamedReExport reports whether spec is an alias of a qualified type of
@@ -3495,23 +3496,24 @@ func (a *ProjectAnalyzer) resolveTypeSpecChain(astFile *ast.File, filePath, name
 // registerFieldRefAt (field-ref registration, Cycle A, incremented here), so
 // they share one budget.
 func (a *ProjectAnalyzer) registerStructAt(typeName, pkg string, structType *ast.StructType, astFile *ast.File, filePath string, depth int) *models.TypeInfo {
-	return a.registerStructKeyed(a.schemaKey(typeName, pkg, filepath.Dir(filePath)), typeName, pkg, structType, astFile, filePath, depth)
+	return a.registerStructKeyed(a.schemaKey(typeName, pkg, filepath.Dir(filePath)), pkg, structType, astFile, filePath, depth)
 }
 
 // registerStructKeyed is registerStructAt under a component name the caller
 // already assigned: registerViaTypeSpecAt keys a named type over a struct by
 // the named type's own declaring site, not the struct's (a same-named alias
 // re-export, type User = d.User, takes the struct's key).
-func (a *ProjectAnalyzer) registerStructKeyed(key, typeName, pkg string, structType *ast.StructType, astFile *ast.File, filePath string, depth int) *models.TypeInfo {
+func (a *ProjectAnalyzer) registerStructKeyed(key, pkg string, structType *ast.StructType, astFile *ast.File, filePath string, depth int) *models.TypeInfo {
 	if existing, ok := a.typeRegistry[key]; ok {
 		return existing
 	}
 
 	ti := &models.TypeInfo{Name: key, Package: pkg}
 	a.typeRegistry[key] = ti // register before recursing (cycle guard)
-	// Seed the embedded-promotion ancestor set with this type so a self-embed
-	// (e.g. type Node struct{ *Node }) is not promoted into itself.
-	ti.Fields = a.extractStructFields(structType, pkg, astFile, filePath, map[string]struct{}{typeName: {}}, depth)
+	// Seed the embedded-promotion ancestor set with this struct so a
+	// self-embed (type Node struct{ *Node }, or *NA for type NA = Node) is
+	// not promoted into itself.
+	ti.Fields = a.extractStructFields(structType, astFile, filePath, map[string]struct{}{a.structIdentity(structType): {}}, depth)
 	ti.JOSE = hasJOSETag(structType)
 
 	// Warn only now that the field list is final: a promoted field shadowed
@@ -4019,14 +4021,39 @@ func typeSpecInFile(astFile *ast.File, typeName string) *ast.TypeSpec {
 
 // extractStructFields extracts field information from a struct type including
 // struct tags. astFile/filePath locate sibling files for resolving embedded
-// struct types; visited is the embedded-promotion ancestor set (cycle guard).
+// struct types; visited is the embedded-promotion ancestor set (cycle guard),
+// keyed by structIdentity.
+func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, astFile *ast.File, filePath string, visited map[string]struct{}, depth int) []models.FieldInfo {
+	ranked := a.extractRankedFields(structType, astFile, filePath, visited, depth)
+	if len(ranked) == 0 {
+		return nil
+	}
+	fields := make([]models.FieldInfo, len(ranked))
+	for i := range ranked {
+		fields[i] = ranked[i].FieldInfo
+	}
+	return fields
+}
+
+// structIdentity is st's key in the embedded-promotion ancestor set: where
+// it is declared. Every alias or defined type leading to st shares it, as
+// does every parse of st's file (the handler's own parse and the package
+// cache's), so it is neither st's pointer nor its token.Pos.
+func (a *ProjectAnalyzer) structIdentity(st *ast.StructType) string {
+	pos := a.fileSet.Position(st.Pos())
+	return pos.Filename + "#" + strconv.Itoa(pos.Offset)
+}
+
+// extractRankedFields is extractStructFields keeping each field's rank.
 //
-// Direct named fields and json-tagged embeds (which nest at the parent's level)
-// are "shallow"; fields flattened from an untagged embed are "promoted" (deeper).
-// On a JSON-name collision the shallow field wins, mirroring encoding/json's
-// shallower-depth-wins rule (so a parent field is never silently overridden by a
-// promoted one, regardless of declaration order).
-func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, pkg string, astFile *ast.File, filePath string, visited map[string]struct{}, depth int) []models.FieldInfo {
+// Direct named fields, json-tagged embeds (which nest at the parent's level)
+// and untagged non-struct embeds (one property each) are "shallow"; fields
+// flattened from an untagged struct embed are "promoted" (deeper). Every
+// body key follows encoding/json's dominance rule across both lists
+// (dropDominatedFields), so a parent field is never silently overridden by
+// a promoted one, regardless of declaration order; parameters are then
+// deduplicated by location and name (dropDuplicateParams).
+func (a *ProjectAnalyzer) extractRankedFields(structType *ast.StructType, astFile *ast.File, filePath string, visited map[string]struct{}, depth int) []rankedField {
 	// Absolute depth bound for the embedded-promotion cycle (Cycle B). It shares
 	// the registration budget seeded by registerStructAt, so a pathological deep
 	// embed chain of DISTINCT types (which the visited guard cannot stop) is
@@ -4039,10 +4066,10 @@ func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, pkg st
 		return nil
 	}
 
-	var shallow, promoted []models.FieldInfo
+	var shallow, promoted []rankedField
 	for _, field := range structType.Fields.List {
 		if len(field.Names) == 0 {
-			fields, isPromotion := a.embeddedFields(field, pkg, astFile, filePath, visited, depth)
+			fields, isPromotion := a.embeddedFields(field, astFile, filePath, visited, depth)
 			if isPromotion {
 				promoted = append(promoted, fields...)
 			} else {
@@ -4053,62 +4080,40 @@ func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, pkg st
 		shallow = append(shallow, a.namedFields(field, astFile, filePath)...)
 	}
 
-	return mergeFieldsByPrecedence(shallow, promoted)
+	return dropDuplicateParams(dropDominatedFields(append(shallow, promoted...)))
 }
 
 // namedFields builds FieldInfo entries for a single non-anonymous AST field
 // (one per exported name; unexported names are skipped).
-func (a *ProjectAnalyzer) namedFields(field *ast.Field, astFile *ast.File, filePath string) []models.FieldInfo {
-	out := make([]models.FieldInfo, 0, len(field.Names))
+func (a *ProjectAnalyzer) namedFields(field *ast.Field, astFile *ast.File, filePath string) []rankedField {
+	out := make([]rankedField, 0, len(field.Names))
 	for _, fieldName := range field.Names {
 		if !fieldName.IsExported() {
 			continue
 		}
-		out = append(out, a.buildFieldInfo(fieldName.Name, field, astFile, filePath))
+		out = append(out, rankedField{FieldInfo: a.buildFieldInfo(fieldName.Name, field, astFile, filePath)})
 	}
 	return out
 }
 
-// mergeFieldsByPrecedence concatenates shallow then promoted fields, dropping any
-// promoted field whose JSON name already appears (so shallower wins). Among
-// promoted fields a colliding name keeps the first (equal-depth ambiguity is
-// rare; encoding/json would drop both, but documenting one is more useful).
-func mergeFieldsByPrecedence(shallow, promoted []models.FieldInfo) []models.FieldInfo {
-	seen := make(map[string]struct{}, len(shallow))
-	for i := range shallow {
-		if n := shallow[i].JSONName; n != "" {
-			seen[n] = struct{}{}
-		}
-	}
-	out := shallow
-	for i := range promoted {
-		if n := promoted[i].JSONName; n != "" {
-			if _, dup := seen[n]; dup {
-				continue
-			}
-			seen[n] = struct{}{}
-		}
-		out = append(out, promoted[i])
-	}
-	return out
-}
-
-// embeddedFields handles an anonymous (embedded) struct field, mirroring
-// encoding/json promotion rules. It returns the resulting fields and whether they
-// were PROMOTED (flattened from the embed, i.e. deeper) vs nested at the parent
-// level:
+// embeddedFields handles an anonymous (embedded) field, mirroring
+// encoding/json's rules. It returns the resulting fields and whether they were
+// PROMOTED (flattened from the embed, i.e. deeper) vs at the parent level:
 //   - With an explicit json name (Base `json:"base"`) it NESTS as a single field
 //     of the embedded type (rendered as a $ref) — returned as shallow.
 //   - With json:"-" it is excluded.
-//   - Otherwise its exported fields are PROMOTED (flattened) into the parent.
+//   - Otherwise (classifyEmbed) a struct's exported fields are PROMOTED
+//     (flattened) into the parent, one level deeper; an exported non-struct
+//     type is one shallow property keyed by its type name; an unexported
+//     non-struct is skipped, and so is a well-known Marshaler type unless it
+//     is an exported path, query or header parameter; a generic or
+//     unreadable type is dropped with a warning.
 //
-// Embedded pointers (*Base) are unwrapped. A cross-package (in-module) embedded
-// struct is resolved and promoted from its own package. An embedded type that
-// still cannot be resolved to a struct — a stdlib/third-party type or a named
-// non-struct like `type Code string` — is skipped without crashing. The visited
-// ancestor set (add-before-recurse / delete-after backtracking) terminates self-
-// and mutually-embedded cycles.
-func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *ast.File, filePath string, visited map[string]struct{}, depth int) (fields []models.FieldInfo, promoted bool) {
+// Embedded pointers (*Base) are unwrapped. A struct reached through local or
+// in-module aliases and defined types is promoted from the package declaring
+// it. The visited ancestor set (add-before-recurse / delete-after
+// backtracking) terminates self- and mutually-embedded cycles.
+func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, filePath string, visited map[string]struct{}, depth int) (fields []rankedField, promoted bool) {
 	typeName := shapeBaseName(a.typeShape(field.Type))
 	if typeName == "" {
 		// Preserve the pre-Shape warning text: the retired string pipeline
@@ -4119,40 +4124,58 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *
 	}
 
 	// An explicit json name turns embedding into nesting (a parent-level field).
+	var tags parsedTags
 	if field.Tag != nil {
 		tagText := unquoteLiteral(field.Tag.Value)
 		a.warnUnreadableTagKeys(field.Tag, typeName, tagText)
-		jsonName := a.parseStructTags(tagText).jsonName
-		switch jsonName {
+		tags = a.parseStructTags(tagText)
+		switch tags.jsonName {
 		case jsonSkipValue:
 			return nil, false // json:"-" — excluded
 		case "":
 			// no explicit name — fall through to promotion
 		default:
-			return []models.FieldInfo{a.buildFieldInfo(typeName, field, astFile, filePath)}, false
+			return []rankedField{{FieldInfo: a.buildFieldInfo(typeName, field, astFile, filePath)}}, false
 		}
 	}
 
-	if _, seen := visited[typeName]; seen {
-		return nil, false // cycle / self-embed guard
-	}
-	// Local embed: promote the struct's fields from this package. depth+1 is the
-	// increment edge for the embedded-promotion cycle (Cycle B).
-	if embedded, eFile, ePath, ok := a.structDeclSite(astFile, filePath, typeName); ok {
-		visited[typeName] = struct{}{}
-		fields = a.extractStructFields(embedded, pkg, eFile, ePath, visited, depth+1)
-		delete(visited, typeName) // backtrack: keep visited scoped to the current chain
+	target := a.classifyEmbed(field, astFile, filePath)
+	switch target.class {
+	case embedStruct:
+		// The cycle / self-embed guard holds back only a struct embed: a
+		// non-struct one never recurses, so a property named like the struct
+		// being registered, or like one on the promotion chain, stays. It
+		// knows the struct by its declaration, so an alias or defined type
+		// leading back to an ancestor is caught on its first encounter.
+		s := target.site
+		id := a.structIdentity(s.st)
+		if _, seen := visited[id]; seen {
+			return nil, false
+		}
+		// Promote the struct's fields in the package and file declaring it.
+		// depth+1 is the increment edge for the embedded-promotion cycle
+		// (Cycle B).
+		visited[id] = struct{}{}
+		fields = a.extractRankedFields(s.st, s.file, s.path, visited, depth+1)
+		delete(visited, id) // backtrack: keep visited scoped to the current chain
+		for i := range fields {
+			fields[i].depth++
+		}
 		return fields, true
+	case embedNonStruct:
+		return []rankedField{a.embedProperty(field, astFile, filePath)}, false
+	case embedMarshaler:
+		// go-bricks binds an exported embed's path, query or header tag as
+		// that parameter; the body is the promoted-method path's.
+		if tags.paramType != "" && token.IsExported(embeddedFieldName(field.Type)) {
+			return []rankedField{a.embedProperty(field, astFile, filePath)}, false
+		}
+	case embedGeneric, embedUnresolvable:
+		a.warnDroppedEmbed(field, target)
+	default:
+		// embedSkip: an unexported non-struct, or a defined type over time.Time.
 	}
-	// Cross-package (in-module) embed: resolve and promote from the target package
-	// so its fields are extracted in their own package context.
-	if q, ok := a.resolveQualifiedStruct(typeName, astFile); ok {
-		visited[typeName] = struct{}{}
-		fields = a.extractStructFields(q.st, q.pkg, q.file, q.filePath, visited, depth+1)
-		delete(visited, typeName)
-		return fields, true
-	}
-	return nil, false // unresolvable (stdlib/third-party or non-struct) — skip, never crash
+	return nil, false
 }
 
 // buildFieldInfo creates a FieldInfo from a field name and AST field, and

@@ -211,10 +211,10 @@ func (c resolveCtx) recordRef(name, dir string) {
 }
 
 // resolveField stamps f's Resolution and records its site: where its ref
-// leaves register and the fallback it noted. It raises no warning: a promoted
-// field may yet be shadowed by mergeFieldsByPrecedence, so registerStructAt
-// warns only for the fields that survive (warnResolvedField). A json:"-" body
-// field is skipped.
+// leaves register and the fallback it noted. It raises no warning: a field
+// may yet be dropped by dropDominatedFields or dropDuplicateParams, so
+// registerStructAt warns only for the fields that survive
+// (warnResolvedField). A json:"-" body field is skipped.
 func (a *ProjectAnalyzer) resolveField(f *models.FieldInfo, field *ast.Field, astFile *ast.File, filePath string) {
 	if isJSONExcluded(f) {
 		return

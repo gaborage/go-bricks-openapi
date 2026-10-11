@@ -106,11 +106,17 @@ var (
 	// without their source, read only when one is embedded (promotion): used
 	// directly, each keeps its well-known schema. Every encode-side method
 	// here has a value receiver, so none is pointer-only. time.Time has had
-	// AppendText since Go 1.24, below the go 1.25 floor.
+	// AppendText since Go 1.24, below the go 1.25 floor. json.Number has
+	// MarshalJSONTo and UnmarshalJSONFrom only in the jsonv2-backed
+	// encoding/json (GOEXPERIMENT=jsonv2 since Go 1.25, the default build
+	// since Go 1.27): an embedding struct is written as a bare number there
+	// and as an object with a Number field otherwise, so, as for any type
+	// with only jsonv2 methods (ADR 0002), it is a Marshaler type either way.
 	wellKnownMethodSets = map[string][]string{
 		models.WellKnownTimeTime:   {methodMarshalJSON, methodMarshalText, methodAppendText, methodUnmarshalJSON, methodUnmarshalText},
 		models.WellKnownUUID:       {methodMarshalText, methodUnmarshalText},
 		models.WellKnownRawMessage: {methodMarshalJSON, methodUnmarshalJSON},
+		models.WellKnownJSONNumber: {methodMarshalJSONTo, methodUnmarshalJSONFrom},
 	}
 )
 
