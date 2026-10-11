@@ -1623,32 +1623,34 @@ func (a *ProjectAnalyzer) resolveHandler(
 // (leading pointer and package qualifier stripped), or "" if it cannot be
 // resolved (struct or field not found).
 func (a *ProjectAnalyzer) resolveFieldType(structName, fieldName string, astFile *ast.File, filePath string) string {
-	if expr := a.fieldTypeExprOf(structName, fieldName, astFile, filePath); expr != nil {
+	if expr, _ := a.fieldTypeExprOf(structName, fieldName, astFile, filePath); expr != nil {
 		return baseTypeName(expr)
 	}
 	return ""
 }
 
 // fieldTypeExprOf returns the declared type expression of field fieldName on
-// structName, or nil when the struct or field cannot be resolved. Single
-// source of the struct-field lookup shared by resolveFieldType (unqualified
-// name) and fieldTypeExpr (qualified name).
-func (a *ProjectAnalyzer) fieldTypeExprOf(structName, fieldName string, astFile *ast.File, filePath string) ast.Expr {
+// structName with the file declaring the struct (structDeclSite), whose
+// imports a qualified type expression was written under; expr is nil when
+// the struct or field cannot be resolved. Single source of the struct-field
+// lookup shared by resolveFieldType (unqualified name) and fieldTypeExpr
+// (qualified name).
+func (a *ProjectAnalyzer) fieldTypeExprOf(structName, fieldName string, astFile *ast.File, filePath string) (expr ast.Expr, declFile *ast.File) {
 	if structName == "" {
-		return nil
+		return nil, nil
 	}
-	structType, err := a.findStructDefinition(astFile, filePath, structName)
-	if err != nil || structType.Fields == nil {
-		return nil
+	structType, declFile, _, ok := a.structDeclSite(astFile, filePath, structName)
+	if !ok || structType.Fields == nil {
+		return nil, nil
 	}
 	for _, field := range structType.Fields.List {
 		for _, name := range field.Names {
 			if name.Name == fieldName {
-				return field.Type
+				return field.Type, declFile
 			}
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // delegateContext is the file/package context of a module field's struct type,
@@ -1667,12 +1669,14 @@ type delegateContext struct {
 // callerAliases is reused for a same-package delegate (same file, same imports);
 // only a cross-package delegate needs a fresh alias scan of its own file.
 func (a *ProjectAnalyzer) resolveDelegateContext(astFile *ast.File, filePath, moduleStruct, fieldName string, callerAliases map[string]struct{}) (delegateContext, bool) {
-	fieldType, qualified := a.fieldTypeExpr(moduleStruct, fieldName, astFile, filePath)
+	fieldType, qualified, declFile := a.fieldTypeExpr(moduleStruct, fieldName, astFile, filePath)
 	if fieldType == "" {
 		return delegateContext{}, false
 	}
 	if qualified {
-		q, ok := a.resolveQualifiedStruct(fieldType, astFile)
+		// The qualifier was written in the file declaring the module struct,
+		// which need not be the one calling the delegate (astFile).
+		q, ok := a.resolveQualifiedStruct(fieldType, declFile)
 		if !ok {
 			return delegateContext{}, false
 		}
@@ -1697,11 +1701,14 @@ func (a *ProjectAnalyzer) resolveDelegateContext(astFile *ast.File, filePath, mo
 // fieldTypeExpr returns the declared type of field fieldName on structName:
 // ("Handler", false) for an in-package type, ("handlers.Handler", true) for a
 // package-qualified one, ("", false) when unresolvable. Pointers are stripped.
-func (a *ProjectAnalyzer) fieldTypeExpr(structName, fieldName string, astFile *ast.File, filePath string) (name string, qualified bool) {
-	if expr := a.fieldTypeExprOf(structName, fieldName, astFile, filePath); expr != nil {
-		return qualifiedTypeName(expr)
+// declFile is the file declaring structName, whose imports a qualified name
+// resolves against.
+func (a *ProjectAnalyzer) fieldTypeExpr(structName, fieldName string, astFile *ast.File, filePath string) (name string, qualified bool, declFile *ast.File) {
+	expr, declFile := a.fieldTypeExprOf(structName, fieldName, astFile, filePath)
+	if expr != nil {
+		name, qualified = qualifiedTypeName(expr)
 	}
-	return "", false
+	return name, qualified, declFile
 }
 
 // qualifiedTypeName renders a field type expression as an (optionally
@@ -3895,19 +3902,6 @@ func hasJOSETag(s *ast.StructType) bool {
 		}
 	}
 	return false
-}
-
-// findStructDefinition searches for a struct type definition by name
-// Searches current file first, then other files in the package
-func (a *ProjectAnalyzer) findStructDefinition(
-	astFile *ast.File,
-	filePath string,
-	typeName string,
-) (*ast.StructType, error) {
-	if structType, _, _, ok := a.structDeclSite(astFile, filePath, typeName); ok {
-		return structType, nil
-	}
-	return nil, fmt.Errorf("struct %s not found", typeName)
 }
 
 // structDeclSite finds the struct declared as name in astFile's package (the

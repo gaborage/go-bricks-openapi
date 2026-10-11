@@ -91,6 +91,7 @@ type resolveState struct {
 	stack    []string           // typeKeys of the named types being resolved
 	first    fieldFallback      // the first fallback noted, which picks the warning
 	refSites map[string]pkgFile // ShapeRef leaf name -> file it was written in (registered there), first wins
+	refDirs  map[string]string  // ShapeRef leaf name -> directory declaring the struct it reaches, recorded with refSites
 }
 
 // note records fb unless an earlier fallback was already noted.
@@ -156,7 +157,9 @@ type typeDecl struct {
 }
 
 func newResolveCtx(file *ast.File, path string, param bool) resolveCtx {
-	return resolveCtx{file: file, path: path, st: &resolveState{param: param, home: filepath.Dir(path), refSites: map[string]pkgFile{}}}
+	return resolveCtx{file: file, path: path, st: &resolveState{
+		param: param, home: filepath.Dir(path), refSites: map[string]pkgFile{}, refDirs: map[string]string{},
+	}}
 }
 
 // typeKey identifies name declared in c's package: the directory keeps a
@@ -189,15 +192,21 @@ func (c resolveCtx) in(file *ast.File, path string) resolveCtx {
 // field's warning. Nothing descends into a Marshaler's Elem, so the
 // discarded ref sites register nothing.
 func (c resolveCtx) quiet() resolveCtx {
-	c.st = &resolveState{param: c.st.param, home: c.st.home, stack: slices.Clone(c.st.stack), refSites: map[string]pkgFile{}}
+	c.st = &resolveState{
+		param: c.st.param, home: c.st.home, stack: slices.Clone(c.st.stack), refSites: map[string]pkgFile{}, refDirs: map[string]string{},
+	}
 	return c
 }
 
 // recordRef notes the file a ShapeRef leaf's name was written in, so the leaf
-// registers against that file's imports and declarations.
-func (c resolveCtx) recordRef(name string) {
+// registers against that file's imports and declarations, and dir, the
+// directory declaring the struct the name reaches (through any alias or
+// defined type), so resolveEachDecl can tell one name bound to two structs
+// apart from one struct reached twice.
+func (c resolveCtx) recordRef(name, dir string) {
 	if _, seen := c.st.refSites[name]; !seen {
 		c.st.refSites[name] = pkgFile{file: c.file, path: c.path}
+		c.st.refDirs[name] = dir
 	}
 }
 
@@ -297,7 +306,7 @@ func (a *ProjectAnalyzer) resolveQualified(leaf models.TypeShape, c resolveCtx) 
 		if r, isMarshaler := a.structMarshalerLeaf(q.typeName, c.in(q.file, q.filePath), identityMode); isMarshaler {
 			return r
 		}
-		c.recordRef(leaf.Name)
+		c.recordRef(leaf.Name, filepath.Dir(q.filePath))
 		return models.TypeShape{Kind: models.ShapeRef, Name: leaf.Name}
 	}
 	if b, ok := knownUnderlyingBuiltins[leaf.Name]; ok {
@@ -476,16 +485,17 @@ func fileBuildConstraint(f *ast.File) constraint.Expr {
 
 // resolveLocal resolves a named type declared in c's package (the field's
 // own, or the package inModuleTypeSite found). A struct (or a chain ending at
-// one) is a ref; a name already open, or one past the depth cap, is cut; in
-// identity mode a non-param Marshaler type is a Marshaler leaf
-// (marshalerLeaf); anything else resolves through its declarations.
+// one) is a ref, recorded with the directory of the struct the chain reaches,
+// which may be another package's; a name already open, or one past the depth
+// cap, is cut; in identity mode a non-param Marshaler type is a Marshaler
+// leaf (marshalerLeaf); anything else resolves through its declarations.
 func (a *ProjectAnalyzer) resolveLocal(leaf models.TypeShape, c resolveCtx, mode resolveMode) models.TypeShape {
 	name := leaf.Name
-	if _, _, _, _, ok := a.resolveTypeSpecChain(c.file, c.path, name, 0); ok {
+	if _, _, _, structPath, ok := a.resolveTypeSpecChain(c.file, c.path, name, 0); ok {
 		if r, isMarshaler := a.structMarshalerLeaf(name, c, mode); isMarshaler {
 			return r
 		}
-		c.recordRef(name)
+		c.recordRef(name, filepath.Dir(structPath))
 		return models.TypeShape{Kind: models.ShapeRef, Name: name}
 	}
 	if why := c.st.cut(c.typeKey(name)); why != fallbackNone {
@@ -566,32 +576,35 @@ func (a *ProjectAnalyzer) resolveDecls(name string, decls []typeDecl, c resolveC
 
 // resolveEachDecl resolves each declaration of name with ref sites of its
 // own, then folds them into c's, first wins. clashed reports a ref name two
-// declarations recorded from different directories: one short name, two
-// structs. A field has a single leaf path, so only sibling declarations can
-// clash, and each clash is seen by the innermost type whose declarations
-// diverge.
+// declarations recorded with different declaring directories: one name, two
+// types, whether reached through two qualifiers (dw.Items, lx.Items) or one
+// qualifier imported from two packages. A field has a single leaf path, so
+// only sibling declarations can clash, and each clash is seen by the
+// innermost type whose declarations diverge.
 func (a *ProjectAnalyzer) resolveEachDecl(name string, decls []typeDecl, c resolveCtx, mode resolveMode) (results []models.TypeShape, clashed bool) {
-	outer := c.st.refSites
-	defer func() { c.st.refSites = outer }()
+	outerSites, outerDirs := c.st.refSites, c.st.refDirs
+	defer func() { c.st.refSites, c.st.refDirs = outerSites, outerDirs }()
 	results = make([]models.TypeShape, 0, len(decls))
 	for _, d := range decls {
-		c.st.refSites = map[string]pkgFile{}
+		c.st.refSites, c.st.refDirs = map[string]pkgFile{}, map[string]string{}
 		results = append(results, a.resolveDecl(name, d, c, mode))
-		clashed = foldRefSites(outer, c.st.refSites) || clashed
+		clashed = foldRefSites(outerSites, outerDirs, c.st.refSites, c.st.refDirs) || clashed
 	}
 	return results, clashed
 }
 
-// foldRefSites adds from's ref sites missing from into, reporting whether a
-// name both hold was recorded in different directories.
-func foldRefSites(into, from map[string]pkgFile) (clashed bool) {
-	for name, site := range from {
-		prev, ok := into[name]
+// foldRefSites adds the ref sites and declaring directories one declaration
+// recorded (sites, dirs) that intoSites and intoDirs miss, reporting whether
+// a name both hold has different declaring directories. recordRef writes
+// both maps together, so they share their keys.
+func foldRefSites(intoSites map[string]pkgFile, intoDirs map[string]string, sites map[string]pkgFile, dirs map[string]string) (clashed bool) {
+	for name, dir := range dirs {
+		prev, ok := intoDirs[name]
 		if !ok {
-			into[name] = site
+			intoSites[name], intoDirs[name] = sites[name], dir
 			continue
 		}
-		clashed = clashed || filepath.Dir(prev.path) != filepath.Dir(site.path)
+		clashed = clashed || prev != dir
 	}
 	return clashed
 }
