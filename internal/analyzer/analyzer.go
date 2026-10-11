@@ -98,6 +98,7 @@ const (
 
 	// Special tag values
 	jsonSkipValue      = "-"
+	jsonStringOption   = "string"
 	boolTrueString     = "true"
 	constraintRequired = "required"
 )
@@ -4174,6 +4175,7 @@ func (a *ProjectAnalyzer) parseFieldTags(fieldInfo *models.FieldInfo, tag *ast.B
 	tags := a.parseStructTags(tagValue)
 
 	fieldInfo.JSONName = tags.jsonName
+	fieldInfo.JSONString = tags.jsonString
 	fieldInfo.ParamType = tags.paramType
 	fieldInfo.ParamName = tags.paramName
 	fieldInfo.Description = tags.description
@@ -4262,6 +4264,7 @@ func (a *ProjectAnalyzer) typeShape(expr ast.Expr) models.TypeShape {
 // parsedTags holds the extracted information from struct field tags
 type parsedTags struct {
 	jsonName      string
+	jsonString    bool
 	paramType     string
 	paramName     string
 	description   string
@@ -4292,6 +4295,17 @@ func (a *ProjectAnalyzer) parseJSONTagName(jsonTag string) string {
 	}
 }
 
+// jsonTagHasStringOption reports whether a json tag carries the ",string"
+// option (#115): an element after the name equal to "string", matched exactly
+// and case-sensitively, as both encoding/json engines match it. Neither trims,
+// so `json:"a, string"` does not carry it, and the name never counts:
+// `json:"string"` names the field "string". Whether the option takes effect
+// depends on the field's type, which the generator decides.
+func jsonTagHasStringOption(jsonTag string) bool {
+	_, opts, _ := strings.Cut(jsonTag, ",")
+	return slices.Contains(strings.Split(opts, ","), jsonStringOption)
+}
+
 // parseParameterTags extracts parameter type and name from param/query/header tags
 // Precedence: header > query > param (last one wins if multiple are present)
 // Returns paramType ("path", "query", "header") and paramName
@@ -4318,7 +4332,7 @@ func (a *ProjectAnalyzer) parseParameterTags(tag string) (paramType, paramName s
 }
 
 // parseStructTags extracts relevant information from struct field tags
-// Returns a parsedTags struct containing JSONName, ParamType, ParamName, Description, Example, and RawValidation
+// Returns a parsedTags struct containing JSONName, JSONString, ParamType, ParamName, Description, Example, and RawValidation
 func (a *ProjectAnalyzer) parseStructTags(tag string) parsedTags {
 	if tag == "" {
 		return parsedTags{}
@@ -4329,6 +4343,7 @@ func (a *ProjectAnalyzer) parseStructTags(tag string) parsedTags {
 	// Parse json tag: `json:"fieldName,omitempty"`
 	if jsonTag := lookupStructTag(tag, tagJSON); jsonTag != "" {
 		result.jsonName = a.parseJSONTagName(jsonTag)
+		result.jsonString = jsonTagHasStringOption(jsonTag)
 	}
 
 	// Parse parameter tags (param/query/header)

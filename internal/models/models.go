@@ -268,6 +268,7 @@ type FieldInfo struct {
 	// has NO string-parsing fallback.
 	Shape         TypeShape
 	JSONName      string            // Parsed from `json:"name"` tag
+	JSONString    bool              // The json tag carries the ",string" option (`json:"id,string"`)
 	ParamType     string            // "path", "query", "header", or "" for body fields
 	ParamName     string            // Parsed from `param:"name"`, `query:"name"`, or `header:"name"` tags
 	Required      bool              // Parsed from `validate:"required"` tag

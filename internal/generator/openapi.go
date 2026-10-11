@@ -1525,8 +1525,33 @@ func (g *OpenAPIGenerator) typeInfoToSchema(typeInfo *models.TypeInfo) *OpenAPIS
 // (refProperty) returns early without ever reaching setTypeAndFormat.
 func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPIProperty {
 	prop := g.buildFieldProperty(field)
-	applyExample(prop, field.Example)
+	applyExample(prop, quotedScalarExample(field))
 	return prop
+}
+
+// quotedScalarExample returns the example text for applyExample: the field's
+// own, except on a json ",string" scalar (#115). Its property is a string, but
+// encoding/json decodes the quoted text as the Go scalar, so the example is
+// kept only when the field without the option keeps it (coerced against the
+// unquoted property: type, int32 range, uint floor, validate bounds), and
+// then as the coerced value's text ("+05" becomes "5", "t" becomes "true"),
+// which encoding/json reads back. It only filters; applyExample still
+// coerces and stamps the example, once.
+func quotedScalarExample(field *models.FieldInfo) string {
+	if !field.JSONString || field.Example == "" {
+		return field.Example
+	}
+	scalar := &OpenAPIProperty{}
+	setTypeAndFormat(scalar, field.ResolvedShape())
+	if !isQuotedScalar(field, scalar) {
+		return field.Example
+	}
+	applyValidationConstraints(scalar, field)
+	v := coerceExample(field.Example, scalar)
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprint(v)
 }
 
 // buildFieldProperty converts a FieldInfo to an OpenAPI property, without
@@ -1545,10 +1570,17 @@ func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIP
 	prop := &OpenAPIProperty{Description: field.Description}
 	setTypeAndFormat(prop, resolved)
 
-	// Apply the field's validate-tag constraints: collection/scalar rules onto
-	// prop (incl. minItems/maxItems for slices), element-scope (dive) rules onto
-	// the array's items.
-	applyValidationConstraints(prop, field)
+	if isQuotedScalar(field, prop) {
+		// json ",string": a fresh string property, so the scalar's format and
+		// the uint minimum: 0 pre-stamp go with the discarded one, and no
+		// validate keyword applies (#115, as for a text leaf, #111).
+		prop = &OpenAPIProperty{Type: typeString, Description: field.Description}
+	} else {
+		// Apply the field's validate-tag constraints: collection/scalar rules
+		// onto prop (incl. minItems/maxItems for slices), element-scope (dive)
+		// rules onto the array's items.
+		applyValidationConstraints(prop, field)
+	}
 
 	// JSON null only for a pointer to a scalar / well-known type: never to a
 	// slice or map (out of scope), and never on a typeless ({}) schema, where

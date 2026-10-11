@@ -1,0 +1,216 @@
+openapi: 3.0.1
+info:
+  title: Json_string_option API
+  version: 1.0.0
+  description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
+paths:
+  /accounts:
+    post:
+      operationId: jsonstringoptionCreateAccount
+      summary: POST /accounts
+      tags:
+        - accounts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Account'
+      responses:
+        "201":
+          description: Resource created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Account'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /accounts/{id}:
+    get:
+      operationId: jsonstringoptionGetAccount
+      summary: GET /accounts/{id}
+      tags:
+        - accounts
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Account'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Account:
+      type: object
+      properties:
+        active:
+          type: string
+          example: "true"
+        amount:
+          type: string
+        balance:
+          type: string
+        deep:
+          type: integer
+          format: int64
+          nullable: true
+        extras: {}
+        hold:
+          type: string
+          nullable: true
+        id:
+          type: string
+          description: account id
+          example: "5"
+        level:
+          type: string
+        limit:
+          type: string
+          nullable: true
+        name:
+          type: string
+          minLength: 1
+        plain:
+          type: integer
+          format: int64
+          minimum: 1
+        prio:
+          type: string
+        priority:
+          type: string
+        rate:
+          type: string
+          example: "2.5"
+        ref:
+          type: integer
+          format: int64
+          nullable: true
+        rev:
+          type: string
+        seq:
+          type: string
+        status: {}
+        tags:
+          type: array
+          items:
+            type: integer
+            format: int64
+          minItems: 1
+        timeout:
+          type: string
+        wait:
+          type: string
+          nullable: true
+      required:
+        - id
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code (e.g. BAD_REQUEST, NOT_FOUND, INTERNAL_ERROR, or a custom business code)
+            details:
+              type: object
+              properties:
+                validationErrors:
+                  type: array
+                  description: Per-field validation failures (400 validation errors)
+                  items:
+                    type: object
+                    properties:
+                      field:
+                        type: string
+                        description: Field that failed validation
+                      message:
+                        type: string
+                        description: Violated validation rule
+                      value:
+                        description: Submitted value (any type)
+                  maxItems: 100
+              description: Contextual error payload, emitted in development environments only
+            message:
+              type: string
+              description: Human-readable error message
+          description: Error details
+        meta:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+              description: RFC3339 response timestamp
+            traceId:
+              type: string
+              description: W3C trace identifier for the request
+      required:
+        - error
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+      description: Tenant identifier. Enforced only when the service runs with multitenancy enabled and a header-based tenant resolver; a missing or invalid tenant yields HTTP 400. Deployments resolving the tenant from the subdomain or URL path do not read this header.
+security:
+  - TenantID: []
