@@ -315,7 +315,8 @@ func payloadRows() []payloadRow {
 		{result: "server.Result[[]struct{ A int }]", nilResp: true},
 		{result: "server.Result[map[string]func()]", nilResp: true},
 		{result: "server.Result[map[string]chan int]", nilResp: true},
-		{result: "server.Result[Page[User]]", nilResp: true},
+		// Issue 138: an Instantiation keeps the nil response and warns.
+		{result: "server.Result[Page[User]]", nilResp: true, warn: fmt.Sprintf(genericPayloadWarning, "Page[User]", "Page[User]")},
 		// U3, resolved by #120: a written **T root resolves exactly like *T
 		// (more rows in multi_pointer_payload_test.go).
 		{result: "server.Result[**int64]", res: "**int64"},
@@ -702,7 +703,9 @@ func e() (Pair[A, B], error)                         { return }
 	f, err := parser.ParseFile(token.NewFileSet(), "mod.go", src, 0)
 	require.NoError(t, err)
 	aliases := map[string]struct{}{"srv": {}, frameworkPkgServer: {}}
-	want := []string{"map[string]Tier", "[]uintptr", "", "*Cents", "A"}
+	// A bare generic is named in full (issue 138), never by its first type
+	// argument.
+	want := []string{"map[string]Tier", "[]uintptr", "", "*Cents", "Pair[A, B]"}
 	an := New("")
 	for i, decl := range f.Decls[1:] {
 		fn := decl.(*ast.FuncDecl)
@@ -711,5 +714,4 @@ func e() (Pair[A, B], error)                         { return }
 	}
 	_, written := an.extractResponseType(nil, "mod", aliases)
 	assert.Empty(t, written)
-	assert.Empty(t, firstTypeArg(&ast.IndexListExpr{}))
 }

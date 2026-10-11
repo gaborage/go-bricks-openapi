@@ -1538,25 +1538,33 @@ func receiverVarName(recv *ast.FieldList) string {
 //
 // requestType is the request parameter's type as written (`*string`,
 // `[]Item`), or "" when the handler takes no request. It is set even when
-// request is nil — a type-literal parameter ([]T, map, interface{}) resolves
-// to no TypeInfo — so populateRequestType can still screen it.
+// request is nil — a type-literal parameter ([]T, map, interface{}) or a
+// generic instantiation (Box[A]) resolves to no TypeInfo — so
+// populateRequestType can still screen it. requestExpr is that type's
+// expression, nil when there is no request.
+//
+// responseInst is the Instantiation, as written, a payload that resolved to
+// no TypeInfo holds (Result[Page[A]]), or "": the payload warning names it.
 type handlerAnalysis struct {
 	request       *models.TypeInfo
 	requestType   string
+	requestExpr   ast.Expr
 	response      *models.TypeInfo
 	responseType  string // the payload type as written, for payload warnings
+	responseInst  string
 	successStatus int
 	errorStatuses []int
 }
 
 // found reports whether the analysis came from a matched handler declaration.
-// A declaration carrying neither a request parameter nor a response Shape is
-// not treated as the handler, so the search continues into the rest of the
-// package. A request-less handler whose payload is carried (a map, a nested
-// slice or a pointer to a container included) is found, so its success and
+// A declaration carrying neither a request parameter nor a response Shape nor
+// a generic payload is not treated as the handler, so the search continues
+// into the rest of the package. A request-less handler whose payload is
+// carried (a map, a nested slice or a pointer to a container included), or
+// holds an Instantiation (Result[Page[A]]), is found, so its success and
 // error statuses are kept.
 func (h *handlerAnalysis) found() bool {
-	return h.request != nil || h.requestType != "" || h.response != nil
+	return h.request != nil || h.requestType != "" || h.response != nil || h.responseInst != ""
 }
 
 // extractHandlerInfo extracts the handler name and its analysis from a route
@@ -2460,13 +2468,28 @@ func (a *ProjectAnalyzer) compositePayloadTypeInfo(expr ast.Expr, packageName st
 }
 
 // hasUnknownLeaf reports whether any emitted leaf of s is unmodelled
-// (ShapeUnknown, or the zero Kind).
+// (ShapeUnknown, the zero Kind, or an Instantiation, which is not resolved:
+// #114).
 func hasUnknownLeaf(s *models.TypeShape) bool {
 	found := false
 	walkResolvedLeaves(s, func(leaf *models.TypeShape) {
-		found = found || leaf.Kind == models.ShapeUnknown || leaf.Kind == ""
+		found = found || leaf.Kind == models.ShapeUnknown || leaf.Kind == "" || leaf.Kind == models.ShapeInstantiation
 	})
 	return found
+}
+
+// firstInstantiation returns the Instantiation, as written, that s holds on
+// its element path (through pointer, slice, array and map elements, never a
+// map key), or "". The outermost one wins: an Instantiation's arguments are
+// never walked.
+func firstInstantiation(s *models.TypeShape) string {
+	written := ""
+	walkResolvedLeaves(s, func(leaf *models.TypeShape) {
+		if leaf.Kind == models.ShapeInstantiation && leaf.Inst != nil {
+			written = leaf.Inst.Written
+		}
+	})
+	return written
 }
 
 // scalarPayloadTypeInfo resolves a non-slice payload (server.Result[Item],
@@ -2657,34 +2680,45 @@ func (a *ProjectAnalyzer) handleSelectorExprType(t *ast.SelectorExpr, serverAlia
 }
 
 // extractRequestType extracts the request type from handler parameters: the
-// first non-framework parameter's TypeInfo, plus its type as written. A
-// type-literal parameter that can never be a struct ([]T, [N]T, map,
-// interface{}, func, chan) is the request too, but resolves to a nil TypeInfo
-// — the request-body path has no shape to emit for it — with only its type
-// text returned, so populateRequestType can warn about it. So is a parameter
-// written with two or more pointer levels (**T), screened before
-// typeInfoFromExpr so its pointers are never peeled to resolve **T as T.
-// Returns nil and "" when the handler takes no request.
-func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName string, serverAliases map[string]struct{}) (request *models.TypeInfo, typeText string) {
+// first non-framework parameter's TypeInfo, plus its type as written and its
+// type expression. A type-literal parameter that can never be a struct ([]T,
+// [N]T, map, interface{}, func, chan) is the request too, but resolves to a
+// nil TypeInfo — the request-body path has no shape to emit for it — with
+// only its type text returned, so populateRequestType can warn about it. So
+// is a parameter written with two or more pointer levels (**T), screened
+// before typeInfoFromExpr so its pointers are never peeled to resolve **T as
+// T, and a generic instantiation (Box[A], *Box[A]), which is not resolved
+// (#114). Returns nil, "" and nil when the handler takes no request.
+func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName string, serverAliases map[string]struct{}) (request *models.TypeInfo, typeText string, typeExpr ast.Expr) {
 	if params == nil {
-		return nil, ""
+		return nil, "", nil
 	}
 
 	// Return the first parameter that is not a framework type
 	// (HandlerContext can appear in first or second position)
 	for _, p := range params.List {
-		if isMultiPointer(p.Type) {
-			return nil, types.ExprString(p.Type)
+		if isMultiPointer(p.Type) || isInstantiation(p.Type) {
+			return nil, types.ExprString(p.Type), p.Type
 		}
 		if ti := a.typeInfoFromExpr(p.Type, packageName, serverAliases); ti != nil {
-			return ti, types.ExprString(p.Type)
+			return ti, types.ExprString(p.Type), p.Type
 		}
 		if isNonStructTypeLiteral(p.Type) {
-			return nil, types.ExprString(p.Type)
+			return nil, types.ExprString(p.Type), p.Type
 		}
 	}
 
-	return nil, ""
+	return nil, "", nil
+}
+
+// isInstantiation reports whether expr, one pointer level shed, is a generic
+// type written with its type arguments (G[A], G[A, B], q.G[A]). No framework
+// parameter is generic, so as a handler parameter it is the request.
+func isInstantiation(expr ast.Expr) bool {
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = star.X
+	}
+	return unwrapGenericType(expr) != expr
 }
 
 // isNonStructTypeLiteral reports whether expr, one pointer level shed, is a
@@ -2718,17 +2752,19 @@ func isMultiPointer(expr ast.Expr) bool {
 // extractResponseType extracts the response payload from a handler's first
 // result (the second is IAPIError or error), or nil if there is none.
 //
-// A generic result keeps typeInfoFromExpr's wrapper handling: server.Result[T] /
-// ResultWithMeta[T] unwraps to T, any other generic is not a payload. The
-// server.NoContentResult marker keeps its bodyless-204 meaning. Any other first
-// result is a bare payload of type T, which go-bricks sends exactly as it
-// sends server.Result[T], so it takes the same payload path (payloadTypeInfo)
-// and is documented, warned about and classified alike. That routing lives
-// here rather than in typeInfoFromExpr, which request extraction shares: a
-// request type must keep resolving as it does today.
+// The server.NoContentResult marker keeps its bodyless-204 meaning. Any other
+// first result's payload (payloadExpr: the T of server.Result[T] /
+// ResultWithMeta[T], or the bare result itself, which go-bricks sends exactly
+// as it sends server.Result[T]) takes the payload path (payloadTypeInfo) and
+// is documented, warned about and classified alike. A payload holding a
+// generic instantiation (Page[A], []Page[A], a bare Pair[K, V]) resolves to
+// nil there (#114). That routing lives here rather than in typeInfoFromExpr,
+// which request extraction shares: a request type must keep resolving as it
+// does today.
 //
 // written is the payload type as written, for payload warnings: the wrapper's
-// type argument, the bare result itself, or "" for NoContentResult.
+// type argument, the bare result itself (a bare generic in full), or "" for
+// NoContentResult.
 func (a *ProjectAnalyzer) extractResponseType(
 	results *ast.FieldList, packageName string, serverAliases map[string]struct{},
 ) (ti *models.TypeInfo, written string) {
@@ -2737,25 +2773,21 @@ func (a *ProjectAnalyzer) extractResponseType(
 	}
 
 	first := results.List[0].Type
-	switch e := first.(type) {
-	case *ast.IndexExpr:
-		return a.typeInfoFromExpr(first, packageName, serverAliases), types.ExprString(e.Index)
-	case *ast.IndexListExpr:
-		return a.typeInfoFromExpr(first, packageName, serverAliases), firstTypeArg(e)
-	}
 	if a.isNoContentResultType(first, serverAliases) {
 		return a.typeInfoFromExpr(first, packageName, serverAliases), ""
 	}
-	return a.payloadTypeInfo(first, packageName, serverAliases), types.ExprString(first)
+	payload := a.payloadExpr(first, serverAliases)
+	return a.payloadTypeInfo(payload, packageName, serverAliases), types.ExprString(payload)
 }
 
-// firstTypeArg renders a multi-parameter generic's first type argument, the
-// one typeInfoFromExpr treats as the payload.
-func firstTypeArg(e *ast.IndexListExpr) string {
-	if len(e.Indices) == 0 {
-		return ""
+// payloadExpr returns the payload type of a handler's first result: the type
+// argument of a result wrapper (server.Result[T], ResultWithMeta[T]), else
+// the result itself.
+func (a *ProjectAnalyzer) payloadExpr(first ast.Expr, serverAliases map[string]struct{}) ast.Expr {
+	if idx, ok := first.(*ast.IndexExpr); ok && a.isResultWrapper(idx.X, serverAliases) {
+		return idx.Index
 	}
-	return types.ExprString(e.Indices[0])
+	return first
 }
 
 // findHandlerInFile searches a single AST file for a handler method
@@ -2785,16 +2817,23 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 		serverAliases := a.extractImportAliases(astFile, serverImportPath)
 
 		// Extract types using helpers
-		request, requestType := a.extractRequestType(funcDecl.Type.Params, astFile.Name.Name, serverAliases)
+		request, requestType, requestExpr := a.extractRequestType(funcDecl.Type.Params, astFile.Name.Name, serverAliases)
 		response, responseType := a.extractResponseType(funcDecl.Type.Results, astFile.Name.Name, serverAliases)
-		return handlerAnalysis{
+		h := handlerAnalysis{
 			request:       request,
 			requestType:   requestType,
+			requestExpr:   requestExpr,
 			response:      response,
 			responseType:  responseType,
 			successStatus: a.extractSuccessStatus(funcDecl, serverAliases),
 			errorStatuses: a.inferErrorStatuses(funcDecl, serverAliases),
 		}
+		// Defensive, like warnGenericPayload's check: today a payload holding an
+		// Instantiation never resolves to a TypeInfo.
+		if response == nil {
+			h.responseInst = a.payloadInstantiation(funcDecl.Type.Results, serverAliases)
+		}
+		return h
 	}
 
 	return handlerAnalysis{}
@@ -3199,8 +3238,7 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 ) (handler handlerAnalysis, err error) {
 	// Try current file first
 	if h := a.findHandlerInFile(astFile, receiverType, isPackageFunc, handlerName); h.found() {
-		a.populateRequestType(&h, astFile, filePath)
-		a.populateTypeFields(h.response, h.responseType, astFile, filePath)
+		a.populateHandler(&h, astFile, filePath)
 		return h, nil
 	}
 
@@ -3209,8 +3247,7 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 	if err == nil && files != nil {
 		for path, file := range files {
 			if h := a.findHandlerInFile(file, receiverType, isPackageFunc, handlerName); h.found() {
-				a.populateRequestType(&h, file, path)
-				a.populateTypeFields(h.response, h.responseType, file, path)
+				a.populateHandler(&h, file, path)
 				return h, nil
 			}
 		}
@@ -3219,6 +3256,14 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 	// Handler not found - this is not necessarily an error
 	// Some routes might use inline handlers or external handlers
 	return handlerAnalysis{}, fmt.Errorf("handler %s not found for receiver %q", handlerName, receiverType)
+}
+
+// populateHandler resolves a found handler's request and response in the file
+// declaring it, raising their warnings.
+func (a *ProjectAnalyzer) populateHandler(h *handlerAnalysis, astFile *ast.File, filePath string) {
+	a.populateRequestType(h, astFile, filePath)
+	a.populateTypeFields(h.response, h.responseType, astFile, filePath)
+	a.warnGenericPayload(h)
 }
 
 // nonStructRequestWarning is the one warning a route raises when its request
@@ -3236,7 +3281,10 @@ const nonStructRequestWarning = "request type %s is not a struct: go-bricks bind
 // third-party, undeclared, local named non-struct, type-literal or
 // multi-pointer (**T) request raises exactly one warning — the route
 // documents no requestBody — and is left untyped (no name, no fields), which
-// is what makes doctor count it as an untyped request.
+// is what makes doctor count it as an untyped request. A generic
+// instantiation request, or one declared as one, is left untyped the same
+// way, with the generic request warning instead of F26 unless its generic
+// type is a non-struct (warnNonStructRequest).
 func (a *ProjectAnalyzer) populateRequestType(h *handlerAnalysis, astFile *ast.File, filePath string) {
 	if h.request != nil {
 		if registered := a.registerPayloadType(h.request, astFile, filePath); registered != nil {
@@ -3250,7 +3298,7 @@ func (a *ProjectAnalyzer) populateRequestType(h *handlerAnalysis, astFile *ast.F
 	if h.requestType == "" {
 		return
 	}
-	a.addWarningf(nonStructRequestWarning, h.requestType)
+	a.warnNonStructRequest(h, astFile, filePath)
 	if h.request != nil {
 		h.request.Name = ""
 		h.request.Fields = nil
@@ -4163,7 +4211,8 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 		// Preserve the pre-Shape warning text: the retired string pipeline
 		// rendered an unmodeled embed (a generic instantiation like Base[T],
 		// which is valid Go) as "unknown", and that name reaches the
-		// malformed-struct-tag warning below.
+		// malformed-struct-tag warning below. A json-tagged generic embed's
+		// field is named by its generic type instead (nestedEmbedName).
 		typeName = unknownTypeName
 	}
 
@@ -4179,7 +4228,7 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 		case "":
 			// no explicit name — fall through to promotion
 		default:
-			return []rankedField{{FieldInfo: a.buildFieldInfo(typeName, field, astFile, filePath)}}, false
+			return []rankedField{{FieldInfo: a.buildFieldInfo(nestedEmbedName(field.Type, typeName), field, astFile, filePath)}}, false
 		}
 	}
 
@@ -4317,9 +4366,10 @@ func isSequence(kind models.ShapeKind) bool {
 }
 
 // typeShape decodes an AST type expression into its structural Shape. Total:
-// unmodeled nodes (chan, func, struct literals, generics) decode as
-// ShapeUnknown. A fixed-size array decodes as ShapeArray, distinct from a
-// slice (see sequenceKind); its length is not recorded.
+// unmodeled nodes (chan, func, struct literals) decode as ShapeUnknown. A
+// fixed-size array decodes as ShapeArray, distinct from a slice (see
+// sequenceKind); its length is not recorded. A generic instantiation decodes
+// as ShapeInstantiation (instantiationShape).
 func (a *ProjectAnalyzer) typeShape(expr ast.Expr) models.TypeShape {
 	switch t := expr.(type) {
 	case *ast.Ident:
@@ -4348,9 +4398,32 @@ func (a *ProjectAnalyzer) typeShape(expr ast.Expr) models.TypeShape {
 
 	case *ast.InterfaceType:
 		return models.TypeShape{Kind: models.ShapePrimitive, Name: goTypeInterface}
+
+	case *ast.IndexExpr:
+		return a.instantiationShape(t, t.X, []ast.Expr{t.Index})
+
+	case *ast.IndexListExpr:
+		return a.instantiationShape(t, t.X, t.Indices)
 	}
 
 	return models.TypeShape{Kind: models.ShapeUnknown}
+}
+
+// instantiationShape decodes expr, the generic type base written with the
+// type arguments args (G[A], G[A, B], q.G[A]). The base must be a type name,
+// bare or qualified; anything else (a builtin, pkg.sub.G, G[A][B]) is not a
+// valid instantiation and decodes as ShapeUnknown. Name stays empty, so the
+// base never reads as a named type.
+func (a *ProjectAnalyzer) instantiationShape(expr, base ast.Expr, args []ast.Expr) models.TypeShape {
+	b := a.typeShape(base)
+	if b.Kind != models.ShapeNamed {
+		return models.TypeShape{Kind: models.ShapeUnknown}
+	}
+	inst := &models.Instantiation{Base: b.Name, Args: make([]models.TypeShape, len(args)), Written: types.ExprString(expr)}
+	for i, arg := range args {
+		inst.Args[i] = a.typeShape(arg)
+	}
+	return models.TypeShape{Kind: models.ShapeInstantiation, Inst: inst}
 }
 
 // parsedTags holds the extracted information from struct field tags

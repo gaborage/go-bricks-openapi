@@ -755,8 +755,12 @@ func TestUnresolvableFieldsWarn(t *testing.T) {
 			assert.Contains(t, w[0], "resolves to no schema", name)
 		}
 	}
-	for _, name := range []string{"Ch", "Anon", "Page"} {
+	for _, name := range []string{"Ch", "Anon"} {
 		assert.Empty(t, fieldWarnings(a, name), name)
+	}
+	// Issue 138: an Instantiation is not resolved, and now says so.
+	if w := fieldWarnings(a, "Page"); assert.Len(t, w, 1) {
+		assert.True(t, strings.HasSuffix(w[0], genericFieldTail("Page[int]", "Page[int]")), w[0])
 	}
 	builtins := map[string][2]string{
 		"Err": {frameworkTypeError, frameworkTypeError}, "C64": {goTypeComplex64, goTypeComplex64},

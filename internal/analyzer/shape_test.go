@@ -33,6 +33,11 @@ func renderShape(s models.TypeShape) string {
 		return "cycle:" + s.Name
 	case models.ShapeText:
 		return "text:" + s.Name
+	case models.ShapeInstantiation:
+		if s.Inst == nil {
+			return "inst:?"
+		}
+		return "inst:" + s.Inst.Written
 	default:
 		return "unknown"
 	}

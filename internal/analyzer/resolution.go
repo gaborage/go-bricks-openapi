@@ -69,6 +69,7 @@ const (
 	fallbackDeclsDisagree
 	fallbackUntypedBuiltin
 	fallbackMarshalerPromoted
+	fallbackGeneric
 )
 
 // fieldFallback is the first fallback a field's resolution met.
@@ -76,12 +77,16 @@ type fieldFallback struct {
 	kind     fallbackKind
 	typeName string // the named type where resolution stopped
 	// detail is the Marshaler method (fallbackMarshaler), the qualified
-	// underlying (fallbackDefinedOverQualified), or the builtin
-	// (fallbackUntypedBuiltin).
+	// underlying (fallbackDefinedOverQualified), the builtin
+	// (fallbackUntypedBuiltin), or the generic type of the Instantiation, as
+	// written (fallbackGeneric, whose typeName is the whole Instantiation).
 	detail string
 	// via is the embedded field a promoted Marshaler method comes through
 	// (fallbackMarshalerPromoted), as written.
 	via string
+	// site is the file the Instantiation was written in (fallbackGeneric),
+	// where its generic type is looked up.
+	site *pkgFile
 }
 
 // resolveState is the state shared by one field's resolution.
@@ -262,10 +267,20 @@ func (a *ProjectAnalyzer) resolveShape(s models.TypeShape, c resolveCtx) models.
 		return a.resolveLocal(s, c, identityMode)
 	case models.ShapePrimitive:
 		noteUntypedBuiltin(s.Name, c)
+	case models.ShapeInstantiation:
+		noteInstantiation(s.Inst, c)
 	default:
-		// ShapeUnknown: generics, anonymous structs, chan, func.
+		// ShapeUnknown: anonymous structs, chan, func.
 	}
 	return s
+}
+
+// noteInstantiation notes an Instantiation, which is not resolved (#114),
+// with the file it was written in.
+func noteInstantiation(inst *models.Instantiation, c resolveCtx) {
+	if inst != nil {
+		c.st.note(fieldFallback{kind: fallbackGeneric, typeName: inst.Written, detail: inst.Base, site: &pkgFile{file: c.file, path: c.path}})
+	}
 }
 
 // resolveElem resolves a container element into a freshly allocated node.
@@ -709,6 +724,8 @@ func mergeSameKind(x, y models.TypeShape) (models.TypeShape, bool) {
 		return mergeElems(x, y)
 	case models.ShapePrimitive:
 		return x, sameBuiltin(x.Name, y.Name)
+	case models.ShapeInstantiation:
+		return x, x.Inst != nil && y.Inst != nil && x.Inst.Written == y.Inst.Written
 	default:
 		return x, x.Name == y.Name
 	}
@@ -848,6 +865,8 @@ func (a *ProjectAnalyzer) warnFieldFallback(f *models.FieldInfo, site *fieldSite
 		a.addWarningf(declsDisagreeFieldWarning, append(head, fb.typeName)...)
 	case fallbackMarshalerPromoted:
 		a.addWarningf(marshalerPromotedFieldWarning, append(head, fb.typeName, fb.detail, fb.via)...)
+	case fallbackGeneric:
+		a.addWarningf(genericFieldWarning, append(head, fb.typeName)...)
 	default:
 		a.addWarningf(untypedBuiltinFieldWarning, append(head, fb.detail)...)
 	}
