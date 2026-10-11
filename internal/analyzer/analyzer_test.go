@@ -3984,7 +3984,7 @@ type Item struct {
 // (server.Result[types.Item]) resolves to the IMPORTED types.Item even when
 // the handler's OWN package coincidentally declares a local type of the same
 // bare name ("Item"). Before the registerType guard, an unqualified
-// findStructDefinition("Item") search over the handler's own package ran
+// struct lookup for "Item" over the handler's own package ran
 // FIRST (name carries no dot) and would find — and wrongly register — the
 // LOCAL Item, since the local search never consulted the import alias that
 // made the reference genuinely cross-package.
