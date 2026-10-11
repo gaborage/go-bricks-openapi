@@ -1,0 +1,34 @@
+---
+status: proposed
+date: 2026-10-10
+---
+
+Status flips to accepted when #114's substitution lands.
+
+# Each distinct struct Instantiation gets its own component, named with `-`
+
+An Instantiation (see `CONTEXT.md`) of a generic struct will be documented by substituting its type arguments into the generic declaration, and the result will be its own component, `$ref`'d from every position — field, pointer, slice item, map value, payload and request body. Identical type arguments share one component: two `Page[Address]` fields reference one, while `Page[Address]` and `Page[User]` get two. The component name is the base name and each type argument joined by `-`, applied recursively — `Page-Address`, `Pair-string-int`, `Page-Box-Address` — because a Go identifier cannot contain `-`, so the name never collides with a real type, and `-` is valid in a component key (`^[a-zA-Z0-9.\-_]+$`). Decided while triaging #114.
+
+- A composite type argument is spelled the way Go writes it: `Box[*Address]` is `Box-ptr-Address`, `Box[[]Address]` is `Box-slice-Address`, `Box[map[string]int]` is `Box-map-string-int`. A fixed-size array is spelled without its length, which is not recorded (see **Shape** in `CONTEXT.md`) and which the schema does not carry, so every `[N]int` argument gives `Box-array-int` and one shared component.
+- A type argument that has its own component uses that component's name, including the package qualifier when it has one (`BMoney`). When two packages' generic bases share a name (two `Page`s), the base name takes the existing package qualification, exactly as a same-named non-generic struct's would.
+- A named type argument with no component of its own is spelled as its package name and type name joined by `.`: an out-of-module type, known or not, as `Box-time.Time`, `Box-uuid.UUID` or `Box-decimal.Decimal`, and an in-module type with no component (a named non-struct such as `type Cents int64`, or a struct Marshaler type) as `Box-billing.Cents`. The package name comes from the import path, never from the file's import alias: `import t "time"` still gives `Box-time.Time`. An unresolvable argument such as `decimal.Decimal` still gets its component; only the substituted fields of that type fall back, exactly as a plain field of that type does.
+- A type argument is identified by its import path and type name, not by how the file spells it. With `import t "time"`, `Box[t.Time]` and `Box[time.Time]` are the same Instantiation: one component, one schema. Inside an Instantiation a well-known argument is therefore resolved through its import path, so the substituted `V` of `Box[t.Time]` is documented as a `time.Time` field is. This lifts the aliased-import limitation (README, Known limitations) for type arguments only: a plain `t.Time` field keeps it and is still an untyped object with a warning.
+- No Instantiation name collides with another kind of component: every Instantiation name contains `-`, and no other component name does. Every other component is named after a Go type, with the package prefix and number the collision handling may add (`BMoney`, `BMoney2`), or is one of the fixed standard schemas (`ErrorResponse`, `JOSEErrorEnvelope`, `RawErrorResponse`, `SuccessResponse`), and neither a Go identifier nor a package name can contain `-`. The `.` does a different job, inside Instantiation names: it keeps a no-component argument apart from an argument that has a component of the same short name. A `.` is valid in a component key.
+- These spellings keep a no-component argument's name independent of discovery order. Spelled `Box-Time`, `Box[time.Time]` would take the name of `Box[Time]` for an in-module struct `Time`, and the collision handling would give one of the two a prefixed or numbered name depending on which was discovered first. Component names are part of the generated output's shape, a declared SemVer surface (`RELEASING.md`), so they must not move with discovery order. The exception is two distinct arguments that share both package name and type name, such as two in-module `models` packages' `models.Cents`, or `google/uuid`'s and `gofrs/uuid`'s `uuid.UUID`: they fall back to the existing collision handling, as two same-named generic bases do, so which gets which name depends on discovery order. The import path cannot be spelled into the name instead, because a component key must match `^[a-zA-Z0-9.\-_]+$` and an import path can contain `/`.
+- `any` (or `interface{}`, the same type) as a type argument is spelled `any` and documented as `{}` with no warning, like an ordinary `any` field: `Box[any]` is `Box-any`, and its `V` is `{}`.
+- An anonymous struct type argument (`Box[struct{ X int }]`) has no name to spell, so that Instantiation is written inline, with no component.
+- An alias of an Instantiation (`type X = G[A]`) is the same Go type, so it documents exactly as `G[A]` does and has no component of its own. A defined type over one (`type X G[A]`) gets its own component, named `X`, with the substituted fields.
+- A generic named slice, map or pointer is not a struct and stays inline, as ADR 0002 says for every named composite: `List[Address]` is an array of `$ref Address`, and `List[string]` an array of `string`.
+
+## Considered options
+
+- Inline every Instantiation. There is no naming question, but the same schema is duplicated at every position, and generated clients get no shared type for it.
+- `_` as the separator (`Page_Address`), the triage's first default. A Go identifier may contain `_`, so it can collide with a real type named `Page_Address`.
+- The `Of` form (`PageOfAddress`). It collides easily with a real type name.
+- Dropping the package name from a type argument with no component (`Box-Time`, `Box-Cents`) and letting the existing collision handling (a package prefix, then a number) separate names that clash. Which name each Instantiation gets would then depend on discovery order.
+- Keeping the aliased-import limitation for type arguments. The package name already comes from the import path, so `Box[t.Time]` and `Box[time.Time]` would share the name `Box-time.Time` but not the schema: `V` would be an untyped object with a warning in one and `{type: string, format: date-time}` in the other, and which one the shared component carried would depend on discovery order.
+- Documenting an anonymous struct type argument as an unresolved type, `{type: object}` with a warning, instead of inlining that Instantiation. It warns about a type the tool can read in full.
+
+## Consequences
+
+- This is hard to reverse: the generated output's shape is a declared SemVer surface (`RELEASING.md`). Component names are `$ref` targets and become generated client type names, so renaming them moves both. Code generators commonly drop the `-` (`PageAddress`).

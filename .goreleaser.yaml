@@ -55,7 +55,9 @@ checksum:
 # to `goreleaser release --release-notes=...` by release.yml. With a notes file the
 # changelog pipe uses it verbatim and never generates its own. Do NOT set
 # `changelog.disable: true`: that skips the whole pipe, notes file included, and
-# publishes an empty release body (v0.3.0-v0.4.2 shipped that way).
+# publishes an empty release body (v0.2.0, v0.3.0, v0.3.1 and v0.4.2 were
+# published that way, and only v0.2.0 is still empty: the other three bodies
+# were filled in by hand later; v0.4.0 and v0.4.1 never got a Release).
 
 release:
   github:

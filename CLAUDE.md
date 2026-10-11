@@ -93,10 +93,10 @@ Token rules:
 - There is zero `t.Parallel()` in `internal/` or `cmd/`, deliberately.
 - `internal/testutil`'s stdout-capture helper swaps the global `os.Stdout`; its doc says not to call it from parallel tests.
 - The Windows leg forgives nothing by design — a pattern-based failure allowlist was deleted on purpose; don't reintroduce one.
-- `go.mod` declares `go 1.25.0` with no `toolchain` directive while CI's setup-go steps pin a newer Go.
+- > **SUPERSEDED (2026-10-10).** `go.mod` used to declare `go 1.25.0`. It now declares `go 1.26.0`, still with no `toolchain` directive, because `github.com/go-openapi/jsonpointer` v1.0.1 (an indirect dependency, imported by kin-openapi; `go.mod` selects v1.0.1 since the PR 62 dependency update, while kin-openapi v0.149.0 itself asks only for v0.22.5) declares `go 1.26.0`. CI's setup-go steps still pin a newer Go. `minGoVersion` in `internal/commands/doctor.go` still says `go1.25`, and its comment, "single-sourced to match go.mod (go 1.25) and the README", has been stale since PR 62. `doctor` compares it with `runtime.Version()`, the Go that built the binary, which can no longer be below 1.26, so a shipped binary never fails that check. Bumping it changes doctor behavior, a declared SemVer surface (`RELEASING.md`), so it is a separate code change (tracked in #151), not a docs edit.
 - Every `actions/setup-go` step in `ci.yml` and `release.yml` requests `go-version: '1.27'` with `check-latest: true`. Without `check-latest`, a runner's cached older patch wins: the v0.4.0 release gate ran on go1.26.8 and failed govulncheck on stdlib vulns fixed in later patches.
 - Go 1.27 needs govulncheck ≥ v1.8.0: v1.1.4 (x/tools v0.29.0) panics `unexpected expr: *ast.KeyValueExpr` building SSA for the linux stdlib, which failed the v0.4.1 release gate. `make vuln` runs only in `release.yml`, never in PR CI, and a macOS run analyzes darwin files and passes — check the CI target with an installed binary: `GOOS=linux GOARCH=amd64 govulncheck ./...` (`go run` with `GOOS` set cross-compiles the tool itself and fails with `exec format error`).
-- The 1.25 floor is intentional — don't rely on language features newer than that.
+- > **SUPERSEDED (2026-10-10).** This said the 1.25 floor is intentional. The build floor is now 1.26, set by that dependency's `go` directive rather than chosen. The rule stands: don't rely on language features newer than `go.mod`'s `go` directive.
 
 ## Settled invariants — do not "clean these up"
 
@@ -129,7 +129,7 @@ Token rules:
 
 - `unused` is enabled even though `.golangci.yml` never names it: no `linters.default` key is set, so golangci-lint v2's `standard` set applies on top of the explicit `enable:` list.
 - `gocritic` runs with all five tag groups on (`diagnostic`, `experimental`, `opinionated`, `performance`, `style`), far stricter than its default.
-- `revive` runs at `confidence: 0`, so every rule at any confidence fires.
+- > **SUPERSEDED (2026-10-10).** This said `revive` runs at `confidence: 0`, so every rule at any confidence fires. It doesn't. In golangci-lint v2.14.0, `getConfig` (`pkg/golinters/revive/revive.go`) treats a revive section equal to the zero value as unconfigured, and `.golangci.yml`'s only revive setting, `confidence: 0`, is the zero value; so it uses revive's `Default()` config (`config/config.go` in revive v1.17.0): its 23 default rules at `DefaultConfidence` 0.8, and failures below 0.8 are dropped. Even in a non-empty section, `normalizeConfig` raises a `confidence` of 0 to 0.8. A non-zero `confidence` alone makes the section non-empty, and revive then runs only the rules it lists, none here, unless it also sets `enable-default-rules` or `enable-all-rules`.
 - `lll` is at 215, not the 120 default.
 - Test files are linted, but `gocyclo`, `gosec`, `goconst`, `dupl`, `errcheck`, and `govet` are excluded on `_test.go`.
 - The golangci-lint pin lives in two places that must move together: the `GOLANGCI_VERSION` variable in `Makefile`, and the `golangci-lint-action` `version:` key in `ci.yml`.
@@ -155,6 +155,9 @@ Token rules:
 - A merged-but-untagged Release PR keeps its `autorelease: pending` label and release-please then aborts silently for all future releases (googleapis/release-please#1561).
 - `release-please.yml` carries a guard step that turns that silent abort red.
 - Don't diagnose a deadlock from `gh pr list --label 'autorelease: pending'` alone — it serves a stale search index and returns phantom entries.
+- release-please copies every `#N` in a squash commit message's trailing reference lines, `Refs #N` as well as `Closes #N`, into that commit's CHANGELOG line and the Release PR body, as `closes [#N] [#M] …`. A `#N` in the body's prose is not copied (the v0.4.0 CHANGELOG lines show this).
+- When the Release PR merges, GitHub closes the first issue after each `closes`: merging the v0.4.0 Release PR (PR 77) closed issue 116, which commit `7ff8391` had only marked `Refs`, and it had to be reopened.
+- So in a commit message, give a reference line only to issues it closes, refer to any other issue or PR without the hash (`issue 116`, `PR 129`), and read a Release PR's body for `closes [#N]` before merging it.
 - `make release` requires `VERSION` on the command line (`make release VERSION=v0.3.0`); it rejects it from the environment.
 - `scripts/release.sh` hard-refuses anything but strict pre-1.0 `v0.MINOR.PATCH`.
 - `RELEASING.md` describes a `v*` tag-protection ruleset as required and as the enforcing control — but no such ruleset currently exists.

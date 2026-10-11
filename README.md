@@ -196,9 +196,10 @@ nested Go module, is not.
 
 ## Requirements
 
-- **Go 1.25+** to build/run the tool. (Target projects on GoBricks v0.45.0+
-  require Go 1.26+ to build *themselves*, but the tool only parses their
-  source, so it doesn't inherit that requirement.)
+- **Go 1.26+** to build/run the tool, the minimum one of its dependencies
+  declares. That is unrelated to the Go version a target project needs to
+  build *itself* (Go 1.26+ for GoBricks v0.45.0+): the tool only parses a
+  target's source, so it doesn't inherit that requirement.
 - Targets **GoBricks v0.45.0+** projects — v0.45.0 is the release that hid
   the echo dependency behind go-bricks boundary types — verified through
   **v0.53.0**. `doctor` fails below the floor; `generate` warns and fails

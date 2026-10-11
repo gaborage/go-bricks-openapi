@@ -133,7 +133,11 @@ jobs:
         with:
           version: '~> v2'
           # --release-notes makes the CHANGELOG.md section (release-please-owned) the
-          # GitHub Release body; GoReleaser's own changelog is disabled in .goreleaser.yaml.
+          # GitHub Release body. .goreleaser.yaml must not set changelog.disable: that
+          # skips the changelog pipe that loads the notes file, so the body would be
+          # empty (v0.2.0, v0.3.0, v0.3.1 and v0.4.2 were published that way, and
+          # only v0.2.0 is still empty: the other three bodies were filled in by hand
+          # later; v0.4.0 and v0.4.1 never got a Release).
           args: release --clean --release-notes=${{ steps.notes.outputs.file }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

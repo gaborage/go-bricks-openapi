@@ -19,6 +19,7 @@
    `allowed_signers@main`; GoReleaser `--release-notes`; SLSA kept; clear `autorelease:
    pending`. ✅
 7. **`.goreleaser.yaml`** — `changelog: { disable: true }`. ✅
+   > **SUPERSEDED (2026-10-10).** `changelog.disable` skips the goreleaser pipe that loads `--release-notes`, so releases published empty bodies; removed in #137 — see `.goreleaser.yaml`.
 8. **`Makefile`** — `vuln`, `sec`, `release` targets; pinned `GOVULNCHECK_VERSION` /
    `GOSEC_VERSION`; `release` guard via `$(origin VERSION)`. ✅
 9. **`RELEASING.md`** — rewrite to the go-bricks runbook (keep binaries + SLSA). ✅
