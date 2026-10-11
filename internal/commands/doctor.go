@@ -31,14 +31,16 @@ const (
 	goBricksDep        = "go-bricks"
 	goBricksModulePath = "github.com/gaborage/go-bricks"
 
-	// Version floors, single-sourced to match go.mod (go 1.25) and the README.
-	// minGoVersion is the toolchain floor in Go's own version format (compared
-	// at language/minor granularity so 1.25.x patches and 1.25 RCs all qualify).
+	// Version floors. minGoVersion matches go.mod's go directive (go 1.26) and
+	// the README; that directive is a dependency's minimum (jsonpointer v1.0.1,
+	// pulled in through kin-openapi), not a choice. It is the toolchain floor in
+	// Go's own version format, compared at language/minor granularity so 1.26.x
+	// patches and 1.26 RCs all qualify.
 	// minGoBricksVer is the semver floor for the go-bricks API era the tool
 	// targets: v0.45.0 hid the echo dependency behind go-bricks boundary types
 	// (#627) — the surface every fixture, the demo acceptance project, and the
 	// generator's emitted runtime contract are written against.
-	minGoVersion   = "go1.25"
+	minGoVersion   = "go1.26"
 	minGoBricksVer = "v0.45.0"
 
 	// verifiedGoBricksVer is the newest go-bricks release the analyzer's
@@ -201,12 +203,12 @@ func performDiagnosticsCheck(ctx context.Context, opts *DoctorOptions) bool {
 
 func isGoVersionSupported(goVer string) bool {
 	// Use Go's own version parser so real toolchain strings parse, including
-	// release candidates like "go1.25rc1" (which semver cannot represent).
+	// release candidates like "go1.26rc1" (which semver cannot represent).
 	if !version.IsValid(goVer) {
 		return false
 	}
-	// Compare at language (minor) granularity so any 1.25.x patch and the 1.25
-	// release candidates satisfy the floor, while 1.24.x and below do not.
+	// Compare at language (minor) granularity so any 1.26.x patch and the 1.26
+	// release candidates satisfy the floor, while 1.25.x and below do not.
 	return version.Compare(version.Lang(goVer), minGoVersion) >= 0
 }
 

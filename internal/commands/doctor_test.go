@@ -52,12 +52,12 @@ func TestIsGoVersionSupported(t *testing.T) {
 	}{
 		{
 			name:     "supported version - exactly the floor",
-			version:  minGoVersion, // the production floor const ("go1.25")
+			version:  minGoVersion, // the production floor const ("go1.26")
 			expected: true,
 		},
 		{
-			name:     "supported version - go1.25.1",
-			version:  "go1.25.1",
+			name:     "supported version - go1.26",
+			version:  "go1.26",
 			expected: true,
 		},
 		{
@@ -66,7 +66,27 @@ func TestIsGoVersionSupported(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "unsupported version - go1.24.5 (just below floor)",
+			name:     "supported version - go1.26.1",
+			version:  "go1.26.1",
+			expected: true,
+		},
+		{
+			name:     "supported version - go1.27.2",
+			version:  "go1.27.2",
+			expected: true,
+		},
+		{
+			name:     "unsupported version - go1.25.9 (just below floor)",
+			version:  "go1.25.9",
+			expected: false,
+		},
+		{
+			name:     "unsupported version - go1.25.1",
+			version:  "go1.25.1",
+			expected: false,
+		},
+		{
+			name:     "unsupported version - go1.24.5",
 			version:  "go1.24.5",
 			expected: false,
 		},
@@ -96,15 +116,15 @@ func TestIsGoVersionSupported(t *testing.T) {
 			expected: false,
 		},
 		{
-			// Real Go RC toolchain format (no dot, no patch). A 1.25 RC IS the
-			// 1.25 line, so it must satisfy the floor.
-			name:     "release candidate of the floor - go1.25rc1",
-			version:  "go1.25rc1",
+			// Real Go RC toolchain format (no dot, no patch). A 1.26 RC IS the
+			// 1.26 line, so it must satisfy the floor.
+			name:     "release candidate of the floor - go1.26rc1",
+			version:  "go1.26rc1",
 			expected: true,
 		},
 		{
-			name:     "release candidate below floor - go1.24rc1",
-			version:  "go1.24rc1",
+			name:     "release candidate below floor - go1.25rc1",
+			version:  "go1.25rc1",
 			expected: false,
 		},
 	}
@@ -690,13 +710,17 @@ require github.com/gaborage/go-bricks v1.0.0
 		t.Fatalf(msgFailedToCreate, err)
 	}
 
+	// Just below the go1.26 floor, so the failure message is pinned too.
 	opts := &DoctorOptions{
 		ProjectRoot: tempDir,
-		GoVersion:   "go1.20.5",
+		GoVersion:   "go1.25.9",
 	}
 
-	err = runDoctor(t.Context(), opts)
+	out := testutil.CaptureStdout(t, func() { err = runDoctor(t.Context(), opts) })
 	assertError(t, err, true)
+	if !strings.Contains(out, "Go 1.26+ required") {
+		t.Errorf("expected the Go floor failure message, got:\n%s", out)
+	}
 }
 
 func TestRunDoctorFailsOnMissingGoBricks(t *testing.T) {
