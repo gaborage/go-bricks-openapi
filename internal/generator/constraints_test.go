@@ -126,11 +126,11 @@ func TestConstraintsFor(t *testing.T) {
 			description: "should map date to format constraint",
 		},
 		{
-			name:        "datetime format",
+			name:        "bare datetime -> no format",
 			shape:       prim("string"),
 			constraints: map[string]string{validatorDatetime: "true"},
-			want:        OpenAPIProperty{Format: "date-time"},
-			description: "should map datetime to date-time format",
+			want:        OpenAPIProperty{},
+			description: "bare datetime (empty layout) and datetime=true (literal layout \"true\") both reach the generator as \"true\" and emit no format",
 		},
 		{
 			name:        "string min length",
@@ -399,16 +399,16 @@ func TestConstraintsFor(t *testing.T) {
 			description: "ne has no clean OpenAPI representation",
 		},
 		{
-			name: "datetime date-only layout -> date", shape: prim("string"),
+			name: "datetime full-date layout -> date", shape: prim("string"),
 			constraints: map[string]string{validatorDatetime: "2006-01-02"},
 			want:        OpenAPIProperty{Format: "date"},
-			description: "date-only layout maps to format date",
+			description: "exactly time.DateOnly maps to format date",
 		},
 		{
-			name: "datetime with clock -> date-time", shape: prim("string"),
+			name: "datetime RFC 3339 layout -> date-time", shape: prim("string"),
 			constraints: map[string]string{validatorDatetime: "2006-01-02T15:04:05Z07:00"},
 			want:        OpenAPIProperty{Format: "date-time"},
-			description: "layout with clock tokens maps to date-time",
+			description: "exactly time.RFC3339 maps to date-time",
 		},
 		{
 			name: "ipv4 format", shape: prim("string"),
