@@ -26,13 +26,24 @@ const (
 )
 
 // warnNonStructRequest raises the one warning of a request that does not
-// register as a struct. A request whose type, a pointer written in it shed,
-// resolves to an Instantiation gets the generic request warning, unless its
-// generic type is declared as a non-struct type, which go-bricks cannot bind
-// (F26). A generic type the tool cannot locate (outside the module,
-// undeclared) gets the generic warning too: go-bricks binds it if it is a
-// struct, so a panic cannot be claimed. Every other request gets F26.
+// register as a struct. An anonymous struct (struct{…}, *struct{…}), which
+// go-bricks binds, gets the anonymous request warning: it is not documented
+// yet (issue 171). A field-less one (struct{}, go-bricks' request type for a
+// route that takes no input) gets none: it has nothing to document, and a
+// named empty struct documents nothing either. A request whose type, a
+// pointer written in it shed, resolves to an Instantiation gets the generic
+// request warning, unless its generic type is declared as a non-struct type,
+// which go-bricks cannot bind (F26). A generic type the tool cannot locate
+// (outside the module, undeclared) gets the generic warning too: go-bricks
+// binds it if it is a struct, so a panic cannot be claimed. Every other
+// request gets F26.
 func (a *ProjectAnalyzer) warnNonStructRequest(h *handlerAnalysis, astFile *ast.File, filePath string) {
+	if lit := anonymousStruct(h.requestExpr); lit != nil {
+		if lit.Fields.NumFields() > 0 {
+			a.addWarningf(anonymousRequestWarning, h.requestType)
+		}
+		return
+	}
 	if inst, ok := a.requestInstantiation(h.requestExpr, astFile, filePath); ok {
 		a.addWarningf(genericRequestWarning, h.requestType, inst)
 		return

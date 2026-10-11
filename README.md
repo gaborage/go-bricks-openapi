@@ -313,10 +313,12 @@ nested Go module, is not.
   slice or map of itself, is cut to `{}` where it recurs, with a warning;
   once a field's expansion finds several anonymous structs on one cycle
   (sibling fields that each embed their enclosing struct), each is expanded
-  once in that field, and met again inside another it is cut. A field
-  expands at most 1000 anonymous structs; past that the rest are `{}`, with
-  one warning. A path, query or header parameter of anonymous struct type
-  is not expanded: it stays a bare `type: object`, as before. Build-tagged
+  once in that field, and met again inside another it is cut. One field's
+  or payload's anonymous structs expand to at most 1000 inline objects;
+  past that the rest are `{}`, with one warning per run, which names the
+  outermost anonymous struct of the first expansion to pass the limit. A
+  path, query or header parameter of anonymous struct type is not
+  expanded: it stays a bare `type: object`, as before. Build-tagged
   declarations of a named type over an anonymous struct merge only when
   written alike, raw tags included (a differing `,omitempty` counts), and
   reaching the same structs; otherwise a body field of that type is an
@@ -409,13 +411,25 @@ nested Go module, is not.
   as untyped, so only the aggregate untyped-route warning reports it, and
   `--strict` fails only when the route has no typed request. A
   plain `[]Fn` payload, like `Fn` itself, still raises the named non-struct
-  warning. Anonymous struct payloads (`server.Result[struct{ A int }]`) stay
-  untyped (#118). Generic payloads (`server.Result[Page[User]]`,
+  warning. An anonymous struct payload (`server.Result[struct{ A int }]`,
+  `[]struct{…}`, a bare `struct{…}` return, or a named type over one,
+  `type Rows []struct{…}`, local or from another package) is documented
+  inline, as a field of its type is (every pointer shed, so never
+  `nullable`), so a named type over one raises
+  neither the named non-struct warning nor the no-schema-component one
+  (unless its build-tagged declarations disagree), and a request-less
+  handler returning one is recognised as the route's handler, so its
+  success status and inferred error statuses are documented. A jose tag
+  inside an anonymous struct payload is ignored, as before (#171): the
+  route stays `application/json`, and a payload whose root (behind written
+  pointers too) is a jose-tagged anonymous struct is left as before, with
+  the untyped fallback. Generic payloads
+  (`server.Result[Page[User]]`,
   `server.Result[[]Page[User]]`, a bare `Pair[string, int]`, or a named type
-  declared as one, `type UserPage Page[User]`) stay untyped too (#114), but
+  declared as one, `type UserPage Page[User]`) stay untyped (#114), but
   each raises one warning, so `--strict` fails on it. A handler with a
-  generic request parameter (`Box[User]`), whatever its payload (an anonymous
-  struct included), or a request-less handler whose payload holds a generic
+  generic request parameter (`Box[User]`), whatever its payload, or a
+  request-less handler whose payload holds a generic
   instantiation, is now recognised as the route's handler, so its success
   status and inferred error statuses are documented. A pointer to a result
   wrapper (`*server.Result[T]`) is not unwrapped: its payload stays untyped
@@ -437,7 +451,15 @@ nested Go module, is not.
   `requestBody` and counts as untyped, but with an
   unresolved-generic warning instead (#114). A named pointer type over one
   (`type PP *Page[Address]`) gets the not-a-struct warning, like any named
-  pointer type (`type PA *Address`).
+  pointer type (`type PA *Address`). A request type that is an anonymous
+  struct with fields (`struct{…}`, `*struct{…}`) is bound by go-bricks but
+  not yet documented (#171): it gets no `requestBody` and no query or header
+  parameters (path parameters fall back to strings), is counted as an
+  untyped request in `doctor`, and is reported as a warning (so `--strict`
+  fails on it); declare it as a named struct. Its handler is still
+  recognised, so its success status and inferred error statuses are
+  documented. An empty `struct{}`, go-bricks' request type for a route that
+  takes no input, has nothing to document and raises no warning of its own.
 - A route path built from a `var` (including a `:=` local) is an Unresolved
   route: only `const` declarations resolve. The route is dropped from the spec
   with a warning.

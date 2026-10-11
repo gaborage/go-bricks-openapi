@@ -126,7 +126,8 @@ type TypeInfo struct {
 	// analyzer (Resolution) and typed from it exactly as a struct field of its
 	// type, never $ref'd itself; a builtin carries no Name, a well-known type
 	// (time.Time, uuid.UUID, json.Number, ...: WellKnownTypeNames) keeps its
-	// Name, and any other name is cleared. Only a root that resolves to nothing
+	// Name, any other name is cleared, and an anonymous struct, carried
+	// nameless like a map, is documented inline. Only a root that resolves to nothing
 	// (an unresolvable or undeclared name, a defined type over a well-known
 	// struct, disagreeing build-tagged declarations, or an unmodelled leaf such
 	// as func()) keeps the name-cleared, warned, untyped-object fallback. A

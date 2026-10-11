@@ -507,8 +507,9 @@ func TestGenericPayloadsWarnOnce(t *testing.T) {
 // request-less handler whose payload holds an unresolved instantiation, is
 // found, so a request-less generic payload warns, a generic request with a
 // generic payload raises one warning each, and a generic request with an
-// anonymous struct payload raises the request one. The generic_status
-// fixture's handlers document server.Created and server.NewNotFoundError.
+// anonymous struct payload raises the request one, its payload documented
+// inline (issue 118). The generic_status fixture's handlers document
+// server.Created and server.NewNotFoundError.
 func TestGenericOnlyHandlersAreFound(t *testing.T) {
 	run := analyzeGenericRoute(t, "ctx server.HandlerContext", "server.Result[Page[Address]]")
 	assert.Equal(t, []string{fmt.Sprintf(genericPayloadWarning, "Page[Address]", "Page[Address]")}, run.warnings)
@@ -523,7 +524,9 @@ func TestGenericOnlyHandlersAreFound(t *testing.T) {
 
 	run = analyzeGenericRoute(t, "req Box[Address], ctx server.HandlerContext", "server.Result[struct{ A int }]")
 	assert.Equal(t, []string{fmt.Sprintf(genericRequestWarning, "Box[Address]", "Box[Address]")}, run.warnings)
-	assert.Nil(t, run.route.Response)
+	if assert.NotNil(t, run.route.Response) && assert.NotNil(t, run.route.Response.Resolution) {
+		assert.Equal(t, "struct{A int}", renderShape(*run.route.Response.Resolution))
+	}
 
 	a := New(filepath.Join("..", "spectest", "testdata", "generic_status"))
 	project, err := a.AnalyzeProject()
@@ -535,7 +538,11 @@ func TestGenericOnlyHandlersAreFound(t *testing.T) {
 		assert.Equal(t, 201, r.SuccessStatus, r.Path)
 		assert.Equal(t, []int{404}, r.ErrorStatuses, r.Path)
 		assert.Nil(t, r.Request, r.Path)
-		assert.Nil(t, r.Response, r.Path)
+		if r.Path == "/receipts" {
+			assert.NotNil(t, r.Response, "an anonymous struct payload is documented inline")
+		} else {
+			assert.Nil(t, r.Response, r.Path)
+		}
 	}
 }
 

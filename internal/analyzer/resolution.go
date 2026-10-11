@@ -93,11 +93,11 @@ type fieldFallback struct {
 type resolveState struct {
 	param bool // path/query/header param: exempt from the Marshaler guard
 	// inline is set only by resolveField, for a body field outside
-	// requestParamFields: its anonymous structs are extracted and documented
-	// inline (resolveStruct). A quiet run, a resolution that only classifies
-	// a type (marshalerNamed, requestInstantiation) or types a payload, and
-	// requestParamFields, which discards a Marshaler request's body fields,
-	// leave them unextracted.
+	// requestParamFields, and by resolvePayload: their anonymous structs are
+	// extracted and documented inline (resolveStruct). A quiet run, a
+	// resolution that only classifies a type (marshalerNamed,
+	// requestInstantiation), and requestParamFields, which discards a
+	// Marshaler request's body fields, leave them unextracted.
 	inline   bool
 	depth    int                // registration depth of the struct declaring the field: an anonymous struct is extracted one deeper
 	home     string             // the field's own package directory: display qualifies names declared elsewhere
@@ -896,7 +896,12 @@ func holdsUintptr(s *models.TypeShape) bool {
 
 // fieldLoc renders a field's position as a project-relative file:line:col.
 func (a *ProjectAnalyzer) fieldLoc(field *ast.Field) string {
-	pos := a.fileSet.Position(field.Pos())
+	return a.nodeLoc(field)
+}
+
+// nodeLoc renders a node's position as a project-relative file:line:col.
+func (a *ProjectAnalyzer) nodeLoc(n ast.Node) string {
+	pos := a.fileSet.Position(n.Pos())
 	return fmt.Sprintf("%s:%d:%d", relToRoot(a.projectRoot, pos.Filename), pos.Line, pos.Column)
 }
 

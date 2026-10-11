@@ -113,7 +113,9 @@ paths:
                 properties:
                   data:
                     type: object
-                    description: Response data
+                    properties:
+                      id:
+                        type: string
                   meta:
                     type: object
                     properties:

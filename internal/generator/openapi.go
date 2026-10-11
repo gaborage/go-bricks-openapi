@@ -886,11 +886,12 @@ func (g *OpenAPIGenerator) successPlaintextSchema(route *models.Route) string {
 // handler returned an untyped or unresolved payload) is annotated.
 func successEnvelopeSchema(response *models.TypeInfo) *OpenAPIProperty {
 	data := responsePayloadSchema(response)
-	if data.Ref == "" && data.Type == typeObject && data.AdditionalProperties == nil {
+	if data.Ref == "" && data.Type == typeObject && data.AdditionalProperties == nil && !inlineStructPayload(response) {
 		// Only the bare untyped object is the fallback — annotate it for
 		// readers. A map or array schema (Result[map[string]int64], or the
 		// recursion-cut map of Result[Tree], which still counts as an untyped
-		// payload) is not that bare object and takes no such annotation.
+		// payload) is not that bare object and takes no such annotation, nor
+		// is an anonymous struct's inline object, even an empty one.
 		data.Description = responseDataDescription
 	}
 	return &OpenAPIProperty{
@@ -900,6 +901,15 @@ func successEnvelopeSchema(response *models.TypeInfo) *OpenAPIProperty {
 			propNameMeta: metaEnvelopeSchema(),
 		},
 	}
+}
+
+// inlineStructPayload reports whether a payload is an anonymous struct
+// (issue 118): its Resolution, every pointer shed, is documented inline as an
+// object. It is typed, like a registered struct's $ref, so it is not the
+// untyped fallback whatever its properties; keyed on the Resolution, since an
+// empty struct{} emits the same bare object the fallback does.
+func inlineStructPayload(ti *models.TypeInfo) bool {
+	return ti != nil && ti.Resolution != nil && stripPointers(*ti.Resolution).Kind == models.ShapeStruct
 }
 
 // metaEnvelopeSchema is the framework-authoritative envelope metadata block.
