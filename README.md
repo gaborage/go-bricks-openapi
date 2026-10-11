@@ -271,9 +271,14 @@ nested Go module, is not.
   payload returned by value), so a type whose `MarshalText` is only on its
   pointer (or promoted through a value embed of such a type) is `{}` with a
   warning, not a string, even where it is addressable (`*T`). Out-of-module types are known only from a
-  table (`time.Time`, `uuid.UUID`, `json.RawMessage`), so an embedded
-  `decimal.Decimal` goes undetected and its embedding struct is documented
-  from its fields. Methods in build-tagged files count (build constraints are
+  table (`time.Time`, `uuid.UUID`, `json.RawMessage`, `json.Number`), so an
+  embedded `decimal.Decimal` goes undetected: its embedding struct is
+  documented from its other fields, and the embed is dropped with a
+  warning. `json.Number` has `MarshalJSONTo` and `UnmarshalJSONFrom` only
+  in the jsonv2-backed `encoding/json` (the default build since Go 1.27),
+  which writes a struct embedding it as a bare number, and the classic one
+  as an object, so such a struct is `{}` with a warning, whatever the
+  embed's tag (`json:"-"` included: Go promotes the methods anyway). Methods in build-tagged files count (build constraints are
   not evaluated). A Marshaler type's own fields are not read, so their tags
   and types are not checked and raise no warning; a Marshaler request's
   fields are still read to find its parameters, so a malformed tag on any of
@@ -285,6 +290,25 @@ nested Go module, is not.
   (`type SA = Status; func (SA) MarshalText() ...`) is seen only where the
   alias name is used: a `Status` field is still documented from its
   underlying type, with no warning.
+- An embedded field with no json name is documented as `encoding/json`
+  writes it when its type can be read from source: a struct's fields are
+  promoted, and an exported non-struct type is one property keyed by its
+  type name, a well-known one with no marshal methods such as
+  `time.Duration` included. An embed of a type from outside the module
+  other than those and the well-known Marshaler types above
+  (`sql.NullString`, `sync.Mutex`, `fmt.Stringer`), of a name with no
+  declaration, or of a generic instantiation that may be a struct
+  (`Page[Address]`, until #114) is dropped with a warning, so `--strict`
+  fails, although `encoding/json` would promote such a struct's fields
+  (`sql.NullString`'s `String` and `Valid`). An unexported local generic
+  type declared as a non-struct type (`list[int]` for
+  `type list[T any] []T`) is skipped silently, as `encoding/json` skips
+  it. Exclude the embed with `json:"-"` to silence the warning. A
+  well-known Marshaler embed adds no property even when a sibling embed at
+  its depth cancels its methods, although `encoding/json` then writes it
+  as one field keyed by its type name. Two fields of one key at the
+  shallowest depth that key reaches, both tagged or both untagged
+  (properties included), which `encoding/json` both drops, keep the first.
 - A named type that contains itself through a slice or map
   (`type Tree map[string]Tree`), or that nests more than nine named types
   deep, is documented down to the point where it recurs or the nine-deep cap
@@ -419,7 +443,7 @@ nested Go module, is not.
   name such as `x_windows.go`), even when a skipped file of the package's
   own clause sorts before it. It then names the package. Through an
   unaliased import of it, fields and named types fall back with a warning,
-  an embedded struct loses its promoted fields silently, and a request gets
+  an embedded struct loses its promoted fields with a warning, and a request gets
   no `requestBody`. Under an aliased import, a named non-struct type falls
   back with a warning, or, when that file declares the same name, takes
   that file's declaration silently. Its structs are searched in every file

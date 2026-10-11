@@ -831,6 +831,11 @@ components:
           format: int64
     Pair:
       type: object
+      properties:
+        Code:
+          type: string
+        Level:
+          type: string
   securitySchemes:
     TenantID:
       type: apiKey
