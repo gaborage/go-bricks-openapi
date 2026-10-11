@@ -656,14 +656,16 @@ func (a *ProjectAnalyzer) resolveUnderlying(name string, rhs ast.Expr, c resolve
 
 // kindBackedUnderlying returns the underlying type of a qualified well-known
 // type a defined chain may end in: the knownUnderlyingBuiltins, plus
-// json.RawMessage ([]byte) and json.Number (string). The last two apply only
-// at the end of a defined chain; used directly they stay well-known leaves.
+// json.RawMessage and net.IP ([]byte) and json.Number (string). The last
+// three apply only at the end of a defined chain, which drops their methods;
+// used directly they stay well-known leaves. The netip structs have no kind
+// to fall back to: a defined type over one keeps the defined-type warning.
 func kindBackedUnderlying(qualified string) (models.TypeShape, bool) {
 	if b, ok := knownUnderlyingBuiltins[qualified]; ok {
 		return models.TypeShape{Kind: models.ShapePrimitive, Name: b}, true
 	}
 	switch qualified {
-	case models.WellKnownRawMessage:
+	case models.WellKnownRawMessage, models.WellKnownNetIP:
 		elem := models.TypeShape{Kind: models.ShapePrimitive, Name: goTypeByte}
 		return models.TypeShape{Kind: models.ShapeSlice, Elem: &elem}, true
 	case models.WellKnownJSONNumber:

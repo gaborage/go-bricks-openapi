@@ -3849,11 +3849,33 @@ func isJSONExcluded(f *models.FieldInfo) bool {
 // resolve to string through kindBackedUnderlying instead, which applies only
 // at the end of a defined chain. The generator's well-known map types a direct
 // use on its own.
+//
+// The text types (net.IP, netip.Addr, netip.Prefix, netip.AddrPort) must
+// stay absent for the same reason: an entry types by kind and ignores their
+// MarshalText, so net.IP would be documented as base64 bytes. They are
+// well-known leaves (models.WellKnownTypeNames), and a defined type over
+// net.IP, which drops MarshalText, resolves to []byte through
+// kindBackedUnderlying.
+//
+// os.FileMode and fs.FileMode (one type: os.FileMode = fs.FileMode) are a
+// uint32 with no marshal methods, so they are here only, never in
+// models.WellKnownTypeNames: the Resolution replaces the name with uint32
+// before the generator looks it up, which keeps uint32's unsigned floor.
 var knownUnderlyingBuiltins = map[string]string{
-	models.WellKnownTimeDuration: goTypeInt64, // encoding/json marshals it as its int64 ns count
-	models.WellKnownTimeMonth:    goTypeInt,   // an int with no marshaler, written as its number
-	models.WellKnownTimeWeekday:  goTypeInt,   // an int with no marshaler, written as its number
+	models.WellKnownTimeDuration: goTypeInt64,  // encoding/json marshals it as its int64 ns count
+	models.WellKnownTimeMonth:    goTypeInt,    // an int with no marshaler, written as its number
+	models.WellKnownTimeWeekday:  goTypeInt,    // an int with no marshaler, written as its number
+	stdOSFileMode:                goTypeUint32, // a uint32 with no marshaler, written as its number
+	stdFSFileMode:                goTypeUint32,
 }
+
+// The two spellings of the stdlib file mode type, as the Shape decoder writes
+// them. They are kind-backed only (knownUnderlyingBuiltins), not well-known,
+// so they live here rather than beside models.WellKnownTypeNames' names.
+const (
+	stdOSFileMode = "os.FileMode"
+	stdFSFileMode = "fs.FileMode"
+)
 
 // sameBuiltin reports whether two builtin names denote one Go type. byte and
 // rune are Go's predeclared aliases of uint8 and int32, so `type Word byte` in
