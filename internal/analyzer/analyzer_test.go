@@ -3477,7 +3477,8 @@ func TestBaseTypeName(t *testing.T) {
 // TestResolveDeclUnderlying pins resolveUnderlying on one declaration's
 // right-hand side (the cases of the retired identifier-only reader): a builtin is
 // itself, a qualified name with no kind-backed underlying leaves the declared
-// type unresolvable (noted as a defined type over that name), unmodeled expressions are unknown, and a composite
+// type unresolvable (noted as a defined type over that name), unmodeled expressions are unknown, a struct
+// literal outside a field's resolution is an anonymous struct left unextracted (issue 118), and a composite
 // resolves as written — a []byte underlying is the base64 []byte, not "".
 func TestResolveDeclUnderlying(t *testing.T) {
 	dir := t.TempDir()
@@ -3492,7 +3493,7 @@ func TestResolveDeclUnderlying(t *testing.T) {
 		{"bare_ident", &ast.Ident{Name: "int64"}, "int64", false},
 		{"qualified", &ast.SelectorExpr{X: &ast.Ident{Name: "pkg"}, Sel: &ast.Ident{Name: "Name"}}, "Decl", true},
 		{"selector_base_not_ident", &ast.SelectorExpr{X: &ast.SelectorExpr{X: &ast.Ident{Name: "a"}, Sel: &ast.Ident{Name: "b"}}, Sel: &ast.Ident{Name: "C"}}, "unknown", false},
-		{"composite_struct", &ast.StructType{Fields: &ast.FieldList{}}, "unknown", false},
+		{"composite_struct", &ast.StructType{Fields: &ast.FieldList{}}, "struct{…}", false},
 		{"composite_slice", &ast.ArrayType{Elt: &ast.Ident{Name: "byte"}}, "[]byte", false},
 	}
 	for _, tt := range tests {

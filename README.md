@@ -303,6 +303,26 @@ nested Go module, is not.
   (`type SA = Status; func (SA) MarshalText() ...`) is seen only where the
   alias name is used: a `Status` field is still documented from its
   underlying type, with no warning.
+- An anonymous struct (`struct{…}`) field is documented inline, as an object
+  with the properties, `required` list and `validate` keywords a named struct
+  of the same fields gets, at any depth (`*struct{…}` is `nullable`; slice
+  items, map values and nested anonymous structs alike). It never gets a
+  component. One that embeds a Marshaler type follows the Marshaler rules
+  (`struct{ time.Time; Z int }` is `{}` with a warning). One that contains
+  itself, through an embedded pointer to its enclosing struct or a named
+  slice or map of itself, is cut to `{}` where it recurs, with a warning;
+  once a field's expansion finds several anonymous structs on one cycle
+  (sibling fields that each embed their enclosing struct), each is expanded
+  once in that field, and met again inside another it is cut. A field
+  expands at most 1000 anonymous structs; past that the rest are `{}`, with
+  one warning. A path, query or header parameter of anonymous struct type
+  is not expanded: it stays a bare `type: object`, as before. Build-tagged
+  declarations of a named type over an anonymous struct merge only when
+  written alike, raw tags included (a differing `,omitempty` counts), and
+  reaching the same structs; otherwise a body field of that type is an
+  untyped object with a warning, so it loses its container shape: a named
+  slice type over one (`type Rows []struct{…}`) its array type, a map type
+  its `additionalProperties`, a pointer type its `nullable`.
 - An embedded field with no json name is documented as `encoding/json`
   writes it when its type can be read from source: a struct's fields are
   promoted, and an exported non-struct type is one property keyed by its

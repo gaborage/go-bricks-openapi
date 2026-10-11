@@ -1,5 +1,7 @@
 package models
 
+import "go/ast"
+
 // Project represents a simplified project structure for OpenAPI generation
 type Project struct {
 	Name        string
@@ -221,7 +223,12 @@ const (
 	ShapeMap       ShapeKind = "map"
 	ShapeNamed     ShapeKind = "named"     // a declared or qualified type name (Address, time.Time)
 	ShapePrimitive ShapeKind = "primitive" // a builtin (string, int64, byte, any, interface{})
-	ShapeUnknown   ShapeKind = "unknown"   // an AST shape the decoder does not model (chan, func, struct literals)
+	// ShapeStruct is an anonymous struct (struct{ X int }, at any depth).
+	// Struct carries its literal; in a Shape that is all it carries, and only
+	// a Resolution adds the fields. It names no component: it is documented
+	// inline (CONTEXT.md, "Resolution").
+	ShapeStruct  ShapeKind = "struct"
+	ShapeUnknown ShapeKind = "unknown" // an AST shape the decoder does not model (chan, func)
 	// ShapeInstantiation is a generic type written with its type arguments
 	// (G[A], G[A, B], q.G[A]): CONTEXT.md, "Instantiation". Inst carries the
 	// generic type and the arguments; Name stays empty, so no consumer that
@@ -250,7 +257,10 @@ const (
 	// registers or otherwise reads what is under Elem.
 	ShapeMarshaler ShapeKind = "marshaler"
 	// ShapeRecursive is a named type met again inside its own resolution, or
-	// past maxNamedResolutionDepth. Name is that type. The cut point emits {}.
+	// past maxNamedResolutionDepth. Name is that type. It is also an anonymous
+	// struct that closes a cycle of anonymous structs, or past
+	// maxTypeRegistrationDepth or maxLiteralExtractions, whose Name is
+	// "struct{…}". The cut point emits {}.
 	ShapeRecursive ShapeKind = "recursive"
 	// ShapeText is a Marshaler type encoding/json writes and reads as a JSON
 	// string on every toolchain and in every position (#111): MarshalText in
@@ -267,7 +277,8 @@ const (
 // substituted. The registry outcome lives in FieldInfo.Resolution and
 // TypeInfo.Resolution, which reuse this vocabulary plus the five
 // Resolution-only kinds (ShapeRef, ShapeKindOnly, ShapeMarshaler,
-// ShapeRecursive, ShapeText).
+// ShapeRecursive, ShapeText), and the Fields of a ShapeStruct node, which
+// only a Resolution carries.
 // The zero value (Kind "") is treated everywhere as ShapeUnknown.
 type TypeShape struct {
 	Kind ShapeKind
@@ -283,6 +294,28 @@ type TypeShape struct {
 	// other kind. It hangs off one pointer so TypeShape stays small enough to
 	// pass by value.
 	Inst *Instantiation
+	// Struct is the anonymous struct a ShapeStruct carries; nil for every
+	// other kind. One pointer, like Inst, for the same reason.
+	Struct *AnonymousStruct
+}
+
+// AnonymousStruct is what a ShapeStruct node carries. A Shape's carries only
+// Literal; a Resolution's is a fresh value that adds Fields, so resolving
+// never writes registry knowledge into a Shape. A Resolution whose literal
+// was not extracted (a parameter, or a resolution that only classifies a
+// type) shares the Shape's value, so nothing may write into it.
+//
+// Never deep-compare or serialize a TypeShape that holds one: an AST can be
+// cyclic (ast.Ident.Obj.Decl points back at its declaration), and its
+// positions differ per parse.
+type AnonymousStruct struct {
+	// Literal is the struct type as written; only the analyzer reads it.
+	Literal *ast.StructType
+	// Fields are the literal's fields, each resolved as a named struct's
+	// field is (tags, validate constraints, embedded promotion). Nil in a
+	// Shape and in an unextracted Resolution; non-nil, possibly empty, once
+	// extracted.
+	Fields []FieldInfo
 }
 
 // Instantiation is a generic type with its type arguments, as written

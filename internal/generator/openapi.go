@@ -193,6 +193,7 @@ type OpenAPIProperty struct {
 	// sibling keyword is the encoding that actually applies.
 	AllOf                []*OpenAPIProperty          `yaml:"allOf,omitempty"`
 	Properties           map[string]*OpenAPIProperty `yaml:"properties,omitempty"`           // For inline objects (e.g. the data/meta envelope)
+	Required             []string                    `yaml:"required,omitempty"`             // For inline objects: an anonymous struct's required properties
 	AdditionalProperties *OpenAPIProperty            `yaml:"additionalProperties,omitempty"` // For maps (the value schema)
 	Format               string                      `yaml:"format,omitempty"`
 	Description          string                      `yaml:"description,omitempty"`
@@ -1408,8 +1409,10 @@ func addFieldSchemaRefs(out map[string]bool, types map[string]*models.TypeInfo) 
 }
 
 // addRefNames records every ShapeRef leaf of s, descending through pointer,
-// slice, array and map elements. A Marshaler leaf's Elem is never descended:
-// nothing under it is emitted, so its refs would orphan components.
+// slice, array and map elements, and through the fields of an anonymous
+// struct, whose inline object $refs what they reference. A Marshaler leaf's
+// Elem is never descended: nothing under it is emitted, so its refs would
+// orphan components.
 func addRefNames(out map[string]bool, s models.TypeShape) {
 	switch s.Kind {
 	case models.ShapePointer, models.ShapeSlice, models.ShapeArray, models.ShapeMap:
@@ -1418,8 +1421,21 @@ func addRefNames(out map[string]bool, s models.TypeShape) {
 		}
 	case models.ShapeRef:
 		out[s.Name] = true
+	case models.ShapeStruct:
+		addInlineRefNames(out, s.Struct)
 	default:
 		// Leaves that reference no component, Marshaler and recursive ones included.
+	}
+}
+
+// addInlineRefNames records the ShapeRef leaves of an anonymous struct's
+// fields, at any depth (addRefNames). An unextracted one has no fields.
+func addInlineRefNames(out map[string]bool, st *models.AnonymousStruct) {
+	if st == nil {
+		return
+	}
+	for i := range st.Fields {
+		addRefNames(out, st.Fields[i].ResolvedShape())
 	}
 }
 
@@ -1469,67 +1485,73 @@ func routeTypeRegistry(project *models.Project) map[string]*models.TypeInfo {
 	return types
 }
 
-// typeInfoToSchema converts a TypeInfo to an OpenAPI schema
+// typeInfoToSchema converts a TypeInfo to an OpenAPI schema: an object with
+// the properties and required list objectProperties builds from its Fields.
 func (g *OpenAPIGenerator) typeInfoToSchema(typeInfo *models.TypeInfo) *OpenAPISchema {
 	if typeInfo == nil || len(typeInfo.Fields) == 0 {
 		return nil
 	}
-
-	schema := &OpenAPISchema{
-		Type:       typeObject,
-		Properties: make(map[string]*OpenAPIProperty),
-		Required:   []string{},
-	}
-
-	for i := range typeInfo.Fields {
-		field := &typeInfo.Fields[i]
-
-		// Path/query/header params are emitted as OpenAPI parameters
-		// (extractParameters), never as request-body properties.
-		if field.ParamType != "" {
-			continue
-		}
-
-		// Skip fields explicitly marked with json:"-"
-		if field.JSONName == "-" {
-			continue
-		}
-
-		// A field with neither a JSON name nor a Go name cannot be addressed by
-		// any JSON document, so it has no representable property key. Skip it
-		// rather than emitting one under "" (which would also put "" in
-		// `required`). Also guards field.Name[:1] against an empty string.
-		if field.JSONName == "" && field.Name == "" {
-			continue
-		}
-
-		// Use JSONName if set, otherwise use field name as fallback
-		propName := field.JSONName
-		if propName == "" {
-			propName = lowerFirst(field.Name)
-		}
-
-		prop := g.fieldInfoToProperty(field)
-		schema.Properties[propName] = prop
-
-		// Add to required array if field is required
-		if field.Required {
-			schema.Required = append(schema.Required, propName)
-		}
-	}
-
-	// Sort required fields for consistent output
-	sort.Strings(schema.Required)
-
-	return schema
+	props, required := objectProperties(typeInfo.Fields)
+	return &OpenAPISchema{Type: typeObject, Properties: props, Required: required}
 }
 
-// fieldInfoToProperty builds a field's schema and then applies its example.
-// The example is applied here, after the property is fully built, because
-// coercion needs the RESOLVED type — and buildFieldProperty's $ref path
-// (refProperty) returns early without ever reaching setTypeAndFormat.
+// objectProperties builds an object's properties, keyed by propertyName, and
+// its required list, sorted for consistent output, from its fields. A
+// component (typeInfoToSchema) and an anonymous struct's inline object
+// (setInlineObject) share it, so the two cannot drift. Both results are
+// non-nil.
+func objectProperties(fields []models.FieldInfo) (props map[string]*OpenAPIProperty, required []string) {
+	props = make(map[string]*OpenAPIProperty)
+	required = []string{}
+	for i := range fields {
+		field := &fields[i]
+		name, ok := propertyName(field)
+		if !ok {
+			continue
+		}
+		props[name] = fieldProperty(field)
+		if field.Required {
+			required = append(required, name)
+		}
+	}
+	sort.Strings(required)
+	return props, required
+}
+
+// propertyName is a field's property key: its JSON name, else its Go name
+// with the first letter lowered. ok is false for a path, query or header
+// param, emitted as an OpenAPI parameter (extractParameters), never as a
+// property; for a json:"-" field; and for a field with neither a JSON name
+// nor a Go name, which no JSON document can address (keyed "", it would also
+// put "" in required).
+func propertyName(field *models.FieldInfo) (string, bool) {
+	if field.ParamType != "" || field.JSONName == "-" {
+		return "", false
+	}
+	if field.JSONName != "" {
+		return field.JSONName, true
+	}
+	if field.Name == "" {
+		return "", false
+	}
+	return lowerFirst(field.Name), true
+}
+
+// fieldInfoToProperty builds a field's schema and then applies its example:
+// it is fieldProperty, as a method.
 func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPIProperty {
-	prop := g.buildFieldProperty(field)
+	return fieldProperty(field)
+}
+
+// fieldProperty builds a field's schema and then applies its example. The
+// example is applied here, after the property is fully built, because
+// coercion needs the RESOLVED type — and bareFieldProperty's $ref path
+// (refProperty) returns early without ever reaching setTypeAndFormat. It is
+// the one place example coercion runs: the fieldInfoToProperty method wraps
+// it, and an anonymous struct's inline object builds each of its fields'
+// properties with it (objectProperties).
+func fieldProperty(field *models.FieldInfo) *OpenAPIProperty {
+	prop := bareFieldProperty(field)
 	applyExample(prop, quotedScalarExample(field))
 	return prop
 }
@@ -1559,11 +1581,12 @@ func quotedScalarExample(field *models.FieldInfo) string {
 	return fmt.Sprint(v)
 }
 
-// buildFieldProperty converts a FieldInfo to an OpenAPI property, without
-// applying its example — see fieldInfoToProperty, the wrapper that does. It
-// types the field's Resolution (ResolvedShape): every named type already
-// substituted, every struct leaf a ShapeRef.
-func (g *OpenAPIGenerator) buildFieldProperty(field *models.FieldInfo) *OpenAPIProperty {
+// bareFieldProperty converts a FieldInfo to an OpenAPI property, without
+// applying its example — see fieldProperty, which does, and which the
+// fieldInfoToProperty method wraps. It types the field's Resolution
+// (ResolvedShape): every named type already substituted, every struct leaf a
+// ShapeRef, every anonymous struct an inline object (*struct{…} nullable).
+func bareFieldProperty(field *models.FieldInfo) *OpenAPIProperty {
 	resolved := field.ResolvedShape()
 	target := stripPointers(resolved)
 	// A struct field is a $ref. A $ref must stand alone — it carries no
@@ -1628,9 +1651,11 @@ func refProperty(field *models.FieldInfo, name string) *OpenAPIProperty {
 // Parameters are excluded deliberately: extractParameters builds
 // Parameter.Schema through fieldInfoToProperty too, and a path/query/header
 // parameter carries URL or header text — never a JSON null. The two callers
-// partition exactly on ParamType (typeInfoToSchema skips every field with
-// ParamType != ""), so this guard suppresses the parameter caller and nothing
-// else.
+// partition exactly on ParamType: the body-side caller is objectProperties,
+// which builds both a component (typeInfoToSchema) and an anonymous struct's
+// inline object (setInlineObject) and skips every field with ParamType != ""
+// through propertyName. So this guard suppresses the parameter caller and
+// nothing else.
 func isPointerField(field *models.FieldInfo) bool {
 	return field.ParamType == "" && field.ResolvedShape().Kind == models.ShapePointer
 }
@@ -1753,7 +1778,8 @@ func wellKnownShape(s models.TypeShape) (wellKnownType, bool) {
 // shed first (stripPointers). The Resolution-only leaves type as: a ref, a
 // $ref; a kind-only scalar, its kind alone (#92: no format, no unsigned
 // floor); a text Marshaler leaf, a string (#111); a Marshaler or recursive
-// leaf, {} (any JSON value), never descending into a Marshaler's Elem.
+// leaf, {} (any JSON value), never descending into a Marshaler's Elem. An
+// anonymous struct is an inline object (setInlineObject).
 func setTypeAndFormat(prop *OpenAPIProperty, shape models.TypeShape) {
 	s := stripPointers(shape)
 
@@ -1786,9 +1812,24 @@ func setTypeAndFormat(prop *OpenAPIProperty, shape models.TypeShape) {
 		prop.Type = typeString
 	case models.ShapeMarshaler, models.ShapeRecursive:
 		return // {}: any JSON value
+	case models.ShapeStruct:
+		setInlineObject(prop, s.Struct)
 	default:
 		setBasicTypeAndFormat(prop, s.Name)
 	}
+}
+
+// setInlineObject types an anonymous struct: an object with the properties
+// and required list a component of the same fields gets (objectProperties),
+// written inline, since it has no name to be a component under. An
+// unextracted one (a parameter's) has no fields and stays a bare object, as
+// does an empty struct{}.
+func setInlineObject(prop *OpenAPIProperty, st *models.AnonymousStruct) {
+	prop.Type = typeObject
+	if st == nil || len(st.Fields) == 0 {
+		return
+	}
+	prop.Properties, prop.Required = objectProperties(st.Fields)
 }
 
 // setBasicTypeAndFormat maps a leaf type NAME to its OpenAPI type and format.
@@ -1846,8 +1887,11 @@ func floatPtr(v float64) *float64 { return &v }
 //
 // OpenAPI 3.0 requires the example to match the schema's declared type, but the
 // analyzer can only hand us the tag's raw string. Coercion therefore has to run
-// AFTER the property's type is resolved — which is why this is called from the
-// fieldInfoToProperty wrapper rather than inline, where prop.Type is still empty.
+// AFTER the property's type is resolved — which is why its one production
+// caller is fieldProperty, which applies it to the property bareFieldProperty
+// has finished building. Parameter schemas (extractParameters, through the
+// fieldInfoToProperty method) and objectProperties (a component's properties
+// and an anonymous struct's inline object's) both reach it that way.
 //
 // A value that cannot be represented in the declared type is DROPPED rather than
 // emitted: a missing example costs the reader one hint, an ill-typed one makes

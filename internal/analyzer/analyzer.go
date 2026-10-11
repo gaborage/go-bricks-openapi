@@ -130,8 +130,12 @@ type ProjectAnalyzer struct {
 	tagWarned        map[string]struct{}                // dedupes malformed-struct-tag warnings by "file:line:col"
 	uintptrWarned    map[string]struct{}                // dedupes uintptr-field warnings by "file:line:col"
 	fieldWarned      map[string]struct{}                // dedupes field fallback warnings by "file:line:col"
-	quietEmbeds      bool                               // requestParamFields is reading a Marshaler request: dropped embeds do not warn
+	quietEmbeds      bool                               // requestParamFields is reading a Marshaler request: dropped embeds do not warn, and no anonymous struct is extracted
 	fieldSites       map[*models.TypeShape]fieldSite    // field Resolution root -> where its ref leaves register
+	openLiterals     []string                           // structIdentity of each anonymous struct being extracted, outermost first (resolveStruct's cycle guard)
+	literalCycles    map[string]string                  // anonymous struct -> another on a cycle the outermost open one's extraction found (closesLiteralCycle's union-find forest)
+	literalExtracts  int                                // anonymous structs the outermost open one's extraction has expanded, itself included (maxLiteralExtractions)
+	literalWarned    bool                               // once-latch: maxLiteralExtractions already warned this run
 	methodSetMemo    map[string]methodSet               // "home\x00typeKey\x00keep" -> a method set no cut shortened (methodSetOf)
 	methodSetCuts    int                                // cycle cuts methodSetOf has hit: a change marks a path-dependent set
 	methodSetWalks   int                                // method sets methodSetOf computed rather than recalled
@@ -159,6 +163,7 @@ func New(projectRoot string) *ProjectAnalyzer {
 		uintptrWarned:  make(map[string]struct{}),
 		fieldWarned:    make(map[string]struct{}),
 		fieldSites:     make(map[*models.TypeShape]fieldSite),
+		literalCycles:  make(map[string]string),
 	}
 }
 
@@ -256,6 +261,10 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	a.uintptrWarned = make(map[string]struct{})
 	a.fieldWarned = make(map[string]struct{})
 	a.fieldSites = make(map[*models.TypeShape]fieldSite)
+	a.openLiterals = nil
+	a.literalCycles = make(map[string]string)
+	a.literalExtracts = 0
+	a.literalWarned = false
 	a.methodSetMemo = nil
 	a.methodSetCuts = 0
 
@@ -2469,11 +2478,14 @@ func (a *ProjectAnalyzer) compositePayloadTypeInfo(expr ast.Expr, packageName st
 
 // hasUnknownLeaf reports whether any emitted leaf of s is unmodelled
 // (ShapeUnknown, the zero Kind, or an Instantiation, which is not resolved:
-// #114).
+// #114). An anonymous struct counts too, for now: issue 118 documents one
+// inline as a field, and anonymous struct payloads land with their own
+// change, so until then a payload holding one keeps its untyped fallback.
 func hasUnknownLeaf(s *models.TypeShape) bool {
 	found := false
 	walkResolvedLeaves(s, func(leaf *models.TypeShape) {
-		found = found || leaf.Kind == models.ShapeUnknown || leaf.Kind == "" || leaf.Kind == models.ShapeInstantiation
+		found = found || leaf.Kind == models.ShapeUnknown || leaf.Kind == "" || leaf.Kind == models.ShapeInstantiation ||
+			leaf.Kind == models.ShapeStruct
 	})
 	return found
 }
@@ -3861,20 +3873,27 @@ func (a *ProjectAnalyzer) registerFieldRefAt(f *models.FieldInfo, astFile *ast.F
 
 // registerResolutionRefs registers every ShapeRef leaf of f's Resolution in
 // the file its name was written in (the site resolveField recorded),
-// defaulting to astFile/filePath for a leaf with no record. Each Resolution
-// is registered exactly once: registerStructAt returns a cached TypeInfo
-// before re-extracting.
+// defaulting to astFile/filePath for a leaf with no record, and the refs of
+// the fields of every anonymous struct it holds one level deeper
+// (registerInlineRefs). Each Resolution is registered exactly once:
+// registerStructAt returns a cached TypeInfo before re-extracting.
 func (a *ProjectAnalyzer) registerResolutionRefs(f *models.FieldInfo, astFile *ast.File, filePath string, depth int) {
 	sites := a.fieldSites[f.Resolution].refSites
 	walkResolvedLeaves(f.Resolution, func(leaf *models.TypeShape) {
-		if leaf.Kind != models.ShapeRef {
-			return
+		switch leaf.Kind {
+		case models.ShapeRef:
+			site, ok := sites[leaf.Name]
+			if !ok {
+				site = pkgFile{file: astFile, path: filePath}
+			}
+			a.registerRefLeaf(leaf, f, site, depth)
+		case models.ShapeStruct:
+			if leaf.Struct != nil {
+				a.registerInlineRefs(leaf.Struct.Fields, astFile, filePath, depth+1)
+			}
+		default:
+			// A leaf that names no component.
 		}
-		site, ok := sites[leaf.Name]
-		if !ok {
-			site = pkgFile{file: astFile, path: filePath}
-		}
-		a.registerRefLeaf(leaf, f, site, depth)
 	})
 }
 
@@ -4122,7 +4141,12 @@ func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, astFil
 	}
 	fields := make([]models.FieldInfo, len(ranked))
 	for i := range ranked {
-		fields[i] = ranked[i].FieldInfo
+		// Resolved only now that the field list is final: a field the
+		// dominance rule or parameter deduplication drops never reaches the
+		// document, so an anonymous struct in its type is never extracted.
+		f := &ranked[i]
+		a.resolveField(&f.FieldInfo, f.decl.field, f.decl.file, f.decl.path, f.decl.depth)
+		fields[i] = f.FieldInfo
 	}
 	return fields
 }
@@ -4169,21 +4193,22 @@ func (a *ProjectAnalyzer) extractRankedFields(structType *ast.StructType, astFil
 			}
 			continue
 		}
-		shallow = append(shallow, a.namedFields(field, astFile, filePath)...)
+		shallow = append(shallow, a.namedFields(field, astFile, filePath, depth)...)
 	}
 
 	return dropDuplicateParams(dropDominatedFields(append(shallow, promoted...)))
 }
 
 // namedFields builds FieldInfo entries for a single non-anonymous AST field
-// (one per exported name; unexported names are skipped).
-func (a *ProjectAnalyzer) namedFields(field *ast.Field, astFile *ast.File, filePath string) []rankedField {
+// (one per exported name; unexported names are skipped). depth is the
+// registration depth of the struct declaring it.
+func (a *ProjectAnalyzer) namedFields(field *ast.Field, astFile *ast.File, filePath string, depth int) []rankedField {
 	out := make([]rankedField, 0, len(field.Names))
 	for _, fieldName := range field.Names {
 		if !fieldName.IsExported() {
 			continue
 		}
-		out = append(out, rankedField{FieldInfo: a.buildFieldInfo(fieldName.Name, field, astFile, filePath)})
+		out = append(out, a.buildFieldInfo(fieldName.Name, field, astFile, filePath, depth))
 	}
 	return out
 }
@@ -4228,7 +4253,7 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 		case "":
 			// no explicit name — fall through to promotion
 		default:
-			return []rankedField{{FieldInfo: a.buildFieldInfo(nestedEmbedName(field.Type, typeName), field, astFile, filePath)}}, false
+			return []rankedField{a.buildFieldInfo(nestedEmbedName(field.Type, typeName), field, astFile, filePath, depth)}, false
 		}
 	}
 
@@ -4256,12 +4281,12 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 		}
 		return fields, true
 	case embedNonStruct:
-		return []rankedField{a.embedProperty(field, astFile, filePath)}, false
+		return []rankedField{a.embedProperty(field, astFile, filePath, depth)}, false
 	case embedMarshaler:
 		// go-bricks binds an exported embed's path, query or header tag as
 		// that parameter; the body is the promoted-method path's.
 		if tags.paramType != "" && token.IsExported(embeddedFieldName(field.Type)) {
-			return []rankedField{a.embedProperty(field, astFile, filePath)}, false
+			return []rankedField{a.embedProperty(field, astFile, filePath, depth)}, false
 		}
 	case embedGeneric, embedUnresolvable:
 		a.warnDroppedEmbed(field, target)
@@ -4271,9 +4296,13 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 	return nil, false
 }
 
-// buildFieldInfo creates a FieldInfo from a field name and AST field, and
-// resolves it in astFile/filePath, the file that declares the field's struct.
-func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field, astFile *ast.File, filePath string) models.FieldInfo {
+// buildFieldInfo creates a field from a field name and AST field, its tags
+// parsed but unresolved: extractStructFields resolves it, in astFile/filePath,
+// the file that declares the field's struct, at depth, that struct's
+// registration depth, once it survives. Its tags steer that resolution:
+// json:"-" (the documented escape hatch) skips it and its diagnostics, and a
+// param tag exempts Marshaler types.
+func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field, astFile *ast.File, filePath string, depth int) rankedField {
 	fieldInfo := models.FieldInfo{
 		Name:        name,
 		Shape:       a.typeShape(field.Type),
@@ -4285,11 +4314,7 @@ func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field, astFile 
 		a.parseFieldTags(&fieldInfo, field.Tag)
 	}
 
-	// After tag parsing: json:"-" (the documented escape hatch) skips the
-	// resolution and its diagnostics, and a param tag exempts Marshaler types.
-	a.resolveField(&fieldInfo, field, astFile, filePath)
-
-	return fieldInfo
+	return rankedField{FieldInfo: fieldInfo, decl: fieldDecl{field: field, file: astFile, path: filePath, depth: depth}}
 }
 
 // warnUintptrField reports a field, declared at loc, whose type holds a
@@ -4366,10 +4391,11 @@ func isSequence(kind models.ShapeKind) bool {
 }
 
 // typeShape decodes an AST type expression into its structural Shape. Total:
-// unmodeled nodes (chan, func, struct literals) decode as ShapeUnknown. A
-// fixed-size array decodes as ShapeArray, distinct from a slice (see
-// sequenceKind); its length is not recorded. A generic instantiation decodes
-// as ShapeInstantiation (instantiationShape).
+// unmodeled nodes (chan, func) decode as ShapeUnknown. A fixed-size array
+// decodes as ShapeArray, distinct from a slice (see sequenceKind); its length
+// is not recorded. A generic instantiation decodes as ShapeInstantiation
+// (instantiationShape). An anonymous struct decodes as ShapeStruct carrying
+// its literal and nothing else: its fields are resolved later (resolveStruct).
 func (a *ProjectAnalyzer) typeShape(expr ast.Expr) models.TypeShape {
 	switch t := expr.(type) {
 	case *ast.Ident:
@@ -4404,6 +4430,9 @@ func (a *ProjectAnalyzer) typeShape(expr ast.Expr) models.TypeShape {
 
 	case *ast.IndexListExpr:
 		return a.instantiationShape(t, t.X, t.Indices)
+
+	case *ast.StructType:
+		return models.TypeShape{Kind: models.ShapeStruct, Struct: &models.AnonymousStruct{Literal: t}}
 	}
 
 	return models.TypeShape{Kind: models.ShapeUnknown}

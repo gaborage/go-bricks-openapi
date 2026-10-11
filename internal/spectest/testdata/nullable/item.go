@@ -27,7 +27,8 @@ type Sub struct {
 
 // GetItemReq pairs a non-pointer path parameter with a pointer body field, to
 // pin RULING 1 end-to-end: extractParameters and typeInfoToSchema share
-// fieldInfoToProperty, but only the body field may become nullable.
+// fieldProperty (extractParameters through the fieldInfoToProperty method),
+// but only the body field may become nullable.
 type GetItemReq struct {
 	ID    int64   `param:"id" validate:"required"`
 	Notes *string `json:"notes"` // pointer body field -> nullable
