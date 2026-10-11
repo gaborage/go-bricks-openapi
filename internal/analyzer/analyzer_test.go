@@ -4228,14 +4228,15 @@ func (m *Module) item(ctx server.HandlerContext) (server.Result[Item], server.IA
 	assert.Equal(t, models.ShapePrimitive, count.Response.Shape.Kind)
 }
 
-// TestPayloadBaseShape covers the one-pointer, slice-element unwrapping the
-// payload fallback and its callers resolve a payload from.
+// TestPayloadBaseShape covers the pointer and slice-element unwrapping the
+// payload fallback and its callers resolve a payload from (multi-pointer
+// cases: TestPayloadBaseShapeShedsEveryRootPointer).
 func TestPayloadBaseShape(t *testing.T) {
 	named := models.TypeShape{Kind: models.ShapeNamed, Name: models.WellKnownTimeTime}
 	ptr := models.TypeShape{Kind: models.ShapePointer, Elem: &named}
 	slice := models.TypeShape{Kind: models.ShapeSlice, Elem: &named}
 	assert.Equal(t, named, payloadBaseShape(named))
-	assert.Equal(t, named, payloadBaseShape(ptr), "one pointer level is shed")
+	assert.Equal(t, named, payloadBaseShape(ptr), "a root pointer is shed")
 	assert.Equal(t, named, payloadBaseShape(slice), "a slice payload resolves from its element")
 	bare := models.TypeShape{Kind: models.ShapePointer}
 	assert.Equal(t, bare, payloadBaseShape(bare), "a pointer with no element is returned as-is")

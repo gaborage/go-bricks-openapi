@@ -316,10 +316,11 @@ func payloadRows() []payloadRow {
 		{result: "server.Result[map[string]func()]", nilResp: true},
 		{result: "server.Result[map[string]chan int]", nilResp: true},
 		{result: "server.Result[Page[User]]", nilResp: true},
-		// U3: a written **T root stays nil (#120).
-		{result: "server.Result[**int64]", nilResp: true},
-		{result: "server.Result[**Address]", nilResp: true},
-		{result: "server.Result[**[]string]", nilResp: true},
+		// U3, resolved by #120: a written **T root resolves exactly like *T
+		// (more rows in multi_pointer_payload_test.go).
+		{result: "server.Result[**int64]", res: "**int64"},
+		{result: "server.Result[**Address]", name: "Address"},
+		{result: "server.Result[**[]string]", res: "**[]string"},
 		// U4: a nameless composite over a named func or chan type is typed
 		// from its Shape, silently, like the field of its type.
 		{result: "server.Result[map[string]Fn]", shape: "map[string]Fn"},
@@ -530,14 +531,15 @@ func (m *Module) anon(ctx server.HandlerContext) (server.Result[struct{ A int }]
 
 // TestCompositePayloadTypeInfo pins extraction of composite payloads through
 // payloadTypeInfo: maps, nested slices and pointers to a container are carried
-// nameless with their Shape; a literal unmodelled leaf and a written **T root
-// are not; a pointer element is kept.
+// nameless with their Shape; a literal unmodelled leaf is not; a pointer
+// element is kept. A written **T root is pinned in
+// multi_pointer_payload_test.go.
 func TestCompositePayloadTypeInfo(t *testing.T) {
 	a := New("")
 	extract := func(src string) *models.TypeInfo {
 		return a.payloadTypeInfo(mustParse(t, src), "mod", map[string]struct{}{})
 	}
-	for _, src := range []string{"map[string]func()", "**int64", "**Address", "[]struct{A int}", "[]server.IAPIError"} {
+	for _, src := range []string{"map[string]func()", "[]struct{A int}", "[]server.IAPIError"} {
 		assert.Nil(t, extract(src), src)
 	}
 	for src, want := range map[string]string{

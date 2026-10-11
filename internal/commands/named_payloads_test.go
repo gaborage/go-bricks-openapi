@@ -170,8 +170,8 @@ HANDLERS`
 // generate's route count): a payload is typed exactly when its schema has no
 // fallback leaf.
 func TestDoctorClassifiesPayloads(t *testing.T) {
-	typed := []string{"Cents", "UserList", "map[string]int64", "AnyD", "*[]string"}
-	untyped := []string{"Tier", "Tree", "uintptr", "[]uintptr", "decimal.Decimal", "Fn", "complex128", "**Address", "map[string]Fn"}
+	typed := []string{"Cents", "UserList", "map[string]int64", "AnyD", "*[]string", "**Address"}
+	untyped := []string{"Tier", "Tree", "uintptr", "[]uintptr", "decimal.Decimal", "Fn", "complex128", "map[string]Fn"}
 	var routes, handlers strings.Builder
 	names := map[string]string{}
 	for i, payload := range append(append([]string{}, typed...), untyped...) {
