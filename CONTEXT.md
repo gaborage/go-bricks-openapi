@@ -12,9 +12,17 @@ _Avoid_: type string, kind (overloaded with OpenAPI's `type` keyword)
 The registry outcome for a declared type — of a field or of a payload — at any depth: which named schema a struct type references (a struct Marshaler type references none: it resolves to a string or an untyped leaf), or what a named non-struct type stands for (its underlying builtin scalar, and so its kind, or its underlying slice, map, array or pointer type). A distinct, later phase than Shape — resolving requires the type registry; Shape does not. A Marshaler type never resolves through its underlying type.
 _Avoid_: lookup, ref info
 
+**Instantiation**:
+A generic type written with its type arguments (`Page[Address]`, `pg.List[string]`), whose Resolution substitutes those arguments into the generic declaration.
+_Avoid_: generic type (that names the declaration), specialization
+
 **Marshaler type**:
 A type whose JSON form, in either direction, comes from its own `MarshalJSON`, `MarshalJSONTo`, `MarshalText`, `AppendText`, `UnmarshalJSON`, `UnmarshalJSONFrom` or `UnmarshalText` method — with the exact signature its `encoding/json` or `encoding` interface requires, on the type or its pointer, on a type it aliases, or promoted from a struct it embeds — rather than from its underlying type. A defined type over a Marshaler type drops that type's declared methods, but keeps whatever its underlying struct's embedded fields promote (`type MDW WrapLevel` is one). A struct field named like one of the methods hides a promoted method of that name, as Go's selector rules say. Only JSON bodies are affected: parameters are bound by kind.
 _Avoid_: custom type, enum type, custom-marshaled type
+
+**Stated schema**:
+The wire schema a `schema` type Directive states for a Marshaler type the project declares, used in place of the `{}` that type would otherwise be documented as (or, for a type that encodes as text both ways, in place of its bare string).
+_Avoid_: override, custom schema, manual schema
 
 **Constraint set**:
 The typed image of one `validate` tag expressed in OpenAPI schema vocabulary (bounds, format, pattern, enum). One tag produces one constraint set.
@@ -29,11 +37,11 @@ A route whose registration the Survey found but whose path expression it could n
 _Avoid_: dropped route, skipped route, missing route
 
 **Directive**:
-An `//openapi:<name>` comment attached to a route registration that overrides or supplements what the Survey infers for that route — e.g. marking it public, naming its error statuses. One parser, one namespace; every directive shares the same placement rule.
+An `//openapi:<name>` comment that overrides or supplements what the Survey infers. One parser, one namespace; each directive name has exactly one placement. A route directive (`public`, `errors`, `meta`) is attached to a route registration and applies to that route — marking it public, naming its error statuses, naming the type of the meta keys its handler supplies. A type directive (`schema`) sits in a package-level type declaration's doc comment and applies to that type — stating its wire schema.
 _Avoid_: annotation, pragma, marker comment
 
 **Detached directive**:
-A comment group holding at least one recognised Directive that attaches to no registration the Survey recognised — separated from its call by a blank line, above an enclosing statement, inside a call, after code on the same line (`server.GET(...) //openapi:public`), or above a registration the Survey never walks. Only files the Survey's module discovery visits are checked; a file read just to resolve an import (e.g. in a nested Go module) is not. It is a diagnostic, raised once per group. A group attaches as soon as the call below it is recognised as a registration, so a Directive above an Unresolved route is never Detached; a group of only unknown names is reported as unknown, never Detached.
+A recognised Directive outside its name's placement: a route directive that attaches to no registration the Survey recognised (one that follows code on the same line never attaches), or a type directive anywhere but a package-level type declaration's doc comment (so one above a type declared in a function body). Placement is judged per directive name, so one comment group can hold a Detached directive beside one that applies. It is a diagnostic, raised once per group, and only in files the Survey's module discovery visits. A route directive above an Unresolved route is never Detached, an unknown name is reported as unknown rather than Detached, and a type directive in a package-level type declaration's doc comment that cannot apply there gets its own diagnostic instead.
 _Avoid_: orphan directive, misplaced directive, unattached comment
 
 **Pre-flight check**:

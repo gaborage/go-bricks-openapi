@@ -50,6 +50,8 @@ automation + signed-tag governance layered on top of the Phase-2 artifacts go-br
 | `Makefile` | Add `vuln`, `sec`, `release` targets (pinned scanner versions). |
 | `RELEASING.md` | Rewritten to the go-bricks runbook (keeps binaries + SLSA). |
 
+> **SUPERSEDED (2026-10-10).** The `.goreleaser.yaml` row above: `changelog.disable` skips the goreleaser pipe that loads `--release-notes`, so releases published empty bodies; removed in #137 — see `.goreleaser.yaml`.
+
 ## 4. Adaptations from go-bricks
 
 - **Single module** — no `tools/migration` second module / second tag stream.
