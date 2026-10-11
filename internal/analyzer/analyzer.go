@@ -2400,9 +2400,9 @@ func (a *ProjectAnalyzer) handleResultWrapper(x, index ast.Expr, packageName str
 // else a scalar one. A map, a nested slice and a pointer to a slice, array, map
 // or interface{} are carried nameless with their Shape, on this payload path
 // only: a slice or map handler PARAMETER keeps resolving to nil through
-// typeInfoFromExpr. A written **T root falls through to scalarPayloadTypeInfo,
-// where typeInfoFromExpr returns nil: whether Result[**T] should resolve is
-// #120's open question.
+// typeInfoFromExpr. A written root of any pointer depth (**T, ***T) resolves
+// exactly as *T does (#120): its pointee is tested, and named, through
+// singlePointer, while its Shape keeps every level.
 func (a *ProjectAnalyzer) payloadTypeInfo(expr ast.Expr, packageName string, serverAliases map[string]struct{}) *models.TypeInfo {
 	switch e := expr.(type) {
 	case *ast.ArrayType:
@@ -2410,17 +2410,32 @@ func (a *ProjectAnalyzer) payloadTypeInfo(expr ast.Expr, packageName string, ser
 	case *ast.MapType:
 		return a.compositePayloadTypeInfo(e, packageName)
 	case *ast.StarExpr:
-		if isCompositePointee(e.X) { // *[]T, *[N]T, *map[K]V, *interface{}
+		if isCompositePointee(singlePointer(e).X) { // *[]T, **[N]T, *map[K]V, *interface{}
 			return a.compositePayloadTypeInfo(e, packageName)
 		}
 	}
 	return a.scalarPayloadTypeInfo(expr, packageName, serverAliases)
 }
 
+// singlePointer peels a written pointer chain (**T, ***T) down to its last
+// level (*T); a single pointer is returned as-is. The payload path names a
+// multi-pointer root by it, because typeInfoFromExpr (handleStarExprType,
+// shared with request extraction) names only T and *T.
+func singlePointer(e *ast.StarExpr) *ast.StarExpr {
+	for {
+		inner, ok := e.X.(*ast.StarExpr)
+		if !ok {
+			return e
+		}
+		e = inner
+	}
+}
+
 // isCompositePointee reports whether a pointer payload's pointee is a slice,
 // array, map or interface{} literal, which payloadTypeInfo carries nameless.
-// A named pointee (*Item, *q.T) keeps the scalar path, and so does a second
-// pointer (**T stays nil, #120).
+// A named pointee (*Item, *q.T) keeps the scalar path. payloadTypeInfo passes
+// the pointee of a chain's last level, so **[]T is composite and **Item is
+// not.
 func isCompositePointee(x ast.Expr) bool {
 	switch x.(type) {
 	case *ast.ArrayType, *ast.MapType, *ast.InterfaceType:
@@ -2458,8 +2473,10 @@ func hasUnknownLeaf(s *models.TypeShape) bool {
 // return) and attaches its Shape, so the generator can document a well-known or
 // builtin payload inline instead of $ref'ing a component that is never emitted.
 //
-// A builtin (one pointer level shed) names no component, so its Name is
+// A builtin (every pointer level shed) names no component, so its Name is
 // cleared — the same rule slicePayloadTypeInfo applies to a primitive element.
+// A multi-pointer root (**Item) is named through singlePointer, exactly as
+// *Item, while its Shape keeps every level.
 // A named payload that does not register as a project struct is resolved by
 // populateTypeFields (resolvePayload) and typed like a field of its type.
 // interface{} is resolved here too: typeInfoFromExpr has no case for it, but
@@ -2473,7 +2490,11 @@ func (a *ProjectAnalyzer) scalarPayloadTypeInfo(
 	if _, ok := index.(*ast.InterfaceType); ok {
 		return &models.TypeInfo{Package: packageName, Shape: &shape}
 	}
-	ti := a.typeInfoFromExpr(index, packageName, serverAliases)
+	peeled := index
+	if star, ok := index.(*ast.StarExpr); ok {
+		peeled = singlePointer(star)
+	}
+	ti := a.typeInfoFromExpr(peeled, packageName, serverAliases)
 	if ti == nil {
 		return nil
 	}
@@ -2484,15 +2505,25 @@ func (a *ProjectAnalyzer) scalarPayloadTypeInfo(
 	return ti
 }
 
-// payloadBaseShape returns the shape a payload's schema is resolved from: a
-// slice or array payload's element, otherwise the payload itself, with one
-// pointer level shed. The analyzer screens and names payloads by it
-// (slicePayloadTypeInfo, resolvePayload, dropUnresolvablePayloadName).
+// payloadBaseShape returns the shape a payload is named and screened by
+// (slicePayloadTypeInfo, scalarPayloadTypeInfo, resolvePayload,
+// dropUnresolvablePayloadName). The two arms differ on purpose:
+//
+//   - a slice or array payload's element sheds exactly one pointer level, the
+//     depth typeInfoFromExpr can name, so []**Item keeps a pointer base and
+//     stays on the nameless composite path;
+//   - any other payload sheds every pointer level, so **int64 is a builtin,
+//     **time.Time is well-known and **Missing warns by its bare name, exactly
+//     as their *T forms do (#120).
 func payloadBaseShape(s models.TypeShape) models.TypeShape {
 	if isSequence(s.Kind) && s.Elem != nil {
 		s = *s.Elem
+		if s.Kind == models.ShapePointer && s.Elem != nil {
+			s = *s.Elem
+		}
+		return s
 	}
-	if s.Kind == models.ShapePointer && s.Elem != nil {
+	for s.Kind == models.ShapePointer && s.Elem != nil {
 		s = *s.Elem
 	}
 	return s
