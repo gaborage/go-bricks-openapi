@@ -1,10 +1,12 @@
 // Package nonstructreq pins #102: a handler whose request type is not a
 // struct documents no requestBody and orphans no component.
 //
-// go-bricks binds every request by its struct fields and panics at request
-// time on any other type (F26, gaborage/go-bricks#1811), so the analyzer warns
-// about each of these routes and leaves the request untyped. Goldens do not
-// capture warnings — the analyzer and command tests carry that proof. This
+// go-bricks binds every request by its struct fields and panics on any other
+// type — at request time before v0.69.0, at route registration from v0.69.0
+// (F26, gaborage/go-bricks#1811) — so the analyzer warns about each of these
+// routes and leaves the request untyped. That includes a pointer to a pointer
+// (#132): **Receipt is not peeled to Receipt. Goldens do not capture
+// warnings — the analyzer and command tests carry that proof. This
 // golden locks the output half: no `requestBody` key on any operation, and no
 // component for Status or any other request type; only the Receipt response
 // and the standard shared components are emitted.
@@ -40,6 +42,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.POST(hr, r, "/named-scalar", m.namedScalar, server.WithTags("nonstructreq"))
 	server.POST(hr, r, "/slice", m.slice, server.WithTags("nonstructreq"))
 	server.POST(hr, r, "/map", m.mapReq, server.WithTags("nonstructreq"))
+	server.POST(hr, r, "/double-pointer", m.doublePointer, server.WithTags("nonstructreq"))
 }
 
 func (m *Module) builtin(req *string, ctx server.HandlerContext) (server.Result[Receipt], server.IAPIError) {
@@ -59,5 +62,9 @@ func (m *Module) slice(req []Receipt, ctx server.HandlerContext) (server.Result[
 }
 
 func (m *Module) mapReq(req map[string]string, ctx server.HandlerContext) (server.Result[Receipt], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Receipt{}), nil
+}
+
+func (m *Module) doublePointer(req **Receipt, ctx server.HandlerContext) (server.Result[Receipt], server.IAPIError) {
 	return server.NewResult(http.StatusOK, Receipt{}), nil
 }

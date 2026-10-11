@@ -374,11 +374,13 @@ nested Go module, is not.
 - A handler whose request type is not a struct — a builtin (`string`,
   `*int64`), `any` or `interface{}`, a well-known or third-party type
   (`json.RawMessage`, `decimal.Decimal`), an undeclared name, a slice, map or
-  local named scalar (`type Status string`) — gets no `requestBody`, is
-  counted as an untyped request in `doctor`, and is reported as a warning (so
-  `--strict` fails on it). go-bricks binds requests by struct fields and
-  panics at request time on any other type (its known gap F26,
-  gaborage/go-bricks#1811), so there is no body contract to document.
+  local named scalar (`type Status string`), or any type behind two or more
+  pointers (`**CreateReq`) — gets no `requestBody`, is counted as an untyped
+  request in `doctor`, and is reported as a warning (so `--strict` fails on
+  it). go-bricks binds requests by struct fields and panics on any other
+  type — at request time before v0.69.0, at route registration from v0.69.0
+  (its known gap F26, gaborage/go-bricks#1811) — so there is no body contract
+  to document.
 - A route path built from a `var` (including a `:=` local) is an Unresolved
   route: only `const` declarations resolve. The route is dropped from the spec
   with a warning.

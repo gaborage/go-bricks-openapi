@@ -2661,8 +2661,10 @@ func (a *ProjectAnalyzer) handleSelectorExprType(t *ast.SelectorExpr, serverAlia
 // type-literal parameter that can never be a struct ([]T, [N]T, map,
 // interface{}, func, chan) is the request too, but resolves to a nil TypeInfo
 // — the request-body path has no shape to emit for it — with only its type
-// text returned, so populateRequestType can warn about it. Returns nil and ""
-// when the handler takes no request.
+// text returned, so populateRequestType can warn about it. So is a parameter
+// written with two or more pointer levels (**T), screened before
+// typeInfoFromExpr so its pointers are never peeled to resolve **T as T.
+// Returns nil and "" when the handler takes no request.
 func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName string, serverAliases map[string]struct{}) (request *models.TypeInfo, typeText string) {
 	if params == nil {
 		return nil, ""
@@ -2671,6 +2673,9 @@ func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName 
 	// Return the first parameter that is not a framework type
 	// (HandlerContext can appear in first or second position)
 	for _, p := range params.List {
+		if isMultiPointer(p.Type) {
+			return nil, types.ExprString(p.Type)
+		}
 		if ti := a.typeInfoFromExpr(p.Type, packageName, serverAliases); ti != nil {
 			return ti, types.ExprString(p.Type)
 		}
@@ -2695,6 +2700,19 @@ func isNonStructTypeLiteral(expr ast.Expr) bool {
 		return true
 	}
 	return false
+}
+
+// isMultiPointer reports whether expr is written with two or more pointer
+// levels (**T, ***T, **[]T), parenthesized or not (*(*T), (**T)). go-bricks
+// binds a struct or one pointer to a struct, so whatever the pointee, such a
+// handler parameter is a non-struct request, never a framework parameter.
+func isMultiPointer(expr ast.Expr) bool {
+	star, ok := ast.Unparen(expr).(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	_, ok = ast.Unparen(star.X).(*ast.StarExpr)
+	return ok
 }
 
 // extractResponseType extracts the response payload from a handler's first
@@ -3204,17 +3222,21 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 }
 
 // nonStructRequestWarning is the one warning a route raises when its request
-// type is not a struct; the argument is the type as written.
-const nonStructRequestWarning = "request type %s is not a struct: go-bricks binds requests by struct fields and panics at request time (F26, gaborage/go-bricks#1811); no requestBody emitted"
+// type is not a struct; the argument is the type as written. From v0.69.0,
+// go-bricks' RegisterHandler refuses anything but a struct or one pointer to
+// a struct; earlier versions register the route and panic binding a request.
+const nonStructRequestWarning = "request type %s is not a struct: go-bricks binds requests by struct fields and panics on any other type, " +
+	"at request time before v0.69.0 and at route registration from v0.69.0 (F26, gaborage/go-bricks#1811); no requestBody emitted"
 
 // populateRequestType resolves a handler's request type the way
 // populateTypeFields resolves a response, except for what does not register
 // as a struct. go-bricks binds every request by its struct fields and panics
-// at request time on any other type (F26, gaborage/go-bricks#1811), so a
-// builtin, well-known, third-party, undeclared, local named non-struct or
-// type-literal request raises exactly one warning — the route documents no
-// requestBody — and is left untyped (no name, no fields), which is what makes
-// doctor count it as an untyped request.
+// on any other type — at request time before v0.69.0, at route registration
+// from v0.69.0 (F26, gaborage/go-bricks#1811) — so a builtin, well-known,
+// third-party, undeclared, local named non-struct, type-literal or
+// multi-pointer (**T) request raises exactly one warning — the route
+// documents no requestBody — and is left untyped (no name, no fields), which
+// is what makes doctor count it as an untyped request.
 func (a *ProjectAnalyzer) populateRequestType(h *handlerAnalysis, astFile *ast.File, filePath string) {
 	if h.request != nil {
 		if registered := a.registerPayloadType(h.request, astFile, filePath); registered != nil {
