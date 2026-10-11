@@ -243,10 +243,12 @@ func constraintsFor(shape models.TypeShape, constraints map[string]string) *cons
 // No rule lands on a Marshaler leaf, text leaves included (the field itself,
 // or its element): it is written through its own method, so its underlying
 // kind says nothing, and format/enum/pattern would apply regardless of kind
-// (#88, #111). An enclosing slice or map keeps its cardinality.
+// (#88, #111). Nor on an anonymous struct's inline object, which, like a
+// $ref, takes no keyword (takesNoKeyword). An enclosing slice or map keeps
+// its cardinality.
 func applyValidationConstraints(prop *OpenAPIProperty, field *models.FieldInfo) {
 	resolved := field.ResolvedShape()
-	if len(field.Constraints) > 0 && !isMarshalerLeaf(resolved) {
+	if len(field.Constraints) > 0 && !takesNoKeyword(resolved) {
 		constraintsFor(resolved, field.Constraints).applyTo(prop)
 	}
 	if len(field.ElementConstraints) == 0 || prop.Items == nil || prop.Items.Ref != "" {
@@ -257,10 +259,26 @@ func applyValidationConstraints(prop *OpenAPIProperty, field *models.FieldInfo) 
 	if isSequence(elem) && elem.Elem != nil {
 		elem = *elem.Elem
 	}
-	if isMarshalerLeaf(elem) {
+	if takesNoKeyword(elem) {
 		return
 	}
 	constraintsFor(elem, field.ElementConstraints).applyTo(prop.Items)
+}
+
+// takesNoKeyword reports whether no validate keyword may land on s, after
+// every pointer: a Marshaler leaf (isMarshalerLeaf), or an extracted
+// anonymous struct's inline object, which, like a $ref, takes none. A
+// field's required rule is unaffected: its parent's required list carries
+// it.
+//
+// Only an extracted anonymous struct counts, told apart by its non-nil
+// Fields (models.AnonymousStruct). An unextracted one (a path, query or
+// header parameter's) stays the bare object it was before anonymous structs
+// were extracted, and keeps the kind-agnostic keywords it took then (enum,
+// format, pattern), so its output does not move.
+func takesNoKeyword(s models.TypeShape) bool {
+	s = stripPointers(s)
+	return isMarshalerLeaf(s) || (s.Kind == models.ShapeStruct && s.Struct != nil && s.Struct.Fields != nil)
 }
 
 // isMarshalerLeaf reports whether s, after every pointer, is a Marshaler leaf:

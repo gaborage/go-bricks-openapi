@@ -60,7 +60,7 @@ Token rules:
 - `make clean` runs `go clean -cache -testcache`, which wipes the machine-wide Go build/test cache, not just this repo's.
 - `make sec`'s green exit isn't evidence it ran: gosec silently scans 0 files and exits 0 when given Go import paths.
 - The `sec` target omits CI's scanned-file-count assertion — trust the CI `Security (gosec)` job, not a local `make sec`.
-- gosec walks the filesystem, so `./...` also enters nested modules such as gitignored agent worktrees under `.claude/worktrees`; `make sec` adds `-exclude-dir=.claude` for that (CI never has the directory). The expected scan is 24 files.
+- gosec walks the filesystem, so `./...` also enters nested modules such as gitignored agent worktrees under `.claude/worktrees`; `make sec` adds `-exclude-dir=.claude` for that (CI never has the directory). The expected scan is 25 files.
 - `GOSEC_VERSION` (Makefile) and ci.yml's `go install …gosec@` are an untagged master pseudo-version, kept identical: every tagged gosec through v2.29.0 depends on `golang.org/x/tools` ≤ v0.49.0, which cannot read Go 1.27 export data (version 5) and fails typechecking. Swap both for the next tagged release.
 - `make validate-spec` (redocly) is deliberately excluded from `check` — it needs `npx` and network.
 - `make validate-spec` runs only on Ubuntu, against one fixture: `internal/spectest/testdata/nested_schema`.
@@ -116,8 +116,9 @@ Token rules:
 - The `json_excluded_request` golden locks this invariant.
 - The Constraint set (validate tag → OpenAPI keywords) lives only in `internal/generator/constraints.go`; the analyzer stops at the key→value map on `FieldInfo.Constraints`/`ElementConstraints`. `applyValidationConstraints` is the single entry point (collection rules onto the property, `dive` rules onto `Items`).
 - `applyTo` writes only the keywords the tag set — the uint `minimum: 0` pre-stamp in `setBasicTypeAndFormat` depends on surviving an empty set and being overwritten only by an explicit bound. Folding that floor into the constraint module was rejected in #54 (closed wontfix, 2026-09-08) — the pre-stamp seam is frozen. `applyValidationConstraints` skips element rules when `Items.Ref != ""` — a `$ref` item takes no keywords. Both are test-pinned; neither guard is redundant.
-- `example:` coercion runs in exactly one place: the thin `fieldInfoToProperty` wrapper, which calls `applyExample` after `buildFieldProperty` resolves the property's type.
-- `buildFieldProperty` itself must not stamp examples.
+- > **SUPERSEDED (2026-10-11).** This said `example:` coercion runs in exactly one place, the thin `fieldInfoToProperty` wrapper, which calls `applyExample` after `buildFieldProperty` resolves the property's type. Now that place is the free function `fieldProperty`, which calls `applyExample` after `bareFieldProperty` resolves the property's type; the `fieldInfoToProperty` method is a one-line wrapper over `fieldProperty`. The logic moved out of the methods because an anonymous struct's inline object (issue 118) builds its fields' properties from `setTypeAndFormat`, which is free: `objectProperties` serves a component (`typeInfoToSchema`) and an inline object alike. Still exactly one place.
+- > **SUPERSEDED (2026-10-11).** This said `buildFieldProperty` itself must not stamp examples. That method was deleted once no production code called it; the rule now binds `bareFieldProperty` (next bullet).
+- `bareFieldProperty` itself must not stamp examples: it resolves the property's type for `fieldProperty`, the one place example coercion runs.
 - An `example:` with no valid representation in its declared type is dropped silently — no warning, no `--strict` failure.
 - This is deliberate: a missing example costs one hint, an ill-typed one would make the whole document invalid.
 - A kept example can still violate `enum`, `format`, `minLength`/`maxLength`, or `pattern` — a known, accepted residual.

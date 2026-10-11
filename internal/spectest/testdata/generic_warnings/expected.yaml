@@ -1612,6 +1612,10 @@ components:
       properties:
         anon:
           type: object
+          properties:
+            x:
+              type: integer
+              format: int64
         ch:
           type: object
         fn:

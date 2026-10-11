@@ -3,6 +3,7 @@ package analyzer
 import (
 	"go/ast"
 	"go/parser"
+	"strings"
 	"testing"
 
 	"github.com/gaborage/go-bricks-openapi/internal/models"
@@ -38,9 +39,31 @@ func renderShape(s models.TypeShape) string {
 			return "inst:?"
 		}
 		return "inst:" + s.Inst.Written
+	case models.ShapeStruct:
+		return renderStruct(s.Struct)
 	default:
 		return "unknown"
 	}
+}
+
+// renderStruct renders an anonymous struct: struct{…} when its fields were
+// not extracted (a Shape, a parameter, a classifying resolution), else each
+// field's JSON key (its Go name when untagged) and rendered resolution, in
+// order, so an extracted literal with no fields renders struct{}.
+func renderStruct(st *models.AnonymousStruct) string {
+	if st == nil || st.Fields == nil {
+		return "struct{…}"
+	}
+	parts := make([]string, len(st.Fields))
+	for i := range st.Fields {
+		f := &st.Fields[i]
+		key := f.JSONName
+		if key == "" || key == jsonSkipValue {
+			key = f.Name
+		}
+		parts[i] = key + " " + renderShape(f.ResolvedShape())
+	}
+	return "struct{" + strings.Join(parts, "; ") + "}"
 }
 
 func renderShapePtr(s *models.TypeShape) string {
@@ -61,10 +84,13 @@ func mustParse(t *testing.T, src string) ast.Expr {
 
 // shapeParityCorpus pins the decoder against the rendered strings the retired
 // typeToString produced for the same expressions — including its lossiness:
-// chan/func/struct literals render as "unknown". One row diverges on purpose
-// (#98): typeToString rendered a fixed-size array as a slice, but Shape keeps
-// an array apart (encoding/json base64-encodes only a byte slice), so arrays
-// render as [N]. renderShape is the test-only inverse; production never renders.
+// chan/func literals render as "unknown". Two kinds of row diverge on purpose:
+// typeToString rendered a fixed-size array as a slice, but Shape keeps an
+// array apart (#98: encoding/json base64-encodes only a byte slice), so arrays
+// render as [N]; and it rendered a struct literal as "unknown", but Shape
+// decodes one as ShapeStruct (issue 118), which renders struct{…} because a
+// Shape never carries its fields. renderShape is the test-only inverse;
+// production never renders.
 var shapeParityCorpus = map[string]string{
 	"string": "string", "int": "int", "int64": "int64", "uint8": "uint8",
 	"byte": "byte", "bool": "bool", "float64": "float64", "any": "any",
@@ -84,7 +110,7 @@ var shapeParityCorpus = map[string]string{
 	"[]interface{}":             "[]interface{}",
 	"chan int":                  "unknown",
 	"func()":                    "unknown",
-	"struct{}":                  "unknown",
+	"struct{}":                  "struct{…}",
 	"[3]int":                    "[N]int", // typeToString rendered "[]int"; see above
 	"[0]byte":                   "[N]byte",
 	"[N]byte":                   "[N]byte",
@@ -92,6 +118,11 @@ var shapeParityCorpus = map[string]string{
 	"[][4]byte":                 "[][N]byte",
 	"[2][]byte":                 "[N][]byte",
 	"map[string][4]byte":        "map[string][N]byte",
+
+	"struct{ A int }":            "struct{…}",
+	"*struct{ A int }":           "*struct{…}",
+	"[]struct{ A int }":          "[]struct{…}",
+	"map[string]struct{ A int }": "map[string]struct{…}",
 }
 
 func TestTypeShapeParity(t *testing.T) {

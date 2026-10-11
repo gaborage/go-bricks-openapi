@@ -216,13 +216,14 @@ func (ec embedClassifier) display(file *ast.File, path, name string) string {
 // for an alias of Cents), and typed as a field of the written type. A path,
 // query or header parameter gets no JSON name, but dominanceKey gives it its
 // Name, the same key.
-func (a *ProjectAnalyzer) embedProperty(field *ast.Field, astFile *ast.File, filePath string) rankedField {
+func (a *ProjectAnalyzer) embedProperty(field *ast.Field, astFile *ast.File, filePath string, depth int) rankedField {
 	name := embeddedFieldName(field.Type)
-	fi := a.buildFieldInfo(name, field, astFile, filePath)
-	if fi.JSONName == "" && fi.ParamType == "" {
-		fi.JSONName = name // encoding/json's key, which the generator would otherwise lower-case
+	f := a.buildFieldInfo(name, field, astFile, filePath, depth)
+	if f.JSONName == "" && f.ParamType == "" {
+		f.JSONName = name // encoding/json's key, which the generator would otherwise lower-case
 	}
-	return rankedField{FieldInfo: fi, fieldRank: fieldRank{embedName: true}}
+	f.embedName = true
+	return f
 }
 
 // warnDroppedEmbed raises a dropped embed's one warning, once per position.
@@ -253,11 +254,27 @@ type fieldRank struct {
 	embedName bool
 }
 
-// rankedField is an extracted field with its rank. Ranks live only while a
-// struct's fields are merged; models.FieldInfo never carries them.
+// rankedField is an extracted field with its rank and its declaration. Ranks
+// live only while a struct's fields are merged; models.FieldInfo never
+// carries them.
 type rankedField struct {
 	models.FieldInfo
 	fieldRank
+	decl fieldDecl
+}
+
+// fieldDecl is where an extracted field is resolved once it survives
+// (extractStructFields): its AST field, the file declaring its struct, and
+// that struct's registration depth. For a promoted field that is the
+// embedded struct's depth, one past the outer struct's, so an anonymous
+// struct in it is extracted two levels below the outer struct, while a named
+// struct in it registers one level below, as registerStructKeyed registers
+// every final field, promoted or not. Change both together or neither.
+type fieldDecl struct {
+	field *ast.Field
+	file  *ast.File
+	path  string
+	depth int
 }
 
 // dominanceKey is the key encoding/json writes f under: its JSON name, or

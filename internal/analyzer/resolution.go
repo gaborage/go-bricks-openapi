@@ -91,7 +91,15 @@ type fieldFallback struct {
 
 // resolveState is the state shared by one field's resolution.
 type resolveState struct {
-	param    bool               // path/query/header param: exempt from the Marshaler guard
+	param bool // path/query/header param: exempt from the Marshaler guard
+	// inline is set only by resolveField, for a body field outside
+	// requestParamFields: its anonymous structs are extracted and documented
+	// inline (resolveStruct). A quiet run, a resolution that only classifies
+	// a type (marshalerNamed, requestInstantiation) or types a payload, and
+	// requestParamFields, which discards a Marshaler request's body fields,
+	// leave them unextracted.
+	inline   bool
+	depth    int                // registration depth of the struct declaring the field: an anonymous struct is extracted one deeper
 	home     string             // the field's own package directory: display qualifies names declared elsewhere
 	stack    []string           // typeKeys of the named types being resolved
 	first    fieldFallback      // the first fallback noted, which picks the warning
@@ -126,6 +134,7 @@ type fieldSite struct {
 	loc      string             // fieldLoc(field), for the field's warnings
 	declared string             // the field's type as written, for the field's warnings
 	refSites map[string]pkgFile // from resolveState.refSites
+	refDirs  map[string]string  // from resolveState.refDirs, which an enclosing anonymous struct folds (foldInlineRefSites)
 	first    fieldFallback      // from resolveState.first, warned once the field survives the merge
 }
 
@@ -195,7 +204,9 @@ func (c resolveCtx) in(file *ast.File, path string) resolveCtx {
 // the type's underlying form, so a note from that run (a defined type over
 // an unresolvable qualified type, or a recursion cut) must not become the
 // field's warning. Nothing descends into a Marshaler's Elem, so the
-// discarded ref sites register nothing.
+// discarded ref sites register nothing, and no anonymous struct is extracted
+// in it (inline is not copied): extracting one would raise extraction-time
+// warnings for a type documented as {}.
 func (c resolveCtx) quiet() resolveCtx {
 	c.st = &resolveState{
 		param: c.st.param, home: c.st.home, stack: slices.Clone(c.st.stack), refSites: map[string]pkgFile{}, refDirs: map[string]string{},
@@ -216,39 +227,43 @@ func (c resolveCtx) recordRef(name, dir string) {
 }
 
 // resolveField stamps f's Resolution and records its site: where its ref
-// leaves register and the fallback it noted. It raises no warning: a field
-// may yet be dropped by dropDominatedFields or dropDuplicateParams, so
-// registerStructAt warns only for the fields that survive
-// (warnResolvedField). A json:"-" body field is skipped.
-func (a *ProjectAnalyzer) resolveField(f *models.FieldInfo, field *ast.Field, astFile *ast.File, filePath string) {
+// leaves register and the fallback it noted. extractStructFields calls it
+// only for a field that survives dropDominatedFields and dropDuplicateParams.
+// It raises no warning: registerStructAt warns once the field list is final
+// (warnResolvedField). A json:"-" body field is skipped. depth is the
+// registration depth of the struct declaring the field, which an anonymous
+// struct in a body field's type shares; while requestParamFields reads a
+// Marshaler request (quietEmbeds), none is extracted.
+func (a *ProjectAnalyzer) resolveField(f *models.FieldInfo, field *ast.Field, astFile *ast.File, filePath string, depth int) {
 	if isJSONExcluded(f) {
 		return
 	}
 	c := newResolveCtx(astFile, filePath, f.ParamType != "")
+	c.st.inline, c.st.depth = f.ParamType == "" && !a.quietEmbeds, depth
 	r := a.resolveShape(f.Shape, c)
 	f.Resolution = &r
 	a.fieldSites[f.Resolution] = fieldSite{
-		loc: a.fieldLoc(field), declared: types.ExprString(field.Type), refSites: c.st.refSites, first: c.st.first,
+		loc: a.fieldLoc(field), declared: types.ExprString(field.Type), refSites: c.st.refSites, refDirs: c.st.refDirs, first: c.st.first,
 	}
 }
 
 // warnResolvedField raises a resolved field's one warning, from the site
 // resolveField recorded: the uintptr one when any leaf is a uintptr (it
 // outranks every fallback), else the first fallback's. A field with no site
-// (json:"-", or hand-built) never warns.
+// (json:"-", or hand-built) never warns. Then the fields of the anonymous
+// structs it holds warn as fields (warnInlineFields).
 func (a *ProjectAnalyzer) warnResolvedField(f *models.FieldInfo) {
 	if f.Resolution == nil {
 		return
 	}
-	site, ok := a.fieldSites[f.Resolution]
-	if !ok {
-		return
+	if site, ok := a.fieldSites[f.Resolution]; ok {
+		if holdsUintptr(f.Resolution) {
+			a.warnUintptrField(f, site.loc)
+		} else {
+			a.warnFieldFallback(f, &site)
+		}
 	}
-	if holdsUintptr(f.Resolution) {
-		a.warnUintptrField(f, site.loc)
-		return
-	}
-	a.warnFieldFallback(f, &site)
+	a.warnInlineFields(f.Resolution)
 }
 
 // resolveShape resolves every named leaf of s. Container nodes are copied
@@ -269,8 +284,10 @@ func (a *ProjectAnalyzer) resolveShape(s models.TypeShape, c resolveCtx) models.
 		noteUntypedBuiltin(s.Name, c)
 	case models.ShapeInstantiation:
 		noteInstantiation(s.Inst, c)
+	case models.ShapeStruct:
+		return a.resolveStruct(s, c)
 	default:
-		// ShapeUnknown: anonymous structs, chan, func.
+		// ShapeUnknown: chan, func.
 	}
 	return s
 }
@@ -558,7 +575,15 @@ func (a *ProjectAnalyzer) structMarshalerLeaf(name string, c resolveCtx, mode re
 	if c.st.param {
 		return models.TypeShape{}, false
 	}
-	m, fb := a.methodSetOf(name, c, mode == identityMode, nil).marshaler(c.display(name))
+	return methodSetLeaf(a.methodSetOf(name, c, mode == identityMode, nil), c.display(name), name, c)
+}
+
+// methodSetLeaf reads a struct's method set ms: a text leaf named name when
+// it makes the struct a string both ways, a Marshaler leaf when it holds any
+// other of the seven methods, noting the fallback (display is the struct as
+// the warning names it), else ok is false.
+func methodSetLeaf(ms methodSet, display, name string, c resolveCtx) (models.TypeShape, bool) {
+	m, fb := ms.marshaler(display)
 	if !m.found() {
 		return models.TypeShape{}, false
 	}
@@ -702,9 +727,13 @@ func mergeDecls(results []models.TypeShape) (models.TypeShape, bool) {
 }
 
 // mergeShapes merges two declarations' resolutions: containers of one kind
-// merge their elements, equal leaves are kept, and scalar leaves of one
-// OpenAPI kind merge to that kind alone (#92).
+// merge their elements, equal leaves are kept, scalar leaves of one OpenAPI
+// kind merge to that kind alone (#92), and an anonymous struct cut merges
+// with an extracted one, the first kept (cutAgainstExtraction).
 func mergeShapes(x, y models.TypeShape) (models.TypeShape, bool) {
+	if cutAgainstExtraction(x, y) {
+		return x, true
+	}
 	if x.Kind == y.Kind {
 		if merged, ok := mergeSameKind(x, y); ok {
 			return merged, true
@@ -717,7 +746,9 @@ func mergeShapes(x, y models.TypeShape) (models.TypeShape, bool) {
 }
 
 // mergeSameKind merges two shapes of one kind: containers by their elements,
-// primitives when they are one builtin, other leaves when they are one name.
+// primitives when they are one builtin, extracted anonymous structs when they
+// are written alike (the first's extraction is kept) and unextracted ones
+// always, other leaves when they are one name.
 func mergeSameKind(x, y models.TypeShape) (models.TypeShape, bool) {
 	switch x.Kind {
 	case models.ShapePointer, models.ShapeSlice, models.ShapeArray, models.ShapeMap:
@@ -726,9 +757,46 @@ func mergeSameKind(x, y models.TypeShape) (models.TypeShape, bool) {
 		return x, sameBuiltin(x.Name, y.Name)
 	case models.ShapeInstantiation:
 		return x, x.Inst != nil && y.Inst != nil && x.Inst.Written == y.Inst.Written
+	case models.ShapeStruct:
+		// Outside a resolution that documents it inline, a literal is a bare
+		// object however it is written, so its text carries nothing to compare.
+		if x.Struct == nil || y.Struct == nil || x.Struct.Fields == nil || y.Struct.Fields == nil {
+			return x, true
+		}
+		return x, sameLiteral(x.Struct, y.Struct)
 	default:
 		return x, x.Name == y.Name
 	}
+}
+
+// cutAgainstExtraction reports whether one of two declarations' resolutions
+// is an anonymous struct resolveStruct cut to {} (isLiteralCut) and the other
+// an extracted one, which merge with the first kept. Build-tagged
+// declarations reach their literals one at a time, so one can be cut where
+// another is extracted, and the first is what one declaration documents:
+//   - inside the first declaration's literal of type L []struct{ Next L },
+//     Next resolves L's first declaration to the cut of that open literal and
+//     the second's to an extraction, so the cut is kept;
+//   - inside an anonymous struct, the first declaration's literal can use up
+//     maxLiteralExtractions and the second's be cut, so the extraction is
+//     kept, and the second's text is never compared with it.
+//
+// Elsewhere, whether the literals are written alike is compared where both
+// are extracted (mergeSameKind).
+func cutAgainstExtraction(x, y models.TypeShape) bool {
+	return (isLiteralCut(x) && isExtractedLiteral(y)) || (isLiteralCut(y) && isExtractedLiteral(x))
+}
+
+// isLiteralCut reports whether s is an anonymous struct resolveStruct cut to
+// {}: a cycle, the depth limit or maxLiteralExtractions.
+func isLiteralCut(s models.TypeShape) bool {
+	return s.Kind == models.ShapeRecursive && s.Name == anonStructDisplay
+}
+
+// isExtractedLiteral reports whether s is an anonymous struct whose fields
+// were extracted (non-nil Fields).
+func isExtractedLiteral(s models.TypeShape) bool {
+	return s.Kind == models.ShapeStruct && s.Struct != nil && s.Struct.Fields != nil
 }
 
 // mergeElems merges the elements of two containers of one kind.
@@ -800,8 +868,11 @@ func (a *ProjectAnalyzer) localTypeDecls(name string, file *ast.File, path strin
 }
 
 // walkResolvedLeaves calls fn on every leaf of s, descending through pointer,
-// slice, array and map elements only: never into a map's Key, and never into
-// a Marshaler leaf's Elem (nothing under it is emitted or registered).
+// slice, array and map elements only: never into a map's Key, never into a
+// Marshaler leaf's Elem (nothing under it is emitted or registered), and
+// never into an anonymous struct's Fields, which are fields with Resolutions
+// and sites of their own (warnInlineFields and registerInlineRefs reach
+// them).
 func walkResolvedLeaves(s *models.TypeShape, fn func(leaf *models.TypeShape)) {
 	if s == nil {
 		return

@@ -257,7 +257,8 @@ func (a *ProjectAnalyzer) populateMarshalerRequest(h *handlerAnalysis, astFile *
 // requestParamFields extracts a struct Marshaler request's fields without
 // registering it, and keeps its parameters: each warns and registers its refs
 // as registerStructKeyed would. An embed the extraction drops does not warn,
-// as a body field's type does not: encoding/json never reads those fields.
+// and a body field's anonymous struct is not extracted (quietEmbeds), as a
+// body field's named type is not: encoding/json never reads those fields.
 func (a *ProjectAnalyzer) requestParamFields(s structSite) ([]models.FieldInfo, bool) {
 	a.quietEmbeds = true
 	fields := a.extractStructFields(s.st, s.file, s.path, map[string]struct{}{a.structIdentity(s.st): {}}, 0)
