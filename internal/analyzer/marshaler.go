@@ -106,7 +106,7 @@ var (
 	// without their source, read only when one is embedded (promotion): used
 	// directly, each keeps its well-known schema. Every encode-side method
 	// here has a value receiver, so none is pointer-only. time.Time has had
-	// AppendText since Go 1.24, below the go 1.25 floor. json.Number has
+	// AppendText since Go 1.24, below the go 1.26 floor. json.Number has
 	// MarshalJSONTo and UnmarshalJSONFrom only in the jsonv2-backed
 	// encoding/json (GOEXPERIMENT=jsonv2 since Go 1.25, the default build
 	// since Go 1.27): an embedding struct is written as a bare number there
