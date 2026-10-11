@@ -170,6 +170,12 @@ const (
 	WellKnownJSONNumber   = "json.Number"
 	WellKnownTimeMonth    = "time.Month"
 	WellKnownTimeWeekday  = "time.Weekday"
+	// The text types: value MarshalText and AppendText, pointer
+	// UnmarshalText, so encoding/json writes each as a JSON string.
+	WellKnownNetIP         = "net.IP"
+	WellKnownNetipAddr     = "netip.Addr"
+	WellKnownNetipPrefix   = "netip.Prefix"
+	WellKnownNetipAddrPort = "netip.AddrPort"
 )
 
 // WellKnownTypeNames is the set of named types the generator documents inline
@@ -178,14 +184,21 @@ const (
 // keys of the generator's wellKnownFormats equal to it, so the two cannot
 // drift. A name the generator lacked would $ref a component that is never
 // emitted; a name this set lacked would be warned about and left untyped.
+// os.FileMode and fs.FileMode are deliberately absent: the analyzer resolves
+// both to uint32 before the generator looks a name up, and a generator entry
+// could only lose the unsigned floor uint32 carries.
 var WellKnownTypeNames = map[string]bool{
-	WellKnownTimeTime:     true,
-	WellKnownTimeDuration: true,
-	WellKnownUUID:         true,
-	WellKnownRawMessage:   true,
-	WellKnownJSONNumber:   true,
-	WellKnownTimeMonth:    true,
-	WellKnownTimeWeekday:  true,
+	WellKnownTimeTime:      true,
+	WellKnownTimeDuration:  true,
+	WellKnownUUID:          true,
+	WellKnownRawMessage:    true,
+	WellKnownJSONNumber:    true,
+	WellKnownTimeMonth:     true,
+	WellKnownTimeWeekday:   true,
+	WellKnownNetIP:         true,
+	WellKnownNetipAddr:     true,
+	WellKnownNetipPrefix:   true,
+	WellKnownNetipAddrPort: true,
 }
 
 // UntypedBuiltinNames are the Go builtins with no JSON Schema form: the

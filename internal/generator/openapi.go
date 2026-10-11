@@ -101,6 +101,11 @@ const (
 	goTypeJSONNumber  = "json.Number"
 	goTypeTimeMonth   = "time.Month"
 	goTypeTimeWeekday = "time.Weekday"
+	// The text types, written as JSON strings through their MarshalText.
+	goTypeNetIP         = "net.IP"
+	goTypeNetipAddr     = "netip.Addr"
+	goTypeNetipPrefix   = "netip.Prefix"
+	goTypeNetipAddrPort = "netip.AddrPort"
 )
 
 // Response/parameter description text reused across operations.
@@ -1692,26 +1697,40 @@ type wellKnownType struct {
 //     this entry types the positions that classification skips (registered
 //     struct slice elements; fields and payloads resolve through
 //     knownUnderlyingBuiltins at every depth).
+//   - net.IP, netip.Addr, netip.Prefix, netip.AddrPort -> string, with no
+//     format: each has a value MarshalText and a pointer UnmarshalText, so
+//     encoding/json writes it as text (an IP of either family, a prefix, an
+//     address with a port), never as its kind. They stay out of the
+//     analyzer's knownUnderlyingBuiltins, which types by kind and ignores
+//     methods. A defined type over net.IP drops MarshalText and is resolved
+//     by the analyzer to []byte (base64); the alias and direct uses keep
+//     this entry. os.FileMode and fs.FileMode are not here: the analyzer
+//     resolves both to uint32 first, which keeps the unsigned floor an entry
+//     here would lose.
 //
 // NOTE: matching is by the analyzer's qualified type string (pkg-local alias +
 // "." + name), so an aliased import (import t "time" -> "t.Time") is not yet
 // recognized and falls through to the object default. Alias/import-path
 // resolution lands with the cross-package resolver in PR9.
 var wellKnownFormats = map[string]wellKnownType{
-	goTypeTimeTime:     {typeString, formatDateTime},
-	goTypeTimeDuration: {typeInteger, formatInt64},
-	goTypeUUID:         {typeString, formatUUID},
-	goTypeRawMessage:   {},
-	goTypeJSONNumber:   {typ: typeNumber},
-	goTypeTimeMonth:    {typeInteger, formatInt64},
-	goTypeTimeWeekday:  {typeInteger, formatInt64},
+	goTypeTimeTime:      {typeString, formatDateTime},
+	goTypeTimeDuration:  {typeInteger, formatInt64},
+	goTypeUUID:          {typeString, formatUUID},
+	goTypeRawMessage:    {},
+	goTypeJSONNumber:    {typ: typeNumber},
+	goTypeTimeMonth:     {typeInteger, formatInt64},
+	goTypeTimeWeekday:   {typeInteger, formatInt64},
+	goTypeNetIP:         {typ: typeString},
+	goTypeNetipAddr:     {typ: typeString},
+	goTypeNetipPrefix:   {typ: typeString},
+	goTypeNetipAddrPort: {typ: typeString},
 }
 
 // wellKnownShape resolves the well-known stdlib/library schemas by shape:
 // []byte / []uint8 (matched on the element name so a []pkg.uint8 selector
 // correctly misses), and the qualified names in wellKnownFormats (time.Time,
 // time.Duration, uuid.UUID, json.RawMessage, json.Number, time.Month,
-// time.Weekday).
+// time.Weekday, net.IP, netip.Addr, netip.Prefix, netip.AddrPort).
 //
 // encoding/json marshals a []byte as base64 text, which OpenAPI 3.0 spells
 // `format: byte`; `binary` means raw octets, which no JSON or JOSE body carries.

@@ -14,6 +14,7 @@ const (
 	goTypeInt    = "int"
 	goTypeInt32  = "int32"
 	goTypeInt64  = "int64"
+	goTypeUint32 = "uint32"
 	goTypeUint64 = "uint64"
 	goTypeByte   = "byte"
 	goTypeRune   = "rune"
@@ -50,7 +51,7 @@ func isStringType(typeName string) bool {
 func isIntegerType(typeName string) bool {
 	switch typeName {
 	case goTypeInt, "int8", "int16", goTypeInt32, goTypeInt64,
-		"uint", goTypeUint8, "uint16", "uint32", goTypeUint64,
+		"uint", goTypeUint8, "uint16", goTypeUint32, goTypeUint64,
 		goTypeByte, goTypeRune:
 		return true
 	}

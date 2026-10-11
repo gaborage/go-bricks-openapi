@@ -271,10 +271,15 @@ nested Go module, is not.
   payload returned by value), so a type whose `MarshalText` is only on its
   pointer (or promoted through a value embed of such a type) is `{}` with a
   warning, not a string, even where it is addressable (`*T`). Out-of-module types are known only from a
-  table (`time.Time`, `uuid.UUID`, `json.RawMessage`, `json.Number`), so an
+  table (`time.Time`, `uuid.UUID`, `json.RawMessage`, `json.Number`, `net.IP`,
+  `netip.Addr`, `netip.Prefix`, `netip.AddrPort`), so an
   embedded `decimal.Decimal` goes undetected: its embedding struct is
   documented from its other fields, and the embed is dropped with a
-  warning. `json.Number` has `MarshalJSONTo` and `UnmarshalJSONFrom` only
+  warning. Used directly, the table's text types (`uuid.UUID`, `net.IP`,
+  `netip.Addr`, `netip.Prefix`, `netip.AddrPort`) drop only their
+  `validate` length and numeric bounds: unlike a text type declared in
+  source, a `format`, `enum` or `pattern` tag (`ipv4`, `oneof`,
+  `startswith`) still stamps its keyword. `json.Number` has `MarshalJSONTo` and `UnmarshalJSONFrom` only
   in the jsonv2-backed `encoding/json` (the default build since Go 1.27),
   which writes a struct embedding it as a bare number, and the classic one
   as an object, so such a struct is `{}` with a warning, whatever the
@@ -293,10 +298,12 @@ nested Go module, is not.
 - An embedded field with no json name is documented as `encoding/json`
   writes it when its type can be read from source: a struct's fields are
   promoted, and an exported non-struct type is one property keyed by its
-  type name, a well-known one with no marshal methods such as
-  `time.Duration` included. An embed of a type from outside the module
-  other than those and the well-known Marshaler types above
-  (`sql.NullString`, `sync.Mutex`, `fmt.Stringer`), of a name with no
+  type name, a well-known one with no marshal methods included: an
+  embedded kind-backed type from outside the module (`time.Duration`,
+  `time.Month`, `time.Weekday`, `os.FileMode`, `fs.FileMode`) is typed by
+  its kind (`FileMode` is an unsigned integer). An embed of a type from
+  outside the module other than those and the well-known Marshaler types
+  above (`sql.NullString`, `sync.Mutex`, `fmt.Stringer`), of a name with no
   declaration, or of a generic instantiation that may be a struct
   (`Page[Address]`, until #114) is dropped with a warning, so `--strict`
   fails, although `encoding/json` would promote such a struct's fields
@@ -328,7 +335,12 @@ nested Go module, is not.
   under a default or aliased import (not a dot import), are resolved in their
   own package like local ones, except in a package whose every buildable file
   carries a build constraint and whose first one by name has another package
-  clause (see Build constraints below).
+  clause (see Build constraints below), and except a non-struct type spelled
+  through its import like a well-known or kind-backed one (a project package
+  `net` declaring `type IP int`, used as `net.IP`, or `fs` declaring
+  `type FileMode string`), which is documented as that well-known type, with
+  no warning. A struct so spelled is still resolved in its own package (for
+  a slice payload of one, see the response payload entry below).
 - `int` and `uint` are documented as 64-bit (`format: int64`), which is wrong
   for a 32-bit build, where they hold only 32 bits.
 - `uint64` is documented as `format: int64` with `minimum: 0`, so values of
@@ -345,7 +357,8 @@ nested Go module, is not.
   without `WithRawResponse()`), is documented exactly as a struct field of
   type `T`: builtins, the well-known types (`time.Time`, `time.Duration`,
   `time.Month`, `time.Weekday`, `uuid.UUID`, `json.RawMessage`,
-  `json.Number`), named non-struct types (local, or from another package of
+  `json.Number`, `os.FileMode`, `fs.FileMode`, `net.IP`, `netip.Addr`,
+  `netip.Prefix`, `netip.AddrPort`), named non-struct types (local, or from another package of
   the module), maps, nested slices and pointers to containers included. The
   root is never `nullable`. As `encoding/json` writes them, `[]byte` alone is a
   base64 string, while `[N]byte` (payload or field) and `[]*byte` are integer
