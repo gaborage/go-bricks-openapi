@@ -47,7 +47,7 @@ const (
 	// recognized patterns and the generator's emitted runtime contract have
 	// been verified against (fixtures + the demo-project acceptance run).
 	// Bump it as part of each framework-compatibility pass.
-	verifiedGoBricksVer = "v0.53.0"
+	verifiedGoBricksVer = "v0.71.1"
 
 	// File patterns
 	goFileExt   = ".go"
