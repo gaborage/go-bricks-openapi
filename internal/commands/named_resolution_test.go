@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.yaml.in/yaml/v3"
 
+	"github.com/gaborage/go-bricks-openapi/internal/analyzer"
 	"github.com/gaborage/go-bricks-openapi/internal/testutil"
 )
 
@@ -102,21 +103,28 @@ func TestRunGenerateFieldFallbacksFailStrict(t *testing.T) {
 	}
 }
 
-// TestRunGenerateNamedResolutionFixtureStrictClean pins that the
-// named_resolution fixture, every resolvable row, passes --strict --validate
-// through the CLI path (which, unlike spectest, also runs the go-bricks
-// version check).
-func TestRunGenerateNamedResolutionFixtureStrictClean(t *testing.T) {
+// TestRunGenerateNamedResolutionFixtureWarnsOnlyOnBinding pins that the
+// named_resolution fixture, every resolvable row, passes --validate through
+// the CLI path (which, unlike spectest, also runs the go-bricks version
+// check) with no warning but the binding ones of its Ids and *Tags query
+// parameters, slices go-bricks cannot bind (issue 121).
+func TestRunGenerateNamedResolutionFixtureWarnsOnlyOnBinding(t *testing.T) {
+	root := filepath.Join("..", "spectest", "testdata", "named_resolution")
 	out := filepath.Join(t.TempDir(), outputFileName)
 	var runErr error
 	stdout := testutil.CaptureStdout(t, func() {
-		runErr = runGenerate(context.Background(), &GenerateOptions{
-			ProjectRoot: filepath.Join("..", "spectest", "testdata", "named_resolution"),
-			OutputFile:  out, Strict: true, Validate: true,
-		})
+		runErr = runGenerate(context.Background(), &GenerateOptions{ProjectRoot: root, OutputFile: out, Validate: true})
 	})
 	require.NoError(t, runErr, stdout)
-	assert.Contains(t, stdout, "Warnings: 0\n")
+	assert.Contains(t, stdout, "Warnings: 2\n")
+
+	a := analyzer.New(root)
+	_, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	warnings := a.Warnings(t.Context())
+	require.Len(t, warnings, 2)
+	assert.Contains(t, warnings[0], `the query parameter "tagsPtr" of type *Tags, which go-bricks cannot bind (a pointer to a slice)`)
+	assert.Contains(t, warnings[1], `the query parameter "ids" of type Ids, which go-bricks cannot bind (a slice whose element is not a string)`)
 }
 
 // TestRunDoctorMarshalerFieldIsCaveat pins that a project whose only issue is

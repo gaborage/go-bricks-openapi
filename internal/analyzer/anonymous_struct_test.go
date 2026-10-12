@@ -316,8 +316,9 @@ func TestAnonymousStructBuildTaggedLimit(t *testing.T) {
 // TestAnonymousStructUnextractedBuildTagged pins that build-tagged
 // declarations of a named type over a literal, written differently, still
 // merge where the literal is not extracted: a query parameter keeps its
-// array type with no warning. A payload extracts it, so there they disagree,
-// with the payload's warning.
+// array type, with no warning but the binding one (a slice of structs, issue
+// 121). A payload extracts it, so there they disagree, with the payload's
+// warning.
 func TestAnonymousStructUnextractedBuildTagged(t *testing.T) {
 	tagged := func(tag, name string) string {
 		return "//go:build " + tag + "\n\npackage mod\n\ntype BD []struct{ A int `json:\"" + name + "\"` }\n"
@@ -349,7 +350,10 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	require.NotNil(t, resp)
 	require.NotNil(t, resp.Resolution)
 	assert.Equal(t, "[]BD", renderShape(*resp.Resolution))
-	assert.Equal(t, []string{fmt.Sprintf(declsDisagreePayloadWarning, "[]BD", "BD")}, a.Warnings(t.Context()))
+	assert.Equal(t, []string{
+		fmt.Sprintf(unbindableParamWarning, "Modes", filepath.FromSlash("mod/module.go")+":15:2", paramTypeQuery, "modes", "BD", reasonSliceElem),
+		fmt.Sprintf(declsDisagreePayloadWarning, "[]BD", "BD"),
+	}, a.Warnings(t.Context()))
 }
 
 // TestSameLiteral pins literalText's sense of "written alike": names, types

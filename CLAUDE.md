@@ -60,7 +60,7 @@ Token rules:
 - `make clean` runs `go clean -cache -testcache`, which wipes the machine-wide Go build/test cache, not just this repo's.
 - `make sec`'s green exit isn't evidence it ran: gosec silently scans 0 files and exits 0 when given Go import paths.
 - The `sec` target omits CI's scanned-file-count assertion — trust the CI `Security (gosec)` job, not a local `make sec`.
-- gosec walks the filesystem, so `./...` also enters nested modules such as gitignored agent worktrees under `.claude/worktrees`; `make sec` adds `-exclude-dir=.claude` for that (CI never has the directory). The expected scan is 25 files.
+- gosec walks the filesystem, so `./...` also enters nested modules such as gitignored agent worktrees under `.claude/worktrees`; `make sec` adds `-exclude-dir=.claude` for that (CI never has the directory). The expected scan is 26 files.
 - `GOSEC_VERSION` (Makefile) and ci.yml's `go install …gosec@` are an untagged master pseudo-version, kept identical: every tagged gosec through v2.29.0 depends on `golang.org/x/tools` ≤ v0.49.0, which cannot read Go 1.27 export data (version 5) and fails typechecking. Swap both for the next tagged release.
 - `make validate-spec` (redocly) is deliberately excluded from `check` — it needs `npx` and network.
 - `make validate-spec` runs only on Ubuntu, against one fixture: `internal/spectest/testdata/nested_schema`.

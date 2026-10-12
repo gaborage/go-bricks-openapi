@@ -649,7 +649,8 @@ func TestMarshalerTypeFieldWarnings(t *testing.T) {
 }
 
 // TestMarshalerTypeParamsByKind pins that parameters stay typed by kind: a
-// text Level is an integer, and a struct Marshaler type keeps its component.
+// text Level is an integer, and binds, and a struct Marshaler type keeps its
+// component but warns that go-bricks cannot bind it (issue 121).
 func TestMarshalerTypeParamsByKind(t *testing.T) {
 	decls := "\ntype Params struct {\n\tLevel  Level  `query:\"level\"`\n\tHLevel Level  `header:\"X-Level\"`\n" +
 		"\tM      MoneyT `query:\"m\"`\n}\n"
@@ -660,7 +661,9 @@ func TestMarshalerTypeParamsByKind(t *testing.T) {
 	assert.Equal(t, "int", got["HLevel"])
 	assert.Equal(t, "$MoneyT", got["M"])
 	assert.Contains(t, a.typeRegistry, mtMoneyT)
-	assert.Empty(t, a.warnings)
+	assert.Equal(t, []string{
+		fmt.Sprintf(unbindableParamWarning, "M", filepath.FromSlash("mod/module.go")+":25:2", paramTypeQuery, "m", mtMoneyT, reasonStruct),
+	}, a.warnings)
 }
 
 // TestStructMarshalerUnderlyingMode pins a defined type over a qualified

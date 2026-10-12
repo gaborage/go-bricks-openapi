@@ -96,7 +96,8 @@ func derefOnce(v any, schemas map[string]any) any {
 // Marshaler-free named type declared in another package of the module (q, a
 // copy of the oracle's declarations) emits what the same declaration made
 // locally emits, in every position and as a query parameter, apart from a
-// struct leaf's component name, with no warning.
+// struct leaf's component name, with no warning but the binding one, raised
+// alike for both query parameters (issue 121).
 func TestQualifiedNamedResolutionOracle(t *testing.T) {
 	dir := t.TempDir()
 	writeQualifiedOracleProject(t, dir)
@@ -146,5 +147,5 @@ func TestQualifiedNamedResolutionOracle(t *testing.T) {
 	a := analyzer.New(dir)
 	_, err = a.AnalyzeProject()
 	require.NoError(t, err)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assertBindingParity(t, a.Warnings(t.Context()), "q", "l")
 }

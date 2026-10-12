@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -179,7 +180,8 @@ func TestMarshalerRequest(t *testing.T) {
 }
 
 // TestMarshalerRequestEdgeRows pins JOSE, params-only and struct-parameter
-// edge rows (review round 1).
+// edge rows (review round 1). A struct parameter keeps its component and
+// warns that go-bricks cannot bind it (issue 121).
 func TestMarshalerRequestEdgeRows(t *testing.T) {
 	a, routes := analyzeMT(t, mtModule(mtRequestDecls,
 		"POST /jose (req JoseReq, ctx server.HandlerContext) (server.Result[JoseResp], server.IAPIError)",
@@ -227,6 +229,8 @@ func TestMarshalerRequestEdgeRows(t *testing.T) {
 		fmt.Sprintf(marshalerPayloadWarning, "*JoseResp", "JoseResp", methodMarshalJSON),
 		fmt.Sprintf(marshalerPayloadWarning, "[]JoseResp", "JoseResp", methodMarshalJSON),
 		fmt.Sprintf(marshalerRequestWarning, "JoseParams", "JoseParams", methodUnmarshalJSON),
+		fmt.Sprintf(unbindableParamWarning, "F", filepath.FromSlash("mod/module.go")+":45:2", paramTypeQuery, "f", mtFilter, reasonStruct),
+		fmt.Sprintf(unbindableParamWarning, "E", filepath.FromSlash("mod/module.go")+":46:2", paramTypeQuery, "e", mtEmpty, reasonStruct),
 		fmt.Sprintf(marshalerRequestWarning, "CmdBody", "CmdBody", methodUnmarshalJSON),
 	}, a.warnings)
 }

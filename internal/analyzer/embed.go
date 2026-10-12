@@ -260,7 +260,7 @@ func (a *ProjectAnalyzer) warnDroppedEmbed(field *ast.Field, t embedTarget) {
 		return
 	}
 	loc := a.fieldLoc(field)
-	if !markOnce(a.fieldWarned, loc) {
+	if !a.markFieldWarning(a.fieldWarned, loc) {
 		return
 	}
 	head := []any{embeddedFieldName(field.Type), loc, types.ExprString(field.Type), t.stop}

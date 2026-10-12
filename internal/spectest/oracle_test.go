@@ -204,7 +204,8 @@ func writeOracleProject(t *testing.T, dir string) {
 
 // TestNamedResolutionOracle is the analyzer-plus-generator guard of #109: each
 // Marshaler-free local named type emits exactly what its hand-expanded type
-// emits, in every field position and as a query parameter, with no warning.
+// emits, in every field position and as a query parameter, with no warning
+// but the binding one, raised alike for both query parameters (issue 121).
 func TestNamedResolutionOracle(t *testing.T) {
 	dir := t.TempDir()
 	writeOracleProject(t, dir)
@@ -254,5 +255,33 @@ func TestNamedResolutionOracle(t *testing.T) {
 	a := analyzer.New(dir)
 	_, err = a.AnalyzeProject()
 	require.NoError(t, err)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assertBindingParity(t, a.Warnings(t.Context()), "n", "e")
+}
+
+// bindingWarningText is in the analyzer's warning on a parameter go-bricks
+// cannot bind, and in no other warning.
+const bindingWarningText = "which go-bricks cannot bind"
+
+// assertBindingParity asserts that every warning is a binding warning on a
+// query parameter, and that each oracle case's two query parameters, named
+// first<i> and second<i>, warn alike: both or neither, for one reason. A
+// named type and the type it stands for are one kind, which is all go-bricks
+// binds by.
+func assertBindingParity(t *testing.T, warnings []string, first, second string) {
+	t.Helper()
+	reasons := map[string]string{}
+	for _, w := range warnings {
+		if !assert.Contains(t, w, bindingWarningText) {
+			continue
+		}
+		_, rest, _ := strings.Cut(w, `query parameter "`)
+		name, rest, _ := strings.Cut(rest, `"`)
+		_, reason, _ := strings.Cut(rest, bindingWarningText+" (")
+		reasons[name], _, _ = strings.Cut(reason, ")")
+	}
+	require.NotEmpty(t, reasons, "the oracle holds query parameters go-bricks cannot bind")
+	for i, c := range oracleCases {
+		f, s := fmt.Sprintf("%s%d", first, i), fmt.Sprintf("%s%d", second, i)
+		assert.Equal(t, reasons[s], reasons[f], "%s as a query parameter", c.named)
+	}
 }

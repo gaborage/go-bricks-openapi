@@ -951,6 +951,17 @@ func markOnce(seen map[string]struct{}, loc string) bool {
 	return true
 }
 
+// markFieldWarning is markOnce for the one warning about the field declared
+// at loc, which its caller raises next: it also records the index that
+// warning takes, so a binding warning can take its place (setBindingWarning).
+func (a *ProjectAnalyzer) markFieldWarning(seen map[string]struct{}, loc string) bool {
+	if !markOnce(seen, loc) {
+		return false
+	}
+	a.fieldWarnings[loc] = len(a.warnings)
+	return true
+}
+
 // warnFieldFallback raises the warning for the first fallback noted in a
 // field's site, once per field declaration. The warning names the field's
 // declared type, then the named type where resolution stopped.
@@ -959,7 +970,7 @@ func (a *ProjectAnalyzer) warnFieldFallback(f *models.FieldInfo, site *fieldSite
 	if fb.kind == fallbackNone {
 		return
 	}
-	if !markOnce(a.fieldWarned, site.loc) {
+	if !a.markFieldWarning(a.fieldWarned, site.loc) {
 		return
 	}
 	head := []any{f.Name, site.loc, site.declared}
@@ -1011,7 +1022,7 @@ func (a *ProjectAnalyzer) registerRefLeaf(leaf *models.TypeShape, f *models.Fiel
 		a.addWarningf(unregisteredRefFieldWarning, f.Name, unknownFieldPosition, leaf.Name, leaf.Name)
 		return
 	}
-	if markOnce(a.fieldWarned, fs.loc) {
+	if a.markFieldWarning(a.fieldWarned, fs.loc) {
 		a.addWarningf(unregisteredRefFieldWarning, f.Name, fs.loc, fs.declared, leaf.Name)
 	}
 }

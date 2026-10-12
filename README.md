@@ -248,6 +248,34 @@ nested Go module, is not.
   which also silences the warning. The diagnostic covers every field whose type
   holds a `uintptr` at any depth — `[]uintptr`, a map value
   (`map[string]uintptr`) and a named wrapper (`type Addr uintptr`) alike.
+- go-bricks binds a path, query or header parameter by its kind, plus
+  exactly `time.Time`, and answers 400 to a request that sends a value of any
+  other type. Such a parameter is documented as before but reported as a
+  warning (so `--strict` fails on it). A parameter binds when its type is a
+  string, a bool, an integer other than `uintptr`, a float, a named type over
+  one (`type Cents int64`, `time.Duration`, which binds only as integer
+  nanoseconds), `time.Time` itself, or a pointer to any of these at any
+  depth; a query or header parameter also binds a slice whose element is a
+  string kind (`[]string`, `[]Scope`, `type Tags []string`). Every other
+  type warns: an array (`uuid.UUID`, `[4]byte`), a struct other than
+  `time.Time` (`Address`, a Marshaler struct, `type Stamp time.Time`, an
+  anonymous struct, `netip.Addr`), a slice in a path parameter, a slice whose
+  element is not a string (`[]int`, `[]byte`, `json.RawMessage`, `net.IP`), a
+  pointer to a slice (`*[]string`), a map, an interface, a complex number, a
+  `uintptr`, a func or a chan. That warning is the parameter's one warning,
+  in place of the `uintptr` or untyped-schema one its field would raise. It
+  is judged by kind, so marshal methods do not count: `type Level string`
+  with `MarshalText` and `UnmarshalText` binds. A parameter whose type is not
+  resolved (an out-of-module type outside the well-known table, a generic
+  instantiation) keeps its own warning and gets no binding warning. Only the
+  request type's own fields are checked, an embedded non-struct type with a
+  parameter tag (``uuid.UUID `query:"id"` ``) included; an embedded struct,
+  tagged or not, which go-bricks never binds, is not (#147).
+- On go-bricks v0.45.0 through v0.58.0, a header parameter bound into a slice
+  of a named string type (`[]Scope`) panics (`reflect.Set: value of type
+  string is not assignable to type main.Scope`) instead of binding; from v0.58.1
+  it binds. The binding warning follows the v0.58.1+ binder, so it does not
+  warn on such a parameter.
 - A generic type instantiation (`Page[Address]`, `pg.List[string]`, or a
   named type declared as one, `type AddrPage Page[Address]`) is not resolved
   until #114 substitutes its type arguments. A field or a path, query or
@@ -289,8 +317,9 @@ nested Go module, is not.
   A defined type over a Marshaler type drops its declared methods and is
   documented from the underlying type, but keeps what an underlying struct's
   embedded fields promote. A path, query or header parameter of such a type
-  is bound by kind, so it keeps the underlying type's schema (a struct
-  parameter keeps its component) and does not warn. A slice of a byte-sized
+  is bound by kind and keeps the underlying type's schema; a struct
+  parameter keeps its component but warns, because go-bricks cannot bind a
+  struct other than `time.Time`. A slice of a byte-sized
   type that only decodes through such a method stays a base64 string.
   Pointer-receiver-only methods count in every position, although
   `encoding/json` skips them on non-addressable values (a map value, a
