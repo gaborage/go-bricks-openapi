@@ -153,7 +153,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 
 | Directive | Arguments | Effect |
 | --- | --- | --- |
-| `//openapi:public` | none | Emits `security: []` for that operation. By default every operation carries the tenant security scheme; a route that needs no auth (health checks, login, webhooks) opts out this way. go-bricks itself has no per-route tenant opt-out API as of v0.53.0. |
+| `//openapi:public` | none | Emits `security: []` for that operation. By default every operation carries the tenant security scheme; a route that needs no auth (health checks, login, webhooks) opts out this way. go-bricks itself has no per-route tenant opt-out API as of v0.71.1. |
 | `//openapi:errors` | a single-line, comma-separated list of status codes (400–599); whitespace after commas is tolerated | Adds one error response per code, referencing the same error envelope the route's `400`/`500` use, described with the canonical HTTP status text. |
 
 Every operation keeps its unconditional `400`/`500` responses (plus `401`/`415`
@@ -216,11 +216,12 @@ nested Go module, is not.
 
 - **Go 1.26+** to build/run the tool, the minimum one of its dependencies
   declares. That is unrelated to the Go version a target project needs to
-  build *itself* (Go 1.26+ for GoBricks v0.45.0+): the tool only parses a
-  target's source, so it doesn't inherit that requirement.
+  build *itself* (Go 1.26+ for GoBricks v0.45.0 through v0.61.x, Go 1.27+
+  from v0.62.0): the tool only parses a target's source, so it doesn't
+  inherit that requirement.
 - Targets **GoBricks v0.45.0+** projects — v0.45.0 is the release that hid
   the echo dependency behind go-bricks boundary types — verified through
-  **v0.53.0**. `doctor` fails below the floor; `generate` warns and fails
+  **v0.71.1**. `doctor` fails below the floor; `generate` warns and fails
   only under `--strict`.
 
 ## Known limitations
