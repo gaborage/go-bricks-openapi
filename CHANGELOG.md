@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.0](https://github.com/gaborage/go-bricks-openapi/compare/v0.5.0...v0.6.0) (2026-10-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* **analyzer:** a struct embedding an unexported non-struct type under an explicit json name loses that property from the generated spec, and so does any path, query or header parameter the embed's tag declared. Regenerate clients from the new spec.
+* **analyzer:** existing operations can change. A delegate route that borrowed a same-named module constant moves to its own path. A newly emitted route can register a struct that takes a component's bare name, so a same-named struct of another package becomes <Pkg><Name> (Widget becomes WidgetsWidget) and existing $refs move, and its handler can take an operationId an existing operation held, which then gains a numeric suffix (widgetsGet becomes widgetsGet2). Regenerate clients.
+
+### Added
+
+* **commands:** add --fail-on-warnings to write the spec, then fail ([#186](https://github.com/gaborage/go-bricks-openapi/issues/186)) ([53c2f1a](https://github.com/gaborage/go-bricks-openapi/commit/53c2f1a96495d292bdbe9a0ad58edc79160f876d)), closes [#65](https://github.com/gaborage/go-bricks-openapi/issues/65)
+
+
+### Fixed
+
+* **analyzer:** check the import path before using well-known types ([#190](https://github.com/gaborage/go-bricks-openapi/issues/190)) ([818a240](https://github.com/gaborage/go-bricks-openapi/commit/818a2404bb2e22f5cf7d52ee549db082a8de4404)), closes [#164](https://github.com/gaborage/go-bricks-openapi/issues/164)
+* **analyzer:** resolve a delegate's own package constants in route paths ([#193](https://github.com/gaborage/go-bricks-openapi/issues/193)) ([64557eb](https://github.com/gaborage/go-bricks-openapi/commit/64557eb2b4bc63049856aad493faf9e9b6d20ac6)), closes [#184](https://github.com/gaborage/go-bricks-openapi/issues/184)
+* **analyzer:** skip unexported non-struct embeds that carry a json name ([#194](https://github.com/gaborage/go-bricks-openapi/issues/194)) ([4d175bb](https://github.com/gaborage/go-bricks-openapi/commit/4d175bb4722e06f926d206411f5fd577ef76c7e3)), closes [#185](https://github.com/gaborage/go-bricks-openapi/issues/185)
+* **analyzer:** warn on params go-bricks cannot bind ([#195](https://github.com/gaborage/go-bricks-openapi/issues/195)) ([843b19a](https://github.com/gaborage/go-bricks-openapi/commit/843b19aafc1dffd252010fa6d08614cde14d24bf)), closes [#121](https://github.com/gaborage/go-bricks-openapi/issues/121)
+
 ## [0.5.0](https://github.com/gaborage/go-bricks-openapi/compare/v0.4.2...v0.5.0) (2026-10-12)
 
 
