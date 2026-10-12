@@ -408,8 +408,8 @@ func TestEmbeddedUnexpandableWarns(t *testing.T) {
 // JSON name an untagged embed's property carries, in either declaration
 // order: the shallower field wins, and at one depth, the struct's own or a
 // promoted one, a tagged field beats the property. An untagged named field
-// collides under its Go name, the key encoding/json writes, though the
-// generator lower-cases it.
+// collides under its Go name, the key encoding/json writes and the generator
+// documents.
 func TestEmbeddedPropertyCollisions(t *testing.T) {
 	rows := []embedRow{
 		{"EEmbedFirst", "Cents\n\tX string `json:\"Cents\"`", map[string]string{"Cents": goTypeString}},
@@ -477,10 +477,10 @@ func TestEmbeddedPropertyNamedLikeAncestor(t *testing.T) {
 // collides under its Go name, the key encoding/json writes, with a field
 // promoted from deeper, through a direct, alias or defined-type struct embed
 // and in either declaration order: the shallower field wins, so its type and
-// required flag are the ones kept, and the generator, which lower-cases both,
-// never sees two. A deeper tagged json:"V" loses to it the same way, and two
-// untagged V at one promoted depth, which encoding/json both drops, keep the
-// first.
+// required flag are the ones kept, and the generator, which keys both by that
+// name, never sees two. A deeper tagged json:"V" loses to it the same way,
+// and two untagged V at one promoted depth, which encoding/json both drops,
+// keep the first.
 func TestUntaggedFieldShadowsPromoted(t *testing.T) {
 	rows := []embedRow{
 		{"EVDirect", "V string\n\tInner2", map[string]string{"V": goTypeString}},

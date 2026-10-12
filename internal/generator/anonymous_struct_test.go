@@ -109,7 +109,7 @@ func TestInlineObjectMatchesComponent(t *testing.T) {
 	inline := gen.fieldInfoToProperty(&f)
 	assert.Equal(t, component.Properties, inline.Properties)
 	assert.Equal(t, component.Required, inline.Required)
-	assert.Equal(t, []string{"office", "untagged", "x"}, slices.Sorted(maps.Keys(inline.Properties)))
+	assert.Equal(t, []string{"Untagged", "office", "x"}, slices.Sorted(maps.Keys(inline.Properties)))
 }
 
 // TestInlineObjectTakesNoValidateKeyword pins that, like a $ref, an inline

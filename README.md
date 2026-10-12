@@ -325,6 +325,9 @@ nested Go module, is not.
   untyped object with a warning, so it loses its container shape: a named
   slice type over one (`type Rows []struct{…}`) its array type, a map type
   its `additionalProperties`, a pointer type its `nullable`.
+- An exported field with no json name (no `json` tag, or one like
+  `json:",omitempty"`) is keyed by its Go name (`URL`, `ID`), as
+  `encoding/json` writes it.
 - An embedded field with no json name is documented as `encoding/json`
   writes it when its type can be read from source: a struct's fields are
   promoted, and an exported non-struct type is one property keyed by its
