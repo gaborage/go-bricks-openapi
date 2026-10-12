@@ -1180,7 +1180,7 @@ func assertSchemaShape(t *testing.T, expectedType string, expectedProps int, exp
 
 // TestTypeInfoToSchemaNamelessFieldSkipIsNarrow proves the nameless-field skip
 // added for plan 017 only fires when BOTH JSONName and Name are empty: a field
-// that merely lacks a JSON tag must still fall back to lowerFirst(Name) and be
+// that merely lacks a JSON tag must still fall back to its Go name and be
 // emitted normally. Without this check, an over-broad skip condition could pass
 // the "nameless field is skipped" row above while silently dropping every field
 // that relies on the name-fallback path.
@@ -1194,8 +1194,8 @@ func TestTypeInfoToSchemaNamelessFieldSkipIsNarrow(t *testing.T) {
 		},
 	})
 	require.NotNil(t, schema)
-	_, ok := schema.Properties["total"]
-	assert.True(t, ok, `expected fallback-named property "total" to be present, got %v`, schema.Properties)
+	_, ok := schema.Properties["Total"]
+	assert.True(t, ok, `expected fallback-named property "Total" to be present, got %v`, schema.Properties)
 }
 
 func TestFieldInfoToPropertyRef(t *testing.T) {

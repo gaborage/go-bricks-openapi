@@ -263,11 +263,11 @@ components:
         skips:
           type: object
           properties:
+            Untagged:
+              type: boolean
             kept:
               type: integer
               format: int64
-            untagged:
-              type: boolean
         stamp: {}
         tree:
           $ref: '#/components/schemas/Node'

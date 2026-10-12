@@ -220,7 +220,7 @@ func (a *ProjectAnalyzer) embedProperty(field *ast.Field, astFile *ast.File, fil
 	name := embeddedFieldName(field.Type)
 	f := a.buildFieldInfo(name, field, astFile, filePath, depth)
 	if f.JSONName == "" && f.ParamType == "" {
-		f.JSONName = name // encoding/json's key, which the generator would otherwise lower-case
+		f.JSONName = name // encoding/json's key: the type name
 	}
 	f.embedName = true
 	return f
@@ -278,7 +278,7 @@ type fieldDecl struct {
 }
 
 // dominanceKey is the key encoding/json writes f under: its JSON name, or
-// its Go name when it has none (which the generator lower-cases later), and
+// its Go name when it has none (the generator's key too, propertyName), and
 // none for json:"-". A path, query or header parameter has one too: go-bricks
 // decodes the body into the whole request struct, so a body value of that
 // key lands in the parameter field.

@@ -1529,11 +1529,12 @@ func objectProperties(fields []models.FieldInfo) (props map[string]*OpenAPIPrope
 }
 
 // propertyName is a field's property key: its JSON name, else its Go name
-// with the first letter lowered. ok is false for a path, query or header
-// param, emitted as an OpenAPI parameter (extractParameters), never as a
-// property; for a json:"-" field; and for a field with neither a JSON name
-// nor a Go name, which no JSON document can address (keyed "", it would also
-// put "" in required).
+// verbatim (URL, ID), as encoding/json writes a field with no tag or one
+// whose tag names no key (json:",omitempty"). ok is false for a path, query
+// or header param, emitted as an OpenAPI parameter (extractParameters), never
+// as a property; for a json:"-" field; and for a field with neither a JSON
+// name nor a Go name, which no JSON document can address (keyed "", it would
+// also put "" in required).
 func propertyName(field *models.FieldInfo) (string, bool) {
 	if field.ParamType != "" || field.JSONName == "-" {
 		return "", false
@@ -1544,7 +1545,7 @@ func propertyName(field *models.FieldInfo) (string, bool) {
 	if field.Name == "" {
 		return "", false
 	}
-	return lowerFirst(field.Name), true
+	return field.Name, true
 }
 
 // fieldInfoToProperty builds a field's schema and then applies its example:
