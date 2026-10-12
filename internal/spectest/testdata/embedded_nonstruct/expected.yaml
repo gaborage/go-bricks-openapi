@@ -190,6 +190,14 @@ components:
               description: W3C trace identifier for the request
       required:
         - error
+    Named:
+      type: object
+      properties:
+        h:
+          $ref: '#/components/schemas/hidden'
+        keep:
+          type: integer
+          format: int64
     Promoted:
       type: object
       properties:
@@ -214,6 +222,8 @@ components:
           $ref: '#/components/schemas/Collided'
         dropped:
           $ref: '#/components/schemas/Dropped'
+        named:
+          $ref: '#/components/schemas/Named'
         promB:
           $ref: '#/components/schemas/PromotedB'
         promoted:
@@ -252,6 +262,11 @@ components:
       type: object
       properties:
         Cents:
+          type: string
+    hidden:
+      type: object
+      properties:
+        detail:
           type: string
   securitySchemes:
     TenantID:
