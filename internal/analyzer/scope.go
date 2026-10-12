@@ -22,7 +22,7 @@ type binding struct {
 
 // constScopes is the lexical chain of block-level bindings in effect at a point
 // in a walked function body: outermost first, innermost last. The package-level
-// constant map (ProjectAnalyzer.constants) is the implicit outermost scope and
+// constant map (routeWalker.constants) is the implicit outermost scope and
 // is consulted only when no local binding of the name is visible.
 //
 // A chain is treated as a value: push copies rather than appending in place, so

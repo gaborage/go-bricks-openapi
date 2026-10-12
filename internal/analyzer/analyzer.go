@@ -783,6 +783,7 @@ func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(body *ast.BlockSt
 		recvVar:       setup.recvVar,
 		moduleName:    setup.moduleName,
 		serverAliases: setup.serverAliases,
+		constants:     a.constants,
 		signature:     setup.signature,
 		// Seed the recursion stack with the entry method so a helper that calls
 		// back into RegisterRoutes cannot re-walk it (cycle guard for the root).
@@ -816,6 +817,10 @@ type routeWalker struct {
 	recvVar       string // receiver var name of the walked method; "" if none
 	moduleName    string // owning go-bricks module name, stamped on routes at build time
 	serverAliases map[string]struct{}
+	// constants is the package-level string constants of the package that
+	// declares the walked method: the outermost scope a route path or group
+	// prefix resolves against (see resolvePathExpr).
+	constants map[string]string
 	// signature is the walked method's own function type; its parameters and
 	// named results bind names for the whole body and so must shadow
 	// package-level constants of the same name.
@@ -934,7 +939,7 @@ func (w *routeWalker) groupBinding(parent *ast.Ident, arg ast.Expr, view binding
 	if known, exists := view.registrar(parent); exists {
 		inherited = known
 	}
-	value, resolved := w.a.resolvePathExpr(arg, view.scopes)
+	value, resolved := resolvePathExpr(arg, view.scopes, w.constants)
 	return registrarPrefix{
 		path:     inherited.path + value,
 		resolved: inherited.resolved && resolved,
@@ -1009,7 +1014,7 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, view bindingView) *model
 	}
 	w.a.markDirectivesAttached(call.Pos())
 
-	rawPath, resolved := w.a.resolvePathExpr(call.Args[shape.pathIdx], view.scopes)
+	rawPath, resolved := resolvePathExpr(call.Args[shape.pathIdx], view.scopes, w.constants)
 	if !resolved {
 		w.a.warnUnresolvedPath(call.Pos(), "server."+shape.method)
 		return nil
@@ -1109,7 +1114,7 @@ func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, view bindingView) *mo
 		w.a.addWarningf("skipping a %s.Add route: its method argument is not a static HTTP method (string literal or http.MethodX constant)", recv)
 		return nil
 	}
-	rawPath, resolved := w.a.resolvePathExpr(call.Args[1], view.scopes)
+	rawPath, resolved := resolvePathExpr(call.Args[1], view.scopes, w.constants)
 	if !resolved {
 		w.a.warnUnresolvedPath(call.Pos(), recv+"."+addMethodName)
 		return nil
@@ -1246,6 +1251,10 @@ func (w *routeWalker) recurseInto(call *ast.CallExpr, target delegateContext, fi
 		// the callee body even when the caller's argument carried no prefix.
 		seed[paramName] = registrarPrefix{resolved: true}
 	}
+	constants := w.constants
+	if target.constants != nil {
+		constants = target.constants
+	}
 	dw := &routeWalker{
 		a:             w.a,
 		astFile:       target.astFile,
@@ -1254,6 +1263,7 @@ func (w *routeWalker) recurseInto(call *ast.CallExpr, target delegateContext, fi
 		recvVar:       receiverVarName(decl.Recv),
 		moduleName:    w.moduleName,
 		serverAliases: target.serverAliases,
+		constants:     constants,
 		signature:     decl.Type,
 		stack:         w.stack, // shared: cycles across delegation chains must terminate
 	}
@@ -1304,6 +1314,7 @@ func (w *routeWalker) recurseIntoPackageFunc(funcName string, call *ast.CallExpr
 		recvVar:       "",
 		moduleName:    w.moduleName,
 		serverAliases: calleeAliases, // callee's own file aliases, not the caller's
+		constants:     w.constants,   // same package as the caller
 		signature:     decl.Type,
 		stack:         w.stack,
 	}
@@ -1682,6 +1693,11 @@ type delegateContext struct {
 	astFile       *ast.File
 	filePath      string
 	serverAliases map[string]struct{}
+	// constants is the delegate's own package's string constants, set only
+	// for a delegate in another package, and then never nil, even for a
+	// package that declares none; nil keeps the caller's, which a
+	// same-package delegate shares.
+	constants map[string]string
 }
 
 // resolveDelegateContext resolves module field fieldName to an in-module struct.
@@ -1706,6 +1722,9 @@ func (a *ProjectAnalyzer) resolveDelegateContext(astFile *ast.File, filePath, mo
 			astFile:       q.file,
 			filePath:      q.filePath,
 			serverAliases: a.extractImportAliases(q.file, serverImportPath),
+			// A path the delegate names by a bare identifier is a constant
+			// of its own package, never of the module's.
+			constants: a.packageConstants(q.filePath, q.pkg),
 		}, true
 	}
 	// Same package: findMethodDecl searches the whole package from this file,
@@ -1953,20 +1972,22 @@ func (a *ProjectAnalyzer) addUnresolvedRoute(pos token.Pos, form, reason string)
 }
 
 // extractPathFromArg resolves a route path argument with no enclosing lexical
-// scope, i.e. against package-level constants only. Callers inside a walked
-// function body use resolvePathExpr with the scope chain in effect.
+// scope, i.e. against the module package's constants only. Callers inside a
+// walked function body use resolvePathExpr with the scope chain in effect and
+// the walked package's constants.
 func (a *ProjectAnalyzer) extractPathFromArg(arg ast.Expr) (string, bool) {
-	return a.resolvePathExpr(arg, nil)
+	return resolvePathExpr(arg, nil, a.constants)
 }
 
 // resolvePathExpr resolves a route path expression to a string. It handles
 // string literals, string constants (looked up through the lexical scope chain
-// innermost-first, then the package-level constant map), parenthesized
-// expressions, and "+" concatenation folded recursively. The bool result is
-// false when any leaf fails to resolve (a `var`, a `:=` local, a qualified
-// pkg.Const, a call such as fmt.Sprintf); the caller then drops the route with
-// the unresolved-route warning rather than emitting a garbage path key.
-func (a *ProjectAnalyzer) resolvePathExpr(arg ast.Expr, scopes constScopes) (string, bool) {
+// innermost-first, then pkgConsts, the package-level constants of the package
+// whose code is being read), parenthesized expressions, and "+" concatenation
+// folded recursively. The bool result is false when any leaf fails to resolve
+// (a `var`, a `:=` local, a qualified pkg.Const, a call such as fmt.Sprintf);
+// the caller then drops the route with the unresolved-route warning rather
+// than emitting a garbage path key.
+func resolvePathExpr(arg ast.Expr, scopes constScopes, pkgConsts map[string]string) (string, bool) {
 	switch expr := arg.(type) {
 	case *ast.BasicLit:
 		// Direct string literal.
@@ -1974,14 +1995,14 @@ func (a *ProjectAnalyzer) resolvePathExpr(arg ast.Expr, scopes constScopes) (str
 			return unquoteLiteral(expr.Value), true
 		}
 	case *ast.ParenExpr:
-		return a.resolvePathExpr(expr.X, scopes)
+		return resolvePathExpr(expr.X, scopes, pkgConsts)
 	case *ast.Ident:
-		return a.lookupConst(expr.Name, scopes, expr.Pos())
+		return lookupConst(expr.Name, scopes, expr.Pos(), pkgConsts)
 	case *ast.BinaryExpr:
 		// String concatenation: fold only when both operands resolve.
 		if expr.Op == token.ADD {
-			left, lok := a.resolvePathExpr(expr.X, scopes)
-			right, rok := a.resolvePathExpr(expr.Y, scopes)
+			left, lok := resolvePathExpr(expr.X, scopes, pkgConsts)
+			right, rok := resolvePathExpr(expr.Y, scopes, pkgConsts)
 			if lok && rok {
 				return left + right, true
 			}
@@ -1996,11 +2017,11 @@ func (a *ProjectAnalyzer) resolvePathExpr(arg ast.Expr, scopes constScopes) (str
 // local declaration shadows a package-level constant of the same name even when
 // it carries no resolvable value (`const n = 42`, `var p = compute()`), so the
 // path is reported unresolved rather than silently taking the outer value.
-func (a *ProjectAnalyzer) lookupConst(name string, scopes constScopes, at token.Pos) (string, bool) {
+func lookupConst(name string, scopes constScopes, at token.Pos, pkgConsts map[string]string) (string, bool) {
 	if local, found := scopes.resolve(name, at); found {
 		return local.value, local.ok
 	}
-	value, ok := a.constants[name]
+	value, ok := pkgConsts[name]
 	return value, ok
 }
 
@@ -2038,8 +2059,15 @@ func normalizePath(path string) string {
 	return strings.Join(segments, "/")
 }
 
-// extractConstants finds constant declarations in the AST file
+// extractConstants adds the file's package-level string constants to the
+// module package's map, the outermost scope of route path resolution in the
+// module's own methods.
 func (a *ProjectAnalyzer) extractConstants(astFile *ast.File) {
+	collectFileConstants(astFile, a.constants)
+}
+
+// collectFileConstants adds astFile's package-level string constants to into.
+func collectFileConstants(astFile *ast.File, into map[string]string) {
 	for _, decl := range astFile.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok || genDecl.Tok != token.CONST {
@@ -2047,15 +2075,25 @@ func (a *ProjectAnalyzer) extractConstants(astFile *ast.File) {
 		}
 
 		for _, spec := range genDecl.Specs {
-			a.processConstSpec(spec)
+			collectConstStrings(spec, into)
 		}
 	}
 }
 
-// processConstSpec processes a constant spec to extract constant values into
-// the package-level map, the outermost scope of route path resolution.
-func (a *ProjectAnalyzer) processConstSpec(spec ast.Spec) {
-	collectConstStrings(spec, a.constants)
+// packageConstants returns the package-level string constants of package
+// packageName in filePath's directory, across all of its files: what a bare
+// identifier in a method that package declares can name. Files are read in a
+// stable order, so a name declared in two build-tagged variants resolves the
+// same way on every run.
+func (a *ProjectAnalyzer) packageConstants(filePath, packageName string) map[string]string {
+	consts := make(map[string]string)
+	files, _ := a.parsePackageDir(filepath.Dir(filePath)) // cached: the delegate's lookup already parsed it
+	for _, path := range slices.Sorted(maps.Keys(files)) {
+		if files[path].Name.Name == packageName {
+			collectFileConstants(files[path], consts)
+		}
+	}
+	return consts
 }
 
 // extractStringFromExpr extracts string value from an expression
