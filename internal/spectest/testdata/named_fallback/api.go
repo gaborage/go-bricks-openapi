@@ -65,7 +65,9 @@ type C complex128
 type Addr uintptr
 
 // Fallback holds one field per warned row. Each comment is the schema the
-// field emits; every field raises one analyzer warning.
+// field emits; every field raises one analyzer warning, except AliasedTime
+// and AliasedRaw: their aliased imports still name the time and
+// encoding/json packages, so they are the well-known types.
 type Fallback struct {
 	Status      Status             `json:"status"`                                   // -> {}
 	StatusA     StatusA            `json:"statusA"`                                  // -> {}
@@ -84,8 +86,8 @@ type Fallback struct {
 	List        List               `json:"list"`                                     // -> {array, items: {}}
 	Left        Left               `json:"left"`                                     // -> {array, items: {object, additionalProperties: {}}}
 	Decimal     decimal.Decimal    `json:"decimal"`                                  // -> {object}
-	AliasedTime t.Time             `json:"aliasedTime"`                              // -> {object}
-	AliasedRaw  j.RawMessage       `json:"aliasedRaw"`                               // -> {object}
+	AliasedTime t.Time             `json:"aliasedTime"`                              // -> {string, date-time}, no warning
+	AliasedRaw  j.RawMessage       `json:"aliasedRaw"`                               // -> {}, no warning
 	StampD      StampD             `json:"stampD"`                                   // -> {object}
 	IDD         IDD                `json:"idd"`                                      // -> {object}
 	Err         error              `json:"err"`                                      // -> {object}

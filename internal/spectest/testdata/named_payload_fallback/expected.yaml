@@ -95,8 +95,8 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    type: string
+                    format: date-time
                   meta:
                     type: object
                     properties:

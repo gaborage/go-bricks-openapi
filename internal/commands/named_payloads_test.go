@@ -24,7 +24,6 @@ const payloadFallbackModSrc = `package svc
 
 import (
 	"time"
-	t "time"
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
@@ -42,7 +41,6 @@ type PriceReq struct {
 }
 
 var _ decimal.Decimal
-var _ t.Time
 var _ time.Time
 
 DECLS
@@ -92,7 +90,6 @@ func TestRunGeneratePayloadFallbacksFailStrict(t *testing.T) {
 		{"", "uintptr"},
 		{"", "[]uintptr"},
 		{"", "decimal.Decimal"},
-		{"", "t.Time"},
 		{"", "*Missing"},
 		{"", "map[string]decimal.Decimal"},
 		{"type StampD time.Time", "StampD"},

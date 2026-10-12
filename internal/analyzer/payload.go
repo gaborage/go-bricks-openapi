@@ -65,7 +65,7 @@ func (a *ProjectAnalyzer) resolvePayload(ti *models.TypeInfo, written string, as
 		return a.screenGenericPayload(ti, written, c.st.first)
 	}
 	ti.Resolution = &r
-	if !isWellKnownLeaf(payloadBaseShape(*ti.Shape)) {
+	if !a.isWellKnownBase(payloadBaseShape(*ti.Shape), astFile) {
 		ti.Name = ""
 		ti.Fields = nil
 	}
@@ -91,10 +91,16 @@ func payloadResolves(r *models.TypeShape) bool {
 	return !hasUnknownLeaf(r)
 }
 
-// isWellKnownLeaf reports whether s is a well-known named type (time.Time,
-// uuid.UUID, ...: models.WellKnownTypeNames).
-func isWellKnownLeaf(s models.TypeShape) bool {
-	return s.Kind == models.ShapeNamed && models.WellKnownTypeNames[s.Name]
+// isWellKnownBase reports whether s, a payload's base as written in file,
+// names a well-known type (time.Time, uuid.UUID, ...:
+// models.WellKnownTypeNames) through file's imports (wellKnownName): t.Time
+// under t "time" does, a project package's net.IP does not.
+func (a *ProjectAnalyzer) isWellKnownBase(s models.TypeShape, file *ast.File) bool {
+	if s.Kind != models.ShapeNamed {
+		return false
+	}
+	name, ok := a.wellKnownName(s.Name, file)
+	return ok && models.WellKnownTypeNames[name]
 }
 
 // warnPayload raises a resolved payload's one warning and reports whether it

@@ -3468,9 +3468,8 @@ func shedRegisteredPayloadShape(ti *models.TypeInfo) {
 }
 
 // dropUnresolvablePayloadName screens a response payload whose root resolved to
-// nothing: a third-party type (server.Result[decimal.Decimal]), an undeclared
-// name, or an aliased import of a well-known type (t.Time, not yet
-// recognised). A composite with an unresolvable leaf
+// nothing: a third-party type (server.Result[decimal.Decimal]) or an
+// undeclared name. A composite with an unresolvable leaf
 // (map[string]decimal.Decimal) never reaches it: resolvePayload warns about it
 // with the same text. Left named, the generator would $ref a component that is
 // never emitted, so the name is cleared with a warning and the payload is
@@ -3992,6 +3991,30 @@ const (
 	stdOSFileMode = "os.FileMode"
 	stdFSFileMode = "fs.FileMode"
 )
+
+// wellKnownPackages maps the import path of every package that declares a
+// key of the well-known tables (models.WellKnownTypeNames,
+// knownUnderlyingBuiltins, wellKnownMethodSets) to the package name the keys
+// are spelled with. wellKnownName reads the tables through it, so an import of
+// one of these paths names their keys under an alias too (t.Time under
+// t "time" is time.Time). uuid.UUID has several owners, each library's UUID
+// marshalling as the canonical UUID string.
+var wellKnownPackages = map[string]string{
+	"time":                      "time",
+	"os":                        "os",
+	"io/fs":                     "fs",
+	"net":                       "net",
+	"net/netip":                 "netip",
+	"encoding/json":             "json",
+	"github.com/google/uuid":    uuidPackageName,
+	"github.com/gofrs/uuid":     uuidPackageName,
+	"github.com/gofrs/uuid/v5":  uuidPackageName,
+	"github.com/satori/go.uuid": uuidPackageName,
+}
+
+// uuidPackageName is the package name every UUID library in
+// wellKnownPackages declares.
+const uuidPackageName = "uuid"
 
 // sameBuiltin reports whether two builtin names denote one Go type. byte and
 // rune are Go's predeclared aliases of uint8 and int32, so `type Word byte` in

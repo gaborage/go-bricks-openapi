@@ -100,10 +100,10 @@ components:
           type: object
           additionalProperties:
             type: object
-        aliasedRaw:
-          type: object
+        aliasedRaw: {}
         aliasedTime:
-          type: object
+          type: string
+          format: date-time
         appended: {}
         cw:
           type: object

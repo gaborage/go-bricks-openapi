@@ -1744,10 +1744,11 @@ type wellKnownType struct {
 //     resolves both to uint32 first, which keeps the unsigned floor an entry
 //     here would lose.
 //
-// NOTE: matching is by the analyzer's qualified type string (pkg-local alias +
-// "." + name), so an aliased import (import t "time" -> "t.Time") is not yet
-// recognized and falls through to the object default. Alias/import-path
-// resolution lands with the cross-package resolver in PR9.
+// Matching is by name, spelled with the declaring package's name. The analyzer
+// reads a field's or payload's qualifier through its file's imports and
+// writes that spelling into the Resolution (t.Time under import t "time" is
+// time.Time). A registered struct slice payload's element is matched as
+// written (structSlicePayloadSchema).
 var wellKnownFormats = map[string]wellKnownType{
 	goTypeTimeTime:      {typeString, formatDateTime},
 	goTypeTimeDuration:  {typeInteger, formatInt64},

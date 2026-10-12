@@ -20,7 +20,6 @@ const fieldFallbackModSrc = `package svc
 
 import (
 	"time"
-	t "time"
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
@@ -66,7 +65,6 @@ func TestRunGenerateFieldFallbacksFailStrict(t *testing.T) {
 			map[string]any{"type": "array", "items": untyped}},
 		{"recursive Tree", "type Tree map[string]Tree", "Tree", map[string]any{"type": "object", "additionalProperties": untyped}},
 		{"third-party", "", "decimal.Decimal", object},
-		{"aliased import", "", "t.Time", object},
 		{"defined over time.Time", "type StampD time.Time", "StampD", object},
 		{"defined over uuid.UUID", "type IDD uuid.UUID", "IDD", object},
 		{"error", "", "error", object},

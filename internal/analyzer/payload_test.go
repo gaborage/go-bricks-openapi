@@ -294,7 +294,6 @@ func payloadRows() []payloadRow {
 		{result: "server.Result[[]uintptr]", res: "[]uintptr", warn: fmt.Sprintf(uintptrPayloadWarning, "[]uintptr")},
 		// F6–F7: unresolvable names; only a root falls to the screens.
 		{result: "server.Result[decimal.Decimal]", warn: unresolvable},
-		{result: "server.Result[t.Time]", warn: fmt.Sprintf(unresolvablePayloadWarning, "t.Time")},
 		{result: "server.Result[*Missing]", warn: fmt.Sprintf(unresolvablePayloadWarning, "Missing")},
 		{result: "server.Result[[]decimal.Decimal]", res: "[]decimal.Decimal", warn: unresolvable},
 		{result: "server.Result[map[string]decimal.Decimal]", res: "map[string]decimal.Decimal", warn: unresolvable},
@@ -332,6 +331,11 @@ func payloadRows() []payloadRow {
 		// C1: struct and well-known payloads are unchanged.
 		{result: "server.Result[time.Time]", res: "time.Time", name: "Time"},
 		{result: "server.Result[[]*time.Time]", res: "[]*time.Time", name: "Time"},
+		// C2: an aliased import names the well-known type, spelled as the
+		// tables spell it.
+		{result: "server.Result[t.Time]", res: "time.Time", name: "Time"},
+		{result: "server.Result[[]t.Time]", res: "[]time.Time", name: "Time"},
+		{result: "server.Result[t.Duration]", res: goTypeInt64, name: "Duration"},
 	}
 }
 

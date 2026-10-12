@@ -736,7 +736,9 @@ func TestUintptrWrapperAndMapValueWarn(t *testing.T) {
 }
 
 // TestUnresolvableFieldsWarn pins the unresolvable and untyped-builtin
-// warnings, and that ShapeUnknown fields never warn.
+// warnings, and that ShapeUnknown fields never warn. A well-known type under
+// an aliased import is no longer one of them: it resolves, silently, while a
+// defined type over one (StampD) still warns.
 func TestUnresolvableFieldsWarn(t *testing.T) {
 	a := analyzeDirectiveProject(t, map[string]string{
 		"go.mod":                           resolveGoMod,
@@ -750,12 +752,12 @@ func TestUnresolvableFieldsWarn(t *testing.T) {
 				"\tCh chan int `json:\"ch\"`\n\tAnon struct{ X int } `json:\"anon\"`\n\tPage Page[int] `json:\"page\"`\n"+
 				"\tErr error `json:\"err\"`\n\tC64 complex64 `json:\"c64\"`\n\tC128 complex128 `json:\"c128\"`\n\tCW C `json:\"cw\"`\n\tCM map[string]complex128 `json:\"cm\"`\n"),
 	})
-	for _, name := range []string{"Dec", "AliasedTime", "AliasedRaw", "TMissing", "StampD", "IDD", "Missing", "Q"} {
+	for _, name := range []string{"Dec", "TMissing", "StampD", "IDD", "Missing", "Q"} {
 		if w := fieldWarnings(a, name); assert.Len(t, w, 1, name) {
 			assert.Contains(t, w[0], "resolves to no schema", name)
 		}
 	}
-	for _, name := range []string{"Ch", "Anon"} {
+	for _, name := range []string{"Ch", "Anon", "AliasedTime", "AliasedRaw"} {
 		assert.Empty(t, fieldWarnings(a, name), name)
 	}
 	// Issue 138: an Instantiation is not resolved, and now says so.
@@ -778,6 +780,8 @@ func TestUnresolvableFieldsWarn(t *testing.T) {
 	assert.Equal(t, goTypeComplex128, got["c128"])
 	assert.Equal(t, goTypeComplex128, got["cw"])
 	assert.Equal(t, "map[string]complex128", got["cm"])
+	assert.Equal(t, models.WellKnownTimeTime, got["aliasedTime"])
+	assert.Equal(t, models.WellKnownRawMessage, got["aliasedRaw"])
 	assert.Equal(t, goTypeInt64, got["cents"], "an in-module qualified named type resolves (#100)")
 	assert.Empty(t, fieldWarnings(a, "Cents"))
 	assert.Equal(t, "types.Missing", got["tMissing"])
@@ -792,7 +796,6 @@ func TestWarnedRowsInEveryPosition(t *testing.T) {
 		{"TagsM", "marshal:TagsM([]string)", "encoding/json uses instead"},
 		{"Tree", "map[string]cycle:Tree", "contains itself"},
 		{"decimal.Decimal", "decimal.Decimal", "resolves to no schema"},
-		{"t.Time", "t.Time", "resolves to no schema"},
 		{"StampD", "StampD", "resolves to no schema"},
 		{"C", goTypeComplex128, "holds the builtin"},
 		{"Addr", "uintptr", "holds a uintptr"},
@@ -807,7 +810,7 @@ func TestWarnedRowsInEveryPosition(t *testing.T) {
 	decls := "type Status int\nfunc (s Status) MarshalText() ([]byte, error) { return nil, nil }\n" +
 		"type TagsM []string\nfunc (TagsM) MarshalJSON() ([]byte, error) { return nil, nil }\n" +
 		"type Tree map[string]Tree\ntype StampD time.Time\ntype C complex128\ntype Addr uintptr\n"
-	a, got := analyzeRows(t, "\t\"time\"\n\tt \"time\"\n\t\"github.com/shopspring/decimal\"\n", decls, body.String())
+	a, got := analyzeRows(t, "\t\"time\"\n\t\"github.com/shopspring/decimal\"\n", decls, body.String())
 	for i, r := range reps {
 		for j, p := range positions {
 			name := fmt.Sprintf("F%dP%d", i, j)
@@ -871,14 +874,16 @@ func TestKindBackedUnderlying(t *testing.T) {
 		models.WellKnownRawMessage:   "[]byte",
 		models.WellKnownJSONNumber:   "string",
 	}
+	a := New(t.TempDir())
+	file := importsFile(t, "time", "encoding/json", "github.com/google/uuid", "github.com/shopspring/decimal")
 	for name, want := range cases {
-		got, ok := kindBackedUnderlying(name)
+		got, ok := a.kindBackedUnderlying(name, file)
 		if assert.True(t, ok, name) {
 			assert.Equal(t, want, renderShape(got), name)
 		}
 	}
 	for _, name := range []string{models.WellKnownTimeTime, models.WellKnownUUID, "decimal.Decimal"} {
-		_, ok := kindBackedUnderlying(name)
+		_, ok := a.kindBackedUnderlying(name, file)
 		assert.False(t, ok, name)
 	}
 }

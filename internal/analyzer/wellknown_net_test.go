@@ -71,18 +71,20 @@ func TestFileModeAndNetTypesResolve(t *testing.T) {
 // spellings are uint32 and net.IP is []byte, while the netip structs have
 // no kind to fall back to.
 func TestFileModeAndNetKindBacked(t *testing.T) {
+	a := New(t.TempDir())
+	file := importsFile(t, "io/fs", "net", "net/netip", "os")
 	for name, want := range map[string]string{
 		stdOSFileMode:         goTypeUint32,
 		stdFSFileMode:         goTypeUint32,
 		models.WellKnownNetIP: "[]byte",
 	} {
-		got, ok := kindBackedUnderlying(name)
+		got, ok := a.kindBackedUnderlying(name, file)
 		if assert.True(t, ok, name) {
 			assert.Equal(t, want, renderShape(got), name)
 		}
 	}
 	for _, name := range []string{models.WellKnownNetipAddr, models.WellKnownNetipPrefix, models.WellKnownNetipAddrPort} {
-		_, ok := kindBackedUnderlying(name)
+		_, ok := a.kindBackedUnderlying(name, file)
 		assert.False(t, ok, name)
 	}
 }

@@ -432,8 +432,9 @@ func (a *ProjectAnalyzer) rhsMethodSet(rhs ast.Expr, c resolveCtx, keep bool, op
 }
 
 // qualifiedMethodSet returns the method set of q.T: an in-module type's, in
-// its declaring package, else a well-known type's (wellKnownMethodSets), else
-// none (a third-party type is not read).
+// its declaring package, else a well-known type's, named through c's file's
+// imports (wellKnownName, wellKnownMethodSets), else none (a third-party type
+// is not read).
 func (a *ProjectAnalyzer) qualifiedMethodSet(qualified string, c resolveCtx, keep bool, open []string) methodSet {
 	if site, name, ok := a.inModuleTypeSite(qualified, c.file); ok {
 		return a.methodSetOf(name, c.in(site.file, site.path), keep, open)
@@ -442,7 +443,8 @@ func (a *ProjectAnalyzer) qualifiedMethodSet(qualified string, c resolveCtx, kee
 	if !keep {
 		return ms
 	}
-	for _, method := range wellKnownMethodSets[qualified] {
+	name, _ := a.wellKnownName(qualified, c.file)
+	for _, method := range wellKnownMethodSets[name] {
 		ms[method] = methodEntry{exact: true, owner: qualified}
 	}
 	return ms

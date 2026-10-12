@@ -162,9 +162,12 @@ func (t *TypeInfo) ResolvedShape() *TypeShape {
 	return t.Shape
 }
 
-// Qualified names of the well-known stdlib/library types, spelled as the Shape
-// decoder writes them (import alias + "." + name), so an aliased import
-// (t "time" -> "t.Time") is deliberately not one.
+// Qualified names of the well-known stdlib/library types, spelled with the
+// name of the package declaring them. A Shape spells a type with the
+// qualifier its file uses; the analyzer maps that qualifier through the
+// file's imports and writes this spelling into a Resolution, so t.Time under
+// import t "time" is time.Time there, and a project package named time is
+// never one. A qualifier no owning import binds keeps its spelling.
 const (
 	WellKnownTimeTime     = "time.Time"
 	WellKnownTimeDuration = "time.Duration"
