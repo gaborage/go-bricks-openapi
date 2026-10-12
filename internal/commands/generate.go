@@ -50,6 +50,7 @@ type GenerateOptions struct {
 	DisableTenantAuth bool   // omit the X-Tenant-ID security scheme (single-tenant)
 	TenantHeader      string // header name for the tenant security scheme (default X-Tenant-ID)
 	Strict            bool   // treat warnings (empty/untyped) as a non-zero exit
+	FailOnWarnings    bool   // write the spec, then exit non-zero if the run warned
 	Validate          bool   // validate the generated spec (OpenAPI 3.0) before writing
 }
 
@@ -91,6 +92,7 @@ and produces a comprehensive API specification with validation constraints.`,
 	cmd.Flags().BoolVar(&opts.DisableTenantAuth, "no-tenant-security", false, "Omit the X-Tenant-ID security scheme (single-tenant)")
 	cmd.Flags().StringVar(&opts.TenantHeader, "tenant-header", "", "Header name for the tenant security scheme (default X-Tenant-ID)")
 	cmd.Flags().BoolVar(&opts.Strict, "strict", false, "Exit non-zero if the spec has warnings (no modules/routes, untyped routes)")
+	cmd.Flags().BoolVar(&opts.FailOnWarnings, "fail-on-warnings", false, "Write the spec, then exit non-zero if the run emitted any warning")
 	cmd.Flags().BoolVar(&opts.Validate, "validate", false, "Validate the generated spec (OpenAPI 3.0) before writing; fails if invalid")
 
 	return cmd
@@ -174,6 +176,12 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 		return err
 	}
 
+	return writeSpec(opts, specContent, warningCount > 0)
+}
+
+// writeSpec persists the rendered spec, prints the success line, then applies
+// the --fail-on-warnings gate to the run's warned verdict.
+func writeSpec(opts *GenerateOptions, specContent string, warned bool) error {
 	if err := os.MkdirAll(filepath.Dir(opts.OutputFile), 0750); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
@@ -182,6 +190,15 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 	}
 
 	fmt.Printf("✓ OpenAPI specification generated: %s\n", opts.OutputFile)
+
+	// Fail-on-warnings gate: unlike --strict, it runs AFTER the write and keeps
+	// the file on purpose, so a CI drift gate gets both the fresh spec and a
+	// failing exit from one run. The success line above is still printed; it is
+	// what tells this failure apart from a --strict one, which never prints it.
+	// With both flags set the strict gate has already failed the run.
+	if opts.FailOnWarnings && warned {
+		return fmt.Errorf("spec written with warnings and --fail-on-warnings is set")
+	}
 	return nil
 }
 
