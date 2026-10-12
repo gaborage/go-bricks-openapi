@@ -492,6 +492,9 @@ nested Go module, is not.
 - A route path built from a qualified constant in another package
   (`paths.Widgets`) is likewise an Unresolved route — only same-package
   constants, at package level or in any enclosing lexical block, resolve.
+  The package is the one declaring the method that registers the route, so a
+  handler in another in-module package that the module forwards registration
+  to reads its own package's constants, never the module's.
 - A constant is read only from a string literal: one whose own value is a `+`
   expression, or an implicit repetition inside a `const (...)` group, does not
   resolve, and a route path using it is an Unresolved route.
