@@ -205,7 +205,7 @@ func TestWellKnownMarshalerEmbedDefined(t *testing.T) {
 		require.Equal(t, embedMarshaler, wellKnownMarshalerEmbed(name, false).class, name)
 	}
 	for _, name := range []string{models.WellKnownTimeTime, models.WellKnownNetipAddr, models.WellKnownNetipPrefix, models.WellKnownNetipAddrPort} {
-		assert.Equal(t, embedSkip, wellKnownMarshalerEmbed(name, true).class, name)
+		assert.Equal(t, embedOpaqueStruct, wellKnownMarshalerEmbed(name, true).class, name)
 	}
 	for _, name := range []string{models.WellKnownUUID, models.WellKnownRawMessage, models.WellKnownJSONNumber, models.WellKnownNetIP} {
 		assert.Equal(t, embedNonStruct, wellKnownMarshalerEmbed(name, true).class, name)

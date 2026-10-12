@@ -3,7 +3,8 @@
 // writes it; alias and defined types over a struct promote its fields; an
 // unexported embed, a predeclared type and a well-known Marshaler one add
 // nothing, but a defined type over json.RawMessage is a property; an unreadable
-// type and a generic instantiation add nothing and warn.
+// type and a generic instantiation add nothing and warn. A json name nests an
+// unexported struct embed, but not an unexported non-struct one.
 package embeddednonstruct
 
 import (
@@ -103,6 +104,20 @@ type Dropped struct {
 	Kept string `json:"kept"`
 }
 
+// hidden is an unexported struct.
+type hidden struct {
+	Detail string `json:"detail"`
+}
+
+// Named embeds under json names: encoding/json writes the unexported struct
+// under its name, but skips the unexported non-struct before it reads the
+// tag.
+type Named struct {
+	cents  `json:"c"`
+	hidden `json:"h"`
+	Keep   int `json:"keep"`
+}
+
 // Shadowed's tagged field beats its Cents embed at one depth.
 type Shadowed struct {
 	Cents
@@ -132,6 +147,7 @@ type Rows struct {
 	Promoted Promoted  `json:"promoted"`
 	PromB    PromotedB `json:"promB"`
 	Dropped  Dropped   `json:"dropped"`
+	Named    Named     `json:"named"`
 	Shadowed Shadowed  `json:"shadowed"`
 	Collided Collided  `json:"collided"`
 }

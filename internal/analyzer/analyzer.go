@@ -4326,15 +4326,17 @@ func (a *ProjectAnalyzer) namedFields(field *ast.Field, astFile *ast.File, fileP
 // embeddedFields handles an anonymous (embedded) field, mirroring
 // encoding/json's rules. It returns the resulting fields and whether they were
 // PROMOTED (flattened from the embed, i.e. deeper) vs at the parent level:
+//   - With json:"-" it is excluded.
+//   - An unexported non-struct (classifyEmbed) is skipped, json name or not:
+//     encoding/json skips it before it reads the tag.
 //   - With an explicit json name (Base `json:"base"`) it NESTS as a single field
 //     of the embedded type (rendered as a $ref) — returned as shallow.
-//   - With json:"-" it is excluded.
 //   - Otherwise (classifyEmbed) a struct's exported fields are PROMOTED
 //     (flattened) into the parent, one level deeper; an exported non-struct
-//     type is one shallow property keyed by its type name; an unexported
-//     non-struct is skipped, and so is a well-known Marshaler type unless it
-//     is an exported path, query or header parameter; a generic or
-//     unreadable type is dropped with a warning.
+//     type is one shallow property keyed by its type name; a well-known
+//     Marshaler type is skipped unless it is an exported path, query or
+//     header parameter; a generic or unreadable type is dropped with a
+//     warning.
 //
 // Embedded pointers (*Base) are unwrapped. A struct reached through local or
 // in-module aliases and defined types is promoted from the package declaring
@@ -4351,23 +4353,27 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 		typeName = unknownTypeName
 	}
 
-	// An explicit json name turns embedding into nesting (a parent-level field).
 	var tags parsedTags
 	if field.Tag != nil {
 		tagText := unquoteLiteral(field.Tag.Value)
 		a.warnUnreadableTagKeys(field.Tag, typeName, tagText)
 		tags = a.parseStructTags(tagText)
-		switch tags.jsonName {
-		case jsonSkipValue:
+		if tags.jsonName == jsonSkipValue {
 			return nil, false // json:"-" — excluded
-		case "":
-			// no explicit name — fall through to promotion
-		default:
-			return []rankedField{a.buildFieldInfo(nestedEmbedName(field.Type, typeName), field, astFile, filePath, depth)}, false
 		}
 	}
 
 	target := a.classifyEmbed(field, astFile, filePath)
+	if target.class == embedSkip {
+		// An unexported non-struct: encoding/json skips it before it reads
+		// the tag, so an explicit json name does not keep it either.
+		return nil, false
+	}
+	// An explicit json name turns any other embed into nesting (a
+	// parent-level field), with no dropped-embed warning.
+	if tags.jsonName != "" {
+		return []rankedField{a.buildFieldInfo(nestedEmbedName(field.Type, typeName), field, astFile, filePath, depth)}, false
+	}
 	switch target.class {
 	case embedStruct:
 		// The cycle / self-embed guard holds back only a struct embed: a
@@ -4401,7 +4407,7 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 	case embedGeneric, embedUnresolvable:
 		a.warnDroppedEmbed(field, target)
 	default:
-		// embedSkip: an unexported non-struct, or a defined type over time.Time.
+		// embedOpaqueStruct: a struct with no exported field promotes nothing.
 	}
 	return nil, false
 }

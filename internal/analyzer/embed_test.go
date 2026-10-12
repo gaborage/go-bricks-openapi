@@ -94,6 +94,7 @@ type parenOf[T any] (int)
 type ltOf[T any] time.Time
 type baseOf[T any] Base
 type nsOf[T any] sql.NullString
+type rawOf[T any] = json.RawMessage
 type parenBase[T any] (Base)
 type pageA[T any] page[T]
 type R1 struct {
@@ -167,6 +168,17 @@ type PBA = (Base)
 type PS (struct {
 	Z int ` + "`json:\"z\"`" + `
 })
+type hidden struct {
+	H int ` + "`json:\"h\"`" + `
+}
+type ba = Base
+type bd Base
+type ca = Cents
+type CU = cents
+type lt time.Time
+type lr json.RawMessage
+type lu = uuid.UUID
+type lu2 = uuid.UUID
 `
 
 // embedRow is one struct embedding embed beside its own field Y, and the
@@ -300,6 +312,66 @@ func TestEmbeddedJSONNumberIsMarshaler(t *testing.T) {
 	assert.Len(t, warnings, 4, "%v", warnings)
 	assert.Len(t, matching(warnings, "has the MarshalJSONTo method promoted from its embedded json.Number"), 3, "%v", warnings)
 	assert.Empty(t, embedWarnings(a))
+}
+
+// TestEmbeddedJSONNameSkipsUnexportedNonStruct pins issue 185: encoding/json
+// skips an embed whose Go name is unexported and whose type, pointer shed,
+// is not a struct before it reads the tag, so a json name does not keep it.
+// An unexported non-struct (cents, *cents), an unexported alias of an
+// exported one (ca), a defined type over json.RawMessage (lr), a predeclared
+// type, a local generic non-struct type, and aliases of uuid.UUID whose
+// MarshalText methods cancel each other (lu, lu2) add no property and no
+// warning, and the query tag of a dropped one documents no parameter either:
+// go-bricks binds no unexported field. An unexported struct, by pointer,
+// alias or defined type too (hidden, ba, bd), a defined type over time.Time
+// (lt, LT, ltOf[int]), whose fields are all unexported, a type of unknown
+// kind (page[int], ns), and an exported alias of an unexported non-struct
+// (CU) nest under the name, as encoding/json writes them, with only their
+// fields' own warnings.
+func TestEmbeddedJSONNameSkipsUnexportedNonStruct(t *testing.T) {
+	rows := []embedRow{
+		{"JCents", "cents `json:\"c\"`", nil},
+		{"JPtrCents", "*cents `json:\"c\"`", nil},
+		{"JCentsOmit", "cents `json:\"c,omitempty\"`", nil},
+		{"JCentsQuery", "cents `json:\"c\" query:\"c\"`", nil},
+		{"JCa", "ca `json:\"c\"`", nil},
+		{"JLr", "lr `json:\"r\"`", nil},
+		{"JInt", "int `json:\"i\"`", nil},
+		{"JError", "error `json:\"e\"`", nil},
+		{"JAny", "any `json:\"a\"`", nil},
+		{"JList", "list[int] `json:\"l\"`", nil},
+		{"JCnt", "cnt[int] `json:\"n\"`", nil},
+		{"JQc", "qc[int] `json:\"q\"`", nil},
+		{"JRawOf", "rawOf[int] `json:\"r\"`", nil},
+		{"RawOf", "rawOf[int]", nil},
+		{"JLuPair", "lu `json:\"u\"`\n\tlu2 `json:\"v\"`", nil},
+		{"JCentsExported", "Cents `json:\"c\"`", map[string]string{"c": goTypeInt64}},
+		{"JCU", "CU `json:\"c\"`", map[string]string{"c": goTypeInt}},
+		{"JHidden", "hidden `json:\"h\"`", map[string]string{"h": "$hidden"}},
+		{"JPtrHidden", "*hidden `json:\"h\"`", map[string]string{"h": "*$hidden"}},
+		{"JBa", "ba `json:\"h\"`", map[string]string{"h": "$ba"}},
+		{"JPtrBa", "*ba `json:\"h\"`", map[string]string{"h": "*$ba"}},
+		{"JBd", "bd `json:\"h\"`", map[string]string{"h": "$bd"}},
+		{"JLtLower", "lt `json:\"t\"`", map[string]string{"t": "lt"}},
+		{"JLT", "LT `json:\"t\"`", map[string]string{"t": "LT"}},
+		{"JLtOf", "ltOf[int] `json:\"t\"`", map[string]string{"t": "inst:ltOf[int]"}},
+		{"JPage", "page[int] `json:\"p\"`", map[string]string{"p": "inst:page[int]"}},
+		{"JNs", "ns `json:\"n\"`", map[string]string{"n": "sql.NullString"}},
+	}
+	a := analyzeEmbedRows(t, rows)
+	for _, r := range rows {
+		want := map[string]string{"y": goTypeInt}
+		for k, v := range r.want {
+			want[k] = v
+		}
+		assert.Equal(t, want, renders(t, a.typeRegistry[r.typ]), r.typ)
+	}
+	assert.Empty(t, embedWarnings(a))
+	warnings := a.Warnings(t.Context())
+	assert.Len(t, warnings, 5, "only the nested fields' own warnings: %v", warnings)
+	for _, name := range []string{"lt", "LT", "ltOf", "page", "ns"} {
+		assert.Len(t, fieldWarnings(a, name), 1, "field %s: %v", name, warnings)
+	}
 }
 
 // TestEmbeddedPropertyKeepsWrittenName pins the property's JSON name: the
