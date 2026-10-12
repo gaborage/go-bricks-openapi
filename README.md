@@ -82,8 +82,14 @@ go-bricks-openapi version
 | `--no-tenant-security`  | Omit the `X-Tenant-ID` security scheme                   |
 | `--tenant-header`       | Header name for the tenant security scheme (default `X-Tenant-ID`) |
 | `--strict`              | Treat analyzer warnings as failures                      |
+| `--fail-on-warnings`    | Write the spec, then exit non-zero if the run emitted any warning |
 | `--validate`            | Validate the generated spec (OpenAPI 3.0) before writing; fails if invalid |
 | `--verbose, -v`         | Verbose output                                           |
+
+When both `--strict` and `--fail-on-warnings` are set, `--strict` wins: a run
+that warned writes no file, removes any existing output, and exits 1 with the
+`--strict` error,
+`spec generated with warnings and --strict is set`.
 
 ### `generate` output
 
@@ -109,6 +115,18 @@ limitations"). The line is omitted entirely when there are none, so anything
 parsing the summary must tolerate an extra line rather than assume a fixed
 one. `doctor` reports the same count in its diagnostics block and lists each
 dropped registration with its `file:line:col` and the reason.
+
+For a CI drift gate, `--fail-on-warnings` writes the spec as usual, success
+line included, and then exits 1 if the run warned, with the error
+`spec written with warnings and --fail-on-warnings is set`. One run yields both
+the fresh file to diff and the verdict:
+
+```bash
+status=0
+go-bricks-openapi generate --output docs/openapi.yaml --fail-on-warnings || status=1
+git diff --exit-code docs/openapi.yaml || status=1
+exit "$status"
+```
 
 ### Comment directives
 

@@ -106,6 +106,31 @@ func TestRunGenerateHappyPath(t *testing.T) {
 	}
 }
 
+// TestRunGenerateFailOnWarnings verifies --fail-on-warnings end to end through
+// the run() seam: a module-less project warns, so the spec is written and the
+// success line printed, then the run exits 1 with exactly one "Error:" line.
+func TestRunGenerateFailOnWarnings(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "spec.yaml")
+	var outBuf, errBuf bytes.Buffer
+	var code int
+	stdout := testutil.CaptureStdout(t, func() {
+		code = run([]string{"generate", "--project", dir, "--output", out, "--fail-on-warnings"}, &outBuf, &errBuf)
+	})
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (stderr: %s)", code, errBuf.String())
+	}
+	if got, want := errBuf.String(), "Error: spec written with warnings and --fail-on-warnings is set\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+	if !strings.Contains(stdout, "✓ OpenAPI specification generated: "+out) {
+		t.Errorf("stdout missing the success line:\n%s", stdout)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Errorf("--fail-on-warnings must keep the written spec at %s: %v", out, err)
+	}
+}
+
 // TestRunValidateHappyPath verifies the validate subcommand exits 0 on a valid
 // spec file and prints the confirmation line.
 func TestRunValidateHappyPath(t *testing.T) {
