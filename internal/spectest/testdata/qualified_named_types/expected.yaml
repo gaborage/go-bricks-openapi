@@ -171,7 +171,8 @@ components:
         addr:
           type: object
         aliasedTime:
-          type: object
+          type: string
+          format: date-time
         bTags:
           type: array
           items:

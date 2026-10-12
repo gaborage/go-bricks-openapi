@@ -18,7 +18,7 @@ import (
 // Dropped-embed warnings. Each is raised at most once per embed position.
 const (
 	unresolvableEmbedWarning = "embedded field %s at %s has type %s: %s cannot be read (a type from outside the module, " +
-		"a well-known type under an aliased import, an in-module package whose buildable files all carry a build constraint " +
+		"an in-module package whose buildable files all carry a build constraint " +
 		"and whose first one by name has another package clause, or a name with no declaration in its package), so neither " +
 		"its fields nor its methods are known — the embedded field is dropped from the spec"
 	genericEmbedWarning = "embedded field %s at %s has type %s: %s is a generic instantiation, which is not expanded " +
@@ -161,16 +161,17 @@ func (ec embedClassifier) local(file *ast.File, path, name string, depth int, de
 
 // qualified classifies q.T as written in file: an in-module struct, a
 // well-known Marshaler type (wellKnownMarshalerEmbed), a well-known or
-// kind-backed non-struct type, or an in-module named type, followed in its
-// declaring package; anything else is unresolvable. defined is local's.
+// kind-backed non-struct type (both through file's imports, wellKnownName),
+// or an in-module named type, followed in its declaring package; anything
+// else is unresolvable. defined is local's.
 func (ec embedClassifier) qualified(file *ast.File, qualified string, depth int, defined bool) embedTarget {
 	if q, ok := ec.a.resolveQualifiedStruct(qualified, file); ok {
 		return embedTarget{class: embedStruct, site: structSite{st: q.st, pkg: q.pkg, file: q.file, path: q.filePath}}
 	}
-	if _, ok := wellKnownMethodSets[qualified]; ok {
-		return wellKnownMarshalerEmbed(qualified, defined)
-	}
-	if _, ok := knownUnderlyingBuiltins[qualified]; ok || models.WellKnownTypeNames[qualified] {
+	if name, ok := ec.a.wellKnownName(qualified, file); ok {
+		if _, marshaler := wellKnownMethodSets[name]; marshaler {
+			return wellKnownMarshalerEmbed(name, defined)
+		}
 		return embedTarget{class: embedNonStruct}
 	}
 	if site, name, ok := ec.a.inModuleTypeSite(qualified, file); ok {

@@ -4126,12 +4126,12 @@ func (m *Module) list(ctx server.HandlerContext) (server.Result[[]Status], serve
 }
 
 // TestUnresolvablePayloadFallsBackWithWarning pins the fallback for a payload
-// name that resolves to no component: a third-party type, an undeclared name,
-// or an aliased import of a well-known type (which is not recognised). Each is
-// cleared to the warned untyped path, so the generator never emits a $ref to
-// a missing component and --strict fails. Well-known types keep their name and
-// raise no warning; builtins carry no name at all. A slice payload of an
-// unresolvable element falls back the same way.
+// name that resolves to no component: a third-party type or an undeclared
+// name. Each is cleared to the warned untyped path, so the generator never
+// emits a $ref to a missing component and --strict fails. Well-known types,
+// under an aliased import too (t.Time), keep their name and raise no warning;
+// builtins carry no name at all. A slice payload of an unresolvable element
+// falls back the same way.
 func TestUnresolvablePayloadFallsBackWithWarning(t *testing.T) {
 	src := `package mod
 import (
@@ -4194,7 +4194,6 @@ func (m *Module) item(ctx server.HandlerContext) (server.Result[Item], server.IA
 	for path, written := range map[string]string{
 		"GET /decimal":  "decimal.Decimal",
 		"GET /missing":  "Missing",
-		"GET /aliased":  "t.Time",
 		"GET /decimals": "decimal.Decimal",
 	} {
 		route := routeForPath(t, routes, path)
@@ -4206,7 +4205,7 @@ func (m *Module) item(ctx server.HandlerContext) (server.Result[Item], server.IA
 	}
 
 	for path, name := range map[string]string{
-		"GET /time": "Time", "GET /raw": "RawMessage", "GET /id": "UUID", "GET /ttl": "Duration", "GET /item": "Item",
+		"GET /time": "Time", "GET /aliased": "Time", "GET /raw": "RawMessage", "GET /id": "UUID", "GET /ttl": "Duration", "GET /item": "Item",
 		"GET /month": "Month", "GET /workdays": "Weekday", "GET /total": "Number",
 	} {
 		route := routeForPath(t, routes, path)
@@ -4220,7 +4219,7 @@ func (m *Module) item(ctx server.HandlerContext) (server.Result[Item], server.IA
 		assert.False(t, warnedAbout(typeName), "%s must not warn: %v", typeName, warnings)
 	}
 
-	assert.Len(t, warnings, 4, "exactly one warning per unresolvable payload; well-known, builtin and struct payloads stay silent: %v", warnings)
+	assert.Len(t, warnings, 3, "exactly one warning per unresolvable payload; well-known, builtin and struct payloads stay silent: %v", warnings)
 
 	count := routeForPath(t, routes, "GET /count")
 	require.NotNil(t, count.Response)

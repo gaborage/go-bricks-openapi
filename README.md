@@ -378,20 +378,26 @@ nested Go module, is not.
   object and reported as a warning (so `--strict` fails on it). Exclude the
   field with `json:"-"`, which also silences the warning.
 - A field type that resolves to no schema — a type from outside the module
-  (`decimal.Decimal`, a go-bricks type such as `scheduler.ScheduleType`), a
-  well-known type under an aliased import (`t.Time`, `j.RawMessage`), or a
+  (`decimal.Decimal`, a go-bricks type such as `scheduler.ScheduleType`), or a
   defined type over a well-known struct (`type Stamp time.Time`,
   `type ID uuid.UUID`) — is documented as an untyped object with a warning (so
   `--strict` fails on it). Named types from other packages of the project,
   under a default or aliased import (not a dot import), are resolved in their
   own package like local ones, except in a package whose every buildable file
   carries a build constraint and whose first one by name has another package
-  clause (see Build constraints below), and except a non-struct type spelled
-  through its import like a well-known or kind-backed one (a project package
-  `net` declaring `type IP int`, used as `net.IP`, or `fs` declaring
-  `type FileMode string`), which is documented as that well-known type, with
-  no warning. A struct so spelled is still resolved in its own package (for
-  a slice payload of one, see the response payload entry below).
+  clause (see Build constraints below). A well-known or kind-backed type is
+  recognized through the import its qualifier names. A project package never
+  declares one, so a project package `net` declaring `type IP int`, used as
+  `net.IP`, is an integer, and a project struct so spelled is resolved in its
+  own package too (for a slice payload of one, see the response payload entry
+  below). The package that declares one names it under an alias too (`t.Time`
+  with `import t "time"`): `time`, `os`, `io/fs`, `net`, `net/netip`,
+  `encoding/json`, and, for `uuid.UUID`, `github.com/google/uuid`,
+  `github.com/gofrs/uuid` (and its `/v5`) and `github.com/satori/go.uuid`.
+  Any other package from outside the module is matched by spelling alone: a
+  drop-in `json` package's `json.Number` is the well-known type, but under an
+  alias it is an untyped object with a warning, and a type of such a package
+  that only shares a well-known type's spelling is documented as that type.
 - `int` and `uint` are documented as 64-bit (`format: int64`), which is wrong
   for a 32-bit build, where they hold only 32 bits.
 - `uint64` is documented as `format: int64` with `minimum: 0`, so values of
@@ -419,9 +425,8 @@ nested Go module, is not.
   (`server.Result[[]uuid.UUID]`) is still typed inline as the well-known
   type's array. A payload that ends in a fallback — a Marshaler type
   other than a text one, recursion, `uintptr`, `error`/`complex64`/`complex128`, or a type that
-  resolves to no schema (a third-party type such as `decimal.Decimal`, an
-  undeclared name, a well-known type under an aliased import `t "time"`) —
-  raises one warning, so `--strict` fails on it. The exception is a bare
+  resolves to no schema (a third-party type such as `decimal.Decimal`, or an
+  undeclared name) — raises one warning, so `--strict` fails on it. The exception is a bare
   `error` or `*error` payload (`server.Result[error]`): it is skipped as a
   framework type and documented as an untyped object with no per-type
   warning. Only the aggregate untyped-route warning reports it, and that

@@ -35,7 +35,7 @@ const (
 	depthCapFieldWarning  = "field %s at %s has type %s: its named types nest more than %d deep, so %s is cut to an untyped " +
 		"schema ({}) as if it were recursive"
 	unresolvableFieldWarning = "field %s at %s has type %s: %s resolves to no schema (a type from outside the module, " +
-		"a well-known type under an aliased import, an in-module package whose buildable files all carry a build constraint " +
+		"an in-module package whose buildable files all carry a build constraint " +
 		"and whose first one by name has another package clause, or a name with no declaration in its package) — emitting an untyped object"
 	definedOverQualifiedFieldWarning = "field %s at %s has type %s: %s is a defined type over %s, which resolves to no schema " +
 		"(a defined type drops its target's methods, and a type from outside the module is not resolved) — emitting an untyped object"
@@ -330,9 +330,10 @@ func isBytePrimitive(s *models.TypeShape) bool {
 }
 
 // resolveQualified resolves a qualified leaf (q.T): an in-module struct is a
-// ref, a kind-backed stdlib type its builtin, a well-known type stays as is,
-// an in-module named type resolves in its declaring package (inModuleTypeSite),
-// and anything else is unresolvable (it emits object).
+// ref, a kind-backed stdlib type its builtin, a well-known type a named leaf
+// spelled as the tables spell it (wellKnownName: t.Time under t "time" is
+// time.Time), an in-module named type resolves in its declaring package
+// (inModuleTypeSite), and anything else is unresolvable (it emits object).
 func (a *ProjectAnalyzer) resolveQualified(leaf models.TypeShape, c resolveCtx) models.TypeShape {
 	if q, ok := a.resolveQualifiedStruct(leaf.Name, c.file); ok {
 		if r, isMarshaler := a.structMarshalerLeaf(q.typeName, c.in(q.file, q.filePath), identityMode); isMarshaler {
@@ -341,17 +342,48 @@ func (a *ProjectAnalyzer) resolveQualified(leaf models.TypeShape, c resolveCtx) 
 		c.recordRef(leaf.Name, filepath.Dir(q.filePath))
 		return models.TypeShape{Kind: models.ShapeRef, Name: leaf.Name}
 	}
-	if b, ok := knownUnderlyingBuiltins[leaf.Name]; ok {
-		return models.TypeShape{Kind: models.ShapePrimitive, Name: b}
-	}
-	if models.WellKnownTypeNames[leaf.Name] {
-		return leaf
+	if name, ok := a.wellKnownName(leaf.Name, c.file); ok {
+		if b, kindBacked := knownUnderlyingBuiltins[name]; kindBacked {
+			return models.TypeShape{Kind: models.ShapePrimitive, Name: b}
+		}
+		return models.TypeShape{Kind: models.ShapeNamed, Name: name}
 	}
 	if site, name, ok := a.inModuleTypeSite(leaf.Name, c.file); ok {
 		return a.resolveLocal(models.TypeShape{Kind: models.ShapeNamed, Name: name}, c.in(site.file, site.path), identityMode)
 	}
 	c.st.note(fieldFallback{kind: fallbackUnresolvable, typeName: leaf.Name})
 	return leaf
+}
+
+// wellKnownName returns the key of the well-known tables that qualified (q.T,
+// as written in file) names, through the import q denotes (fileImports). An
+// in-module package names no key, whatever its name, so the caller resolves
+// its type from source. A package owning keys of the tables
+// (wellKnownPackages) names its package name joined to T, under an alias too.
+// Any other package, or a qualifier no import binds, names the spelling as
+// written, so a drop-in package re-exporting a well-known type through a type
+// alias (another json package's json.Number) is still read as that type. ok
+// reports whether the key is one of the tables' (time.Location is not).
+func (a *ProjectAnalyzer) wellKnownName(qualified string, file *ast.File) (string, bool) {
+	qual, name, _ := strings.Cut(qualified, ".")
+	key := qualified
+	if path, ok := a.fileImports(file)[qual]; ok {
+		if _, inModule := a.inModuleDir(path); inModule {
+			return "", false
+		}
+		if pkg, owner := wellKnownPackages[path]; owner {
+			key = pkg + "." + name
+		}
+	}
+	return key, spelledLikeWellKnown(key)
+}
+
+// spelledLikeWellKnown reports whether name is a key of the well-known tables:
+// models.WellKnownTypeNames or knownUnderlyingBuiltins, which together hold
+// every key of wellKnownMethodSets and kindBackedUnderlying.
+func spelledLikeWellKnown(name string) bool {
+	_, kindBacked := knownUnderlyingBuiltins[name]
+	return kindBacked || models.WellKnownTypeNames[name]
 }
 
 // inModuleTypeSite finds the declaring file of a qualified named type
@@ -667,11 +699,11 @@ func (a *ProjectAnalyzer) resolveDecl(name string, d typeDecl, c resolveCtx, mod
 // resolveUnderlying resolves the underlying type of name's declaration rhs:
 // a builtin or composite as written (nested leaves keep identity mode), a
 // local name by its own underlying (dropping its methods), and a qualified
-// name when kind-backed or declared in another package of the module (by its
-// own underlying, dropping its methods) — any other qualified underlying
-// (time.Time, uuid.UUID, decimal.Decimal) leaves name unresolvable, noted
-// against the chain's definer (name itself when resolution started in
-// underlying mode).
+// name when kind-backed (through c's file's imports) or declared in another
+// package of the module (by its own underlying, dropping its methods) — any
+// other qualified underlying (time.Time, uuid.UUID, decimal.Decimal) leaves
+// name unresolvable, noted against the chain's definer (name itself when
+// resolution started in underlying mode).
 func (a *ProjectAnalyzer) resolveUnderlying(name string, rhs ast.Expr, c resolveCtx) models.TypeShape {
 	s := a.typeShape(rhs)
 	if s.Kind != models.ShapeNamed {
@@ -680,7 +712,7 @@ func (a *ProjectAnalyzer) resolveUnderlying(name string, rhs ast.Expr, c resolve
 	if !strings.Contains(s.Name, ".") {
 		return a.resolveLocal(s, c, underlyingMode)
 	}
-	if u, ok := kindBackedUnderlying(s.Name); ok {
+	if u, ok := a.kindBackedUnderlying(s.Name, c.file); ok {
 		return u
 	}
 	if site, target, ok := a.inModuleTypeSite(s.Name, c.file); ok {
@@ -695,16 +727,21 @@ func (a *ProjectAnalyzer) resolveUnderlying(name string, rhs ast.Expr, c resolve
 }
 
 // kindBackedUnderlying returns the underlying type of a qualified well-known
-// type a defined chain may end in: the knownUnderlyingBuiltins, plus
-// json.RawMessage and net.IP ([]byte) and json.Number (string). The last
-// three apply only at the end of a defined chain, which drops their methods;
-// used directly they stay well-known leaves. The netip structs have no kind
-// to fall back to: a defined type over one keeps the defined-type warning.
-func kindBackedUnderlying(qualified string) (models.TypeShape, bool) {
-	if b, ok := knownUnderlyingBuiltins[qualified]; ok {
+// type a defined chain may end in, written in file (wellKnownName): the
+// knownUnderlyingBuiltins, plus json.RawMessage and net.IP ([]byte) and
+// json.Number (string). The last three apply only at the end of a defined
+// chain, which drops their methods; used directly they stay well-known
+// leaves. The netip structs have no kind to fall back to: a defined type over
+// one keeps the defined-type warning.
+func (a *ProjectAnalyzer) kindBackedUnderlying(qualified string, file *ast.File) (models.TypeShape, bool) {
+	name, ok := a.wellKnownName(qualified, file)
+	if !ok {
+		return models.TypeShape{}, false
+	}
+	if b, ok := knownUnderlyingBuiltins[name]; ok {
 		return models.TypeShape{Kind: models.ShapePrimitive, Name: b}, true
 	}
-	switch qualified {
+	switch name {
 	case models.WellKnownRawMessage, models.WellKnownNetIP:
 		elem := models.TypeShape{Kind: models.ShapePrimitive, Name: goTypeByte}
 		return models.TypeShape{Kind: models.ShapeSlice, Elem: &elem}, true

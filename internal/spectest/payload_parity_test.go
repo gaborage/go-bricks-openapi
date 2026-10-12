@@ -121,9 +121,11 @@ func parityRows() []parityRow {
 		"Tags", "b.Tags", "[]Tags", "[][]string", "UserList", "Stamp", "RawA", "AnyD", "Pair", "b.Cents",
 		"map[string]int64", "map[string]Cents", "map[string][]Cents", "[]map[string]int64", "[][]Cents",
 		"map[string]Address", "[]*byte", "[]*Flag", "[4]Flag",
+		// An aliased import of a well-known type (issue 164).
+		"t.Time", "[]t.Time",
 		// F rows.
 		"Tier", "PTier", "b.Tier", "[]Tier", "[]FlagV", "map[string]Tier", "Tree", "Addr", "uintptr",
-		"map[string]uintptr", "[]uintptr", "decimal.Decimal", "t.Time", "[]decimal.Decimal",
+		"map[string]uintptr", "[]uintptr", "decimal.Decimal", "[]decimal.Decimal",
 		"map[string]decimal.Decimal", "StampD", "[]StampD", "Cx", "complex128", "[]error",
 		// U4 rows.
 		"map[string]Fn", "[][]Fn", "map[string]Ch",

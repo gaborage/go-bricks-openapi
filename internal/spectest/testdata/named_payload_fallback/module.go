@@ -19,7 +19,8 @@ func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
 func (m *Module) Shutdown() error                 { return nil }
 
 // RegisterRoutes registers one route per fallback row. Missing is declared
-// nowhere.
+// nowhere. /aliased-time is no fallback: t still names the time package, so
+// its data is a date-time and it raises no warning.
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	server.GET(hr, r, "/tier", m.tier)
 	server.GET(hr, r, "/ptier-ptr", m.ptierPtr)

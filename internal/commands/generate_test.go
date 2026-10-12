@@ -1221,8 +1221,6 @@ func (m *Module) ping(ctx server.HandlerContext) (server.Result[Ping], server.IA
 const unresolvablePayloadModSrc = `package svc
 
 import (
-	t "time"
-
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
 	"github.com/shopspring/decimal"
@@ -1239,7 +1237,6 @@ type PriceReq struct {
 }
 
 var _ decimal.Decimal
-var _ t.Time
 
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	server.GET(hr, r, "/price/:id", m.price, server.WithTags("svc"))
@@ -1251,13 +1248,13 @@ func (m *Module) price(req PriceReq, ctx server.HandlerContext) (server.Result[P
 `
 
 // TestRunGenerateUnresolvablePayloadFallsBack pins the fallback for a payload
-// name that resolves to no component — a third-party type, an undeclared name,
-// and an aliased import of a well-known type. Each warns, so --strict fails
-// with no artifact; a non-strict run documents data as a valid untyped object
-// instead of a $ref to a component that is never emitted.
+// name that resolves to no component — a third-party type and an undeclared
+// name. Each warns, so --strict fails with no artifact; a non-strict run
+// documents data as a valid untyped object instead of a $ref to a component
+// that is never emitted.
 func TestRunGenerateUnresolvablePayloadFallsBack(t *testing.T) {
 	goMod := "module github.com/example/svc\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks " + minGoBricksVer + "\n"
-	for _, payload := range []string{"decimal.Decimal", "Missing", "t.Time"} {
+	for _, payload := range []string{"decimal.Decimal", "Missing"} {
 		src := strings.ReplaceAll(unresolvablePayloadModSrc, "PAYLOAD", payload)
 		t.Run(payload, func(t *testing.T) {
 			dir := writeProject(t, goMod, src)
