@@ -130,6 +130,7 @@ type ProjectAnalyzer struct {
 	tagWarned        map[string]struct{}                // dedupes malformed-struct-tag warnings by "file:line:col"
 	uintptrWarned    map[string]struct{}                // dedupes uintptr-field warnings by "file:line:col"
 	fieldWarned      map[string]struct{}                // dedupes field fallback warnings by "file:line:col"
+	fieldWarnings    map[string]int                     // "file:line:col" -> index in warnings of that field's one warning (markFieldWarning)
 	quietEmbeds      bool                               // requestParamFields is reading a Marshaler request: dropped embeds do not warn, and no anonymous struct is extracted
 	fieldSites       map[*models.TypeShape]fieldSite    // field Resolution root -> where its ref leaves register
 	openLiterals     []string                           // structIdentity of each anonymous struct being extracted, outermost first (resolveStruct's cycle guard)
@@ -163,6 +164,7 @@ func New(projectRoot string) *ProjectAnalyzer {
 		directiveFiles: map[string]struct{}{},
 		uintptrWarned:  make(map[string]struct{}),
 		fieldWarned:    make(map[string]struct{}),
+		fieldWarnings:  make(map[string]int),
 		fieldSites:     make(map[*models.TypeShape]fieldSite),
 		literalCycles:  make(map[string]string),
 	}
@@ -261,6 +263,7 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	a.tagWarned = nil
 	a.uintptrWarned = make(map[string]struct{})
 	a.fieldWarned = make(map[string]struct{})
+	a.fieldWarnings = make(map[string]int)
 	a.fieldSites = make(map[*models.TypeShape]fieldSite)
 	a.openLiterals = nil
 	a.literalCycles = make(map[string]string)
@@ -3384,8 +3387,11 @@ const anonymousRequestWarning = "request type %s is an anonymous struct: go-bric
 // way, with the generic request warning instead of F26 unless its generic
 // type is a non-struct, and so is an anonymous struct request, with the
 // anonymous request warning, or none when it has no field (warnNonStructRequest).
+// A struct request's parameters that go-bricks cannot bind warn first
+// (warnUnbindableParams).
 func (a *ProjectAnalyzer) populateRequestType(h *handlerAnalysis, astFile *ast.File, filePath string) {
 	if h.request != nil {
+		a.warnUnbindableParams(h.request, astFile, filePath)
 		if registered := a.registerPayloadType(h.request, astFile, filePath); registered != nil {
 			adoptRegisteredType(h.request, registered)
 			return
@@ -4442,7 +4448,7 @@ func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field, astFile 
 // once. A json:"-" field never gets here: resolveField skips it, since it never
 // reaches the spec, and so does a promoted field shadowed by an outer one.
 func (a *ProjectAnalyzer) warnUintptrField(fieldInfo *models.FieldInfo, loc string) {
-	if !markOnce(a.uintptrWarned, loc) {
+	if !a.markFieldWarning(a.uintptrWarned, loc) {
 		return
 	}
 	a.addWarningf("field %s at %s holds a uintptr, a machine address with no meaningful API contract "+

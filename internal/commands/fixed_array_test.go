@@ -134,7 +134,9 @@ func (m *Module) create(req CreateReq, ctx server.HandlerContext) (server.Result
 // is the integer array encoding/json writes, never a base64 string; a [4]byte
 // takes the validate and example tags exactly as a [4]uint16 does; a query
 // parameter follows the field rule; and every control keeps the schema it had.
-// The only warning is the uintptr one the [2]uintptr control always raised.
+// The only warnings are the uintptr one the [2]uintptr control always raised
+// and the binding one of the [4]byte query parameter, an array go-bricks
+// cannot bind (issue 121).
 func TestRunGenerateFixedArrayFields(t *testing.T) {
 	var fields strings.Builder
 	for i, f := range fixedArrayFields {
@@ -151,8 +153,9 @@ func TestRunGenerateFixedArrayFields(t *testing.T) {
 	_, err := a.AnalyzeProject()
 	require.NoError(t, err)
 	warnings := a.Warnings(t.Context())
-	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "holds a uintptr")
+	require.Len(t, warnings, 2)
+	assert.Contains(t, warnings[0], `the query parameter "prefix" of type [4]byte, which go-bricks cannot bind (an array)`)
+	assert.Contains(t, warnings[1], "holds a uintptr")
 
 	out := filepath.Join(t.TempDir(), outputFileName)
 	var runErr error
