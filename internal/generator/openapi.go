@@ -1340,13 +1340,16 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 		// $ref, but joseDescription names the plaintext component in prose ("see
 		// #/components/schemas/<Name>") whenever Name is set, so a named JOSE
 		// payload is always referenced.
-		if r.Response != nil && payloadNamesComponent(r.Response) {
-			out[schemaName(r.Response)] = true
+		// A bodiless (NoContent) response documents no body, so it marks
+		// nothing: neither its Name nor its Resolution's refs.
+		resp := bodyPayload(r.Response)
+		if resp != nil && payloadNamesComponent(resp) {
+			out[schemaName(resp)] = true
 		}
 		// A resolved payload names no component itself; the structs its
 		// Resolution reaches are $ref'd from its schema.
-		if r.Response != nil && r.Response.Resolution != nil {
-			addRefNames(out, *r.Response.Resolution)
+		if resp != nil && resp.Resolution != nil {
+			addRefNames(out, *resp.Resolution)
 		}
 		// Requests, by contrast, are referenced ONLY when JOSE — for the same
 		// joseDescription prose reason. See the note above on why non-JOSE request
@@ -1358,6 +1361,16 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 	}
 	addFieldSchemaRefs(out, types)
 	return out
+}
+
+// bodyPayload returns a response payload that documents a body, or nil for
+// none: a nil response or a bodiless (NoContent) one, whose payload a 204
+// route keeps (issue 144) but never puts on the wire.
+func bodyPayload(resp *models.TypeInfo) *models.TypeInfo {
+	if resp == nil || resp.NoContent {
+		return nil
+	}
+	return resp
 }
 
 // addRequestFieldRefs marks the $ref leaves of a request's own Fields. A
@@ -1489,7 +1502,7 @@ func routeTypeRegistry(project *models.Project) map[string]*models.TypeInfo {
 		for ri := range project.Modules[mi].Routes {
 			route := &project.Modules[mi].Routes[ri]
 			add(route.Request)
-			add(route.Response)
+			add(bodyPayload(route.Response))
 		}
 	}
 	return types
