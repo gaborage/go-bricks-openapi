@@ -58,7 +58,7 @@ func renderStruct(st *models.AnonymousStruct) string {
 	for i := range st.Fields {
 		f := &st.Fields[i]
 		key := f.JSONName
-		if key == "" || key == jsonSkipValue {
+		if key == "" || f.JSONSkip {
 			key = f.Name
 		}
 		parts[i] = key + " " + renderShape(f.ResolvedShape())

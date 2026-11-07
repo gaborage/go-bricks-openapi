@@ -3042,10 +3042,13 @@ func TestParseStructTagsComprehensive(t *testing.T) {
 func TestParseJSONTagName(t *testing.T) {
 	analyzer := New("test")
 
+	// Only a bare "-" skips: encoding/json writes `json:"-,"` and
+	// `json:"-,omitempty"` under the key "-" (issue 155).
 	tests := []struct {
 		name     string
 		jsonTag  string
 		expected string
+		skip     bool
 	}{
 		{
 			name:     "empty tag",
@@ -3066,10 +3069,16 @@ func TestParseJSONTagName(t *testing.T) {
 			name:     "skip sentinel",
 			jsonTag:  "-",
 			expected: "-",
+			skip:     true,
 		},
 		{
-			name:     "skip with options",
+			name:     "dash name with omitempty",
 			jsonTag:  "-,omitempty",
+			expected: "-",
+		},
+		{
+			name:     "dash name with trailing comma",
+			jsonTag:  "-,",
 			expected: "-",
 		},
 		{
@@ -3081,10 +3090,9 @@ func TestParseJSONTagName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := analyzer.parseJSONTagName(tt.jsonTag)
-			if result != tt.expected {
-				t.Errorf("expected %q, got %q", tt.expected, result)
-			}
+			name, skip := analyzer.parseJSONTagName(tt.jsonTag)
+			assert.Equal(t, tt.expected, name, "name")
+			assert.Equal(t, tt.skip, skip, "skip")
 		})
 	}
 }

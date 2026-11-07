@@ -3992,7 +3992,7 @@ func (a *ProjectAnalyzer) registerResolutionRefs(f *models.FieldInfo, astFile *a
 // isJSONExcluded reports whether a field never reaches the emitted document:
 // json:"-" with no param/query/header tag to carry it in as a parameter.
 func isJSONExcluded(f *models.FieldInfo) bool {
-	return f.JSONName == jsonSkipValue && f.ParamType == ""
+	return f.JSONSkip && f.ParamType == ""
 }
 
 // knownUnderlyingBuiltins maps qualified stdlib/library types with a non-struct
@@ -4364,7 +4364,7 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 		tagText := unquoteLiteral(field.Tag.Value)
 		a.warnUnreadableTagKeys(field.Tag, typeName, tagText)
 		tags = a.parseStructTags(tagText)
-		if tags.jsonName == jsonSkipValue {
+		if tags.jsonSkip {
 			return nil, false // json:"-" — excluded
 		}
 	}
@@ -4463,6 +4463,7 @@ func (a *ProjectAnalyzer) parseFieldTags(fieldInfo *models.FieldInfo, tag *ast.B
 	tags := a.parseStructTags(tagValue)
 
 	fieldInfo.JSONName = tags.jsonName
+	fieldInfo.JSONSkip = tags.jsonSkip
 	fieldInfo.JSONString = tags.jsonString
 	fieldInfo.ParamType = tags.paramType
 	fieldInfo.ParamName = tags.paramName
@@ -4580,6 +4581,7 @@ func (a *ProjectAnalyzer) instantiationShape(expr, base ast.Expr, args []ast.Exp
 // parsedTags holds the extracted information from struct field tags
 type parsedTags struct {
 	jsonName      string
+	jsonSkip      bool
 	jsonString    bool
 	paramType     string
 	paramName     string
@@ -4588,27 +4590,18 @@ type parsedTags struct {
 	rawValidation string
 }
 
-// parseJSONTagName extracts the field name from a json tag, handling the special "-" sentinel
-// Returns the field name or "-" if the field should be skipped
-func (a *ProjectAnalyzer) parseJSONTagName(jsonTag string) string {
-	if jsonTag == "" {
-		return ""
+// parseJSONTagName splits a json tag value into the field's name (the part
+// before the first comma: "email,omitempty" -> "email") and whether
+// encoding/json skips the field. skip is true only when the whole value is
+// "-": `json:"-,"` and `json:"-,omitempty"` name the field "-" and keep it
+// (issue 155). A bare "-" keeps the name "-" too; callers decide skipping by
+// skip alone, never by the name.
+func (a *ProjectAnalyzer) parseJSONTagName(jsonTag string) (name string, skip bool) {
+	if jsonTag == jsonSkipValue {
+		return jsonSkipValue, true
 	}
-
-	// Split by comma and take first part as field name
-	// Example: "fieldName,omitempty" -> "fieldName"
-	parts := strings.Split(jsonTag, ",")
-	if len(parts) == 0 {
-		return ""
-	}
-
-	switch parts[0] {
-	case jsonSkipValue:
-		// Preserve "-" sentinel so downstream code can skip field
-		return jsonSkipValue
-	default:
-		return parts[0]
-	}
+	name, _, _ = strings.Cut(jsonTag, ",")
+	return name, false
 }
 
 // jsonTagHasStringOption reports whether a json tag carries the ",string"
@@ -4658,7 +4651,7 @@ func (a *ProjectAnalyzer) parseStructTags(tag string) parsedTags {
 
 	// Parse json tag: `json:"fieldName,omitempty"`
 	if jsonTag := lookupStructTag(tag, tagJSON); jsonTag != "" {
-		result.jsonName = a.parseJSONTagName(jsonTag)
+		result.jsonName, result.jsonSkip = a.parseJSONTagName(jsonTag)
 		result.jsonString = jsonTagHasStringOption(jsonTag)
 	}
 
