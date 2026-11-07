@@ -322,12 +322,18 @@ func TestSchemaDirectiveOnUnreachedType(t *testing.T) {
 func TestSchemaDirectiveOnGenericType(t *testing.T) {
 	body := "//openapi:schema string\ntype JBox[T any] struct{ V T }\n\n" +
 		"//openapi:schema string\ntype KBox[T any] struct{ V T }\n\nfunc (b KBox[T]) MarshalJSON() ([]byte, error) { return nil, nil }\n\n" +
-		"type Holder struct{}\n"
+		"type Holder struct {\n\tK KBox[int] `json:\"k\"`\n}\n"
 	a := analyzeStated(t, body, nil)
-	assert.Equal(t, []string{
-		statedLoc(t, body, "//openapi:schema string\ntype JBox") + "directive schema has no effect — JBox is a generic type, whose wire form usually depends on its type arguments",
-		statedLoc(t, body, "//openapi:schema string\ntype KBox") + "directive schema has no effect — KBox is a generic type, whose wire form usually depends on its type arguments",
-	}, a.Warnings(t.Context()))
+	warnings := a.Warnings(t.Context())
+	assert.Contains(t, warnings, statedLoc(t, body, "//openapi:schema string\ntype JBox")+
+		"directive schema has no effect — JBox is a generic type, whose wire form usually depends on its type arguments")
+	assert.Contains(t, warnings, statedLoc(t, body, "//openapi:schema string\ntype KBox")+
+		"directive schema has no effect — KBox is a generic type, whose wire form usually depends on its type arguments")
+	// KBox[int] is documented exactly as without the directive: no Stated schema.
+	k := fieldByJSON(t, a.typeRegistry["Holder"], "k").Resolution
+	require.NotNil(t, k)
+	assert.Equal(t, models.ShapeInstantiation, k.Kind)
+	assert.Nil(t, k.Stated, "%v", warnings)
 }
 
 // TestSchemaDirectiveRepeatedLines pins the duplicate rule within one group:

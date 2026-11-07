@@ -104,6 +104,6 @@ func TestDoctorCountsStatedPayloadsTyped(t *testing.T) {
 	require.NoError(t, err)
 	stats := calculateProjectStats(project)
 	assert.Empty(t, stats.UntypedRoutes)
-	assert.Equal(t, 6, stats.TypedRoutes)
-	assert.Equal(t, 6, stats.TypedResponseRoutes)
+	assert.Equal(t, 7, stats.TypedRoutes)
+	assert.Equal(t, 7, stats.TypedResponseRoutes)
 }

@@ -80,6 +80,7 @@ type Ledger struct {
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	server.GET(hr, r, "/ledger", m.getLedger)
 	server.GET(hr, r, "/money", m.money)
+	server.GET(hr, r, "/money-meta", m.moneyMeta)
 	server.GET(hr, r, "/money-ptr", m.moneyPtr)
 	server.GET(hr, r, "/moneys", m.moneys)
 	server.GET(hr, r, "/count", m.count)
@@ -93,6 +94,11 @@ func (m *Module) getLedger(ctx server.HandlerContext) (server.Result[Ledger], se
 
 func (m *Module) money(ctx server.HandlerContext) (server.Result[Money], server.IAPIError) {
 	var v server.Result[Money]
+	return v, nil
+}
+
+func (m *Module) moneyMeta(ctx server.HandlerContext) (server.ResultWithMeta[Money], server.IAPIError) {
+	var v server.ResultWithMeta[Money]
 	return v, nil
 }
 
