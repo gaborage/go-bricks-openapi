@@ -3370,6 +3370,21 @@ func TestNormalizePath(t *testing.T) {
 			want: "/n/a{x:y}",
 		},
 		{
+			name: "param_name_keeps_dot",
+			in:   "/d/:id.json",
+			want: "/d/{id.json}",
+		},
+		{
+			name: "segment_start_param_name_keeps_colon",
+			in:   "/k/:a:b",
+			want: "/k/{a:b}",
+		},
+		{
+			name: "nameless_colon_at_path_end_left_untouched",
+			in:   "/u/a:",
+			want: "/u/a:",
+		},
+		{
 			name: "escaped_colon_mid_segment_is_literal",
 			in:   `/e/a\:x`,
 			want: "/e/a:x",
