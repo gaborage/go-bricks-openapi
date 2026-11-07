@@ -2126,16 +2126,25 @@ func (g *OpenAPIGenerator) extractParameters(route *models.Route) ([]Parameter, 
 }
 
 // pathTemplateVars returns the {var} names of a path template, in order of
-// appearance. Literal segments (including Echo catch-all "*" remnants) are
-// ignored.
+// appearance. A {var} may sit anywhere in a segment ("/m/a{x}"), as kin's own
+// path normalization reads it. Literal text (including Echo catch-all "*"
+// remnants), an empty "{}" and an unclosed "{" are ignored.
 func pathTemplateVars(path string) []string {
 	var vars []string
-	for _, seg := range strings.Split(path, "/") {
-		if len(seg) > 2 && strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}") {
-			vars = append(vars, seg[1:len(seg)-1])
+	for {
+		_, rest, ok := strings.Cut(path, "{")
+		if !ok {
+			return vars
 		}
+		name, after, closed := strings.Cut(rest, "}")
+		if !closed {
+			return vars
+		}
+		if name != "" {
+			vars = append(vars, name)
+		}
+		path = after
 	}
-	return vars
 }
 
 // appendMissingPathParams appends a required string path parameter for every
