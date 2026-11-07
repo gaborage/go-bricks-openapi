@@ -397,6 +397,18 @@ func TestRegistrarPrefixIsPositional(t *testing.T) {
 			wantPaths: []string{"/health"},
 		},
 		{
+			// Group("/") has an empty canonical prefix, so hiding it is
+			// hiding a prefix-less registrar: no Unresolved route, no warning.
+			name: `a closure parameter shadowing a Group("/") registrar stays prefix-less`,
+			body: `s := r.Group("/")
+	register := func(s server.RouteRegistrar) {
+		server.GET(hr, s, "/sg", m.h)
+		s.Add("GET", "/health", m.h)
+	}
+	register(s)`,
+			wantPaths: []string{"/sg", "/health"},
+		},
+		{
 			name: "a range variable shadowing a group registrar is untraced",
 			body: `api := r.Group("/a")
 	for _, api := range groups {

@@ -34,7 +34,13 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.GET(hr, g, "grp", m.grp)         // /api/grp
 	server.GET(hr, g, "/apix", m.apix)      // /api/apix (no partial-word strip)
 	server.GET(hr, g, "//x", m.doubleSlash) // /api//x
+	server.GET(hr, g, "/api/x", m.strip2)   // /api/x (whole prefix stripped)
+	server.GET(hr, g, "/api/x2", m.strip3)  // /api/x2 (whole prefix stripped)
 	g.Add(http.MethodPost, "add", m.raw)    // /api/add
+
+	server.GET(hr, r, "/", m.home) // /
+	t := r.Group("v2/")
+	server.GET(hr, t, "/y", m.trail) // /v2/y
 
 	b := r.Group("/b")
 	server.GET(hr, b, "", m.empty) // /b
@@ -88,6 +94,22 @@ func (m *Module) lone(req In, ctx server.HandlerContext) (server.Result[Out], se
 }
 
 func (m *Module) slashGroup(req In, ctx server.HandlerContext) (server.Result[Out], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Out{}), nil
+}
+
+func (m *Module) strip2(req In, ctx server.HandlerContext) (server.Result[Out], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Out{}), nil
+}
+
+func (m *Module) strip3(req In, ctx server.HandlerContext) (server.Result[Out], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Out{}), nil
+}
+
+func (m *Module) home(req In, ctx server.HandlerContext) (server.Result[Out], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Out{}), nil
+}
+
+func (m *Module) trail(req In, ctx server.HandlerContext) (server.Result[Out], server.IAPIError) {
 	return server.NewResult(http.StatusOK, Out{}), nil
 }
 
