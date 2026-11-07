@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"cmp"
 	"fmt"
 	"go/ast"
 	"go/build/constraint"
@@ -179,7 +180,13 @@ func newResolveCtx(file *ast.File, path string, param bool) resolveCtx {
 // typeKey identifies name declared in c's package: the directory keeps a
 // local Tags apart from another package's Tags on the recursion stack.
 func (c resolveCtx) typeKey(name string) string {
-	return filepath.Dir(c.path) + "\x00" + name
+	return typeKeyOf(c.path, name)
+}
+
+// typeKeyOf identifies name declared in the package of the file at path: its
+// directory plus the name.
+func typeKeyOf(path, name string) string {
+	return filepath.Dir(path) + "\x00" + name
 }
 
 // display is name as a warning shows it: bare in the field's own package,
@@ -584,17 +591,21 @@ func (a *ProjectAnalyzer) resolveLocal(leaf models.TypeShape, c resolveCtx, mode
 // noted, except as a slice element (c.byteElem) of a byte-kind type with only
 // decode-side methods, which is that plain byte, unnoted, so the slice stays
 // base64 (#97). The rule is decided here, in the declaring package's context,
-// because only here are the type's own methods known.
+// because only here are the type's own methods known. A leaf whose type has a
+// Stated schema (#117) carries it and is not noted.
 func (a *ProjectAnalyzer) marshalerLeaf(name string, decls []typeDecl, c resolveCtx, m marshalerMethods) models.TypeShape {
+	stated := a.statedSchema(c.typeKey(name))
 	if m.textBothWays() {
-		return models.TypeShape{Kind: models.ShapeText, Name: name}
+		return models.TypeShape{Kind: models.ShapeText, Name: name, Stated: stated}
 	}
 	under := a.resolveDecls(name, decls, c.quiet(), underlyingMode)
 	if c.byteElem && !m.encode && isBytePrimitive(&under) {
 		return under
 	}
-	c.st.note(fieldFallback{kind: fallbackMarshaler, typeName: c.display(name), detail: m.first})
-	return models.TypeShape{Kind: models.ShapeMarshaler, Name: name, Elem: &under}
+	if stated == nil {
+		c.st.note(fieldFallback{kind: fallbackMarshaler, typeName: c.display(name), detail: m.first})
+	}
+	return models.TypeShape{Kind: models.ShapeMarshaler, Name: name, Elem: &under, Stated: stated}
 }
 
 // structMarshalerLeaf resolves name, a named type whose chain ends at a
@@ -602,28 +613,37 @@ func (a *ProjectAnalyzer) marshalerLeaf(name string, decls []typeDecl, c resolve
 // promoted: methodSetOf) makes it a string both ways, a noted Marshaler leaf
 // when it holds any other of the seven methods, else ok is false and it stays
 // a ref. In underlying mode name's declared methods are dropped. A parameter
-// is bound by kind, so it is never a Marshaler leaf.
+// is bound by kind, so it is never a Marshaler leaf. In identity mode the
+// leaf carries the Stated schema (#117) of the type declaring its first
+// method, an alias's target included, or else of name itself (a struct
+// promoting the method takes its own directive, never its embed's); a defined
+// type, resolved in underlying mode, inherits none.
 func (a *ProjectAnalyzer) structMarshalerLeaf(name string, c resolveCtx, mode resolveMode) (models.TypeShape, bool) {
 	if c.st.param {
 		return models.TypeShape{}, false
 	}
-	return methodSetLeaf(a.methodSetOf(name, c, mode == identityMode, nil), c.display(name), name, c)
-}
-
-// methodSetLeaf reads a struct's method set ms: a text leaf named name when
-// it makes the struct a string both ways, a Marshaler leaf when it holds any
-// other of the seven methods, noting the fallback (display is the struct as
-// the warning names it), else ok is false.
-func methodSetLeaf(ms methodSet, display, name string, c resolveCtx) (models.TypeShape, bool) {
-	m, fb := ms.marshaler(display)
+	m, fb := a.methodSetOf(name, c, mode == identityMode, nil).marshaler(c.display(name))
 	if !m.found() {
 		return models.TypeShape{}, false
 	}
-	if m.textBothWays() {
-		return models.TypeShape{Kind: models.ShapeText, Name: name}, true
+	var stated *models.StatedSchema
+	if mode == identityMode {
+		stated = a.statedSchema(cmp.Or(m.owner, c.typeKey(name)))
 	}
-	c.st.note(fb)
-	return models.TypeShape{Kind: models.ShapeMarshaler, Name: name}, true
+	return methodSetLeaf(m, fb, name, stated, c), true
+}
+
+// methodSetLeaf is the leaf of a struct whose method set holds m (found): a
+// text leaf named name when m makes the struct a string both ways, else a
+// Marshaler leaf, noting fb unless stated, the struct's Stated schema, is set.
+func methodSetLeaf(m marshalerMethods, fb fieldFallback, name string, stated *models.StatedSchema, c resolveCtx) models.TypeShape {
+	if m.textBothWays() {
+		return models.TypeShape{Kind: models.ShapeText, Name: name, Stated: stated}
+	}
+	if stated == nil {
+		c.st.note(fb)
+	}
+	return models.TypeShape{Kind: models.ShapeMarshaler, Name: name, Stated: stated}
 }
 
 // resolveDecls resolves every declaration of name with name open, then merges

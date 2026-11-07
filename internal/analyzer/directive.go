@@ -13,29 +13,34 @@ import (
 	"github.com/gaborage/go-bricks-openapi/internal/models"
 )
 
-// Directive parsing: one parser, one namespace, one placement rule.
+// Directive parsing: one parser, one namespace, one placement per name.
 //
-// A Directive is a `//openapi:<name>[ <args>]` line inside a comment group whose
-// LAST line sits immediately above a route registration call. A group that
-// starts after code on the same line (`server.GET(...) //openapi:public`) never
-// attaches. Anything after a second `//` on the directive line is a human
-// comment and is ignored.
+// A Directive is a `//openapi:<name>[ <args>]` line inside a comment group.
+// A route directive applies when the group's LAST line sits immediately above
+// a route registration call; a group that starts after code on the same line
+// (`server.GET(...) //openapi:public`) never attaches. The type directive
+// applies when the group is the doc comment of a package-level type
+// declaration, as go/parser attaches it. Anything after a second `//` on the
+// directive line is a human comment and is ignored.
 //
 // Recognised names:
-//   - public          — zero arguments; marks the route as needing no auth.
-//   - errors 404,409  — a single-line, comma-separated list of extra error
-//     statuses the operation can return (400-599).
+//   - public          — route; zero arguments; marks the route as needing no auth.
+//   - errors 404,409  — route; a single-line, comma-separated list of extra
+//     error statuses the operation can return (400-599).
+//   - schema string decimal — type; the Stated schema of a Marshaler type the
+//     project declares (#117, ADR 0004): a type word and an optional format.
 //
-// An unrecognised name, an argument on `public`, and a malformed or
-// out-of-range `errors` token each raise an analyzer diagnostic, which feeds
-// `--strict`. So does a Detached directive: a group holding a recognised name
-// that attached to no registration the walk recognised (see
-// warnDetachedDirectives).
+// An unrecognised name, an argument on `public`, a malformed or out-of-range
+// `errors` token and malformed `schema` arguments each raise an analyzer
+// diagnostic, which feeds `--strict`. So does a Detached directive: a
+// recognised name outside its placement (see warnDetachedDirectives), judged
+// per name, so one group can apply one name and report another.
 const (
 	directivePrefix = "//openapi:"
 
 	directiveNamePublic = "public"
 	directiveNameErrors = "errors"
+	directiveNameSchema = "schema"
 
 	// errorStatusMin/errorStatusMax bound the status codes `errors` accepts —
 	// the HTTP client- and server-error ranges.
@@ -57,6 +62,21 @@ type routeDirectives struct {
 // its parsed payload plus what the detached-directive pass needs to report it.
 type directiveGroup struct {
 	rd routeDirectives
+	// schemas are the group's distinct valid `schema` lines, in source
+	// order: one is the group's Stated schema; two or more disagree, and
+	// none applies.
+	schemas []models.StatedSchema
+	// schemaAt is the group's first `schema` line, valid or not: where a
+	// schema diagnostic points.
+	schemaAt token.Pos
+	// typeSpec is the package-level type declaration whose doc comment the
+	// group is, the `schema` directive's placement; nil otherwise.
+	typeSpec *ast.TypeSpec
+	// typeKey is typeSpec's typeKey (typeKeyOf), set with it.
+	typeKey string
+	// aboveGroup is true when the group is the doc comment of a whole
+	// parenthesized `type ( … )` group, which applies to no type.
+	aboveGroup bool
 	// names are the recognised Directive names in the group, deduplicated, in
 	// source order. Empty when every name was unknown: such a group is already
 	// diagnosed as unknown and is never also reported as detached.
@@ -69,8 +89,33 @@ type directiveGroup struct {
 	// to a registration on the next line.
 	trailing bool
 	// attached is set once a registration the walk recognised sits directly
-	// below the group. Idempotent: a registration reached twice attaches once.
+	// below the group, which places its route directives. Idempotent: a
+	// registration reached twice attaches once.
 	attached bool
+}
+
+// placed reports whether the recognised Directive name is in its placement
+// in this group: a route directive once a registration attached the group,
+// the type directive in a package-level type declaration's doc comment, or
+// above a whole type group (which gets its own diagnostic, not a Detached
+// one).
+func (g *directiveGroup) placed(name string) bool {
+	if name == directiveNameSchema {
+		return g.typeSpec != nil || g.aboveGroup
+	}
+	return g.attached
+}
+
+// misplaced returns the group's recognised names that are not placed, in
+// source order: its Detached directives.
+func (g *directiveGroup) misplaced() []string {
+	var out []string
+	for _, name := range g.names {
+		if !g.placed(name) {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // parseDirective splits one comment line into a Directive name and its raw
@@ -120,6 +165,7 @@ func (a *ProjectAnalyzer) indexDirectives(astFile *ast.File) {
 	a.directiveFiles[filename] = struct{}{}
 
 	var codeStarts map[int]token.Pos // built on the first group that needs it
+	var docs map[*ast.CommentGroup]typeDoc
 	for _, cg := range astFile.Comments {
 		g := a.parseDirectiveGroup(cg)
 		if g == nil {
@@ -130,9 +176,11 @@ func (a *ProjectAnalyzer) indexDirectives(astFile *ast.File) {
 		if len(g.names) > 0 {
 			if codeStarts == nil {
 				codeStarts = a.firstCodeByLine(astFile)
+				docs = typeDocs(astFile)
 			}
 			start, ok := codeStarts[a.fileSet.Position(cg.Pos()).Line]
 			g.trailing = ok && start <= cg.Pos()
+			a.placeTypeDirective(g, docs[cg], filename, astFile)
 		}
 		pos := a.fileSet.Position(cg.End())
 		a.directiveLines(pos.Filename)[pos.Line] = g
@@ -188,7 +236,7 @@ func (a *ProjectAnalyzer) parseDirectiveGroup(cg *ast.CommentGroup) *directiveGr
 		if g == nil {
 			g = &directiveGroup{}
 		}
-		if a.applyDirective(&g.rd, name, args, c.Pos()) {
+		if a.applyDirective(g, name, args, c.Pos()) {
 			g.noteRecognised(name, c.Pos())
 		}
 	}
@@ -206,18 +254,20 @@ func (g *directiveGroup) noteRecognised(name string, pos token.Pos) {
 	}
 }
 
-// applyDirective folds one parsed Directive into rd, diagnosing an unknown name
+// applyDirective folds one parsed Directive into g, diagnosing an unknown name
 // or arguments that the name does not accept. recognised is false for an
 // unknown name.
-func (a *ProjectAnalyzer) applyDirective(rd *routeDirectives, name, args string, pos token.Pos) (recognised bool) {
+func (a *ProjectAnalyzer) applyDirective(g *directiveGroup, name, args string, pos token.Pos) (recognised bool) {
 	switch name {
 	case directiveNamePublic:
 		if args != "" {
 			a.warnDirectivef(pos, "directive public takes no arguments (got %q)", args)
 		}
-		rd.public = true
+		g.rd.public = true
 	case directiveNameErrors:
-		rd.errorStatuses = append(rd.errorStatuses, a.parseErrorStatuses(args, pos)...)
+		g.rd.errorStatuses = append(g.rd.errorStatuses, a.parseErrorStatuses(args, pos)...)
+	case directiveNameSchema:
+		a.addSchemaLine(g, args, pos)
 	default:
 		a.warnDirectivef(pos, "unknown directive %q — no such openapi directive", name)
 		return false
@@ -310,12 +360,15 @@ func (a *ProjectAnalyzer) markDirectivesAttached(pos token.Pos) {
 	}
 }
 
-// warnDetachedDirectives reports, once per comment group, every recognised
-// Directive that attached to no registration the walk recognised — separated
-// from its call by a blank line, above an enclosing statement, inside a call,
-// after code on the same line, or above a registration the analyzer never
-// walks. Only files in walked (those module discovery visited) are policed: a
-// file parsed solely to resolve an import or type, such as one in a nested Go
+// warnDetachedDirectives reports, once per comment group, the recognised
+// Directives outside their placement: a route directive that attached to no
+// registration the walk recognised — separated from its call by a blank
+// line, above an enclosing statement, inside a call, after code on the same
+// line, or above a registration the analyzer never walks — and a type
+// directive anywhere but a package-level type declaration's doc comment. It
+// also raises each type directive's own diagnostics (warnTypeDirective).
+// Only files in walked (those module discovery visited) are policed: a file
+// parsed solely to resolve an import or type, such as one in a nested Go
 // module discovery skips as another service, is not this service's code. Run
 // after the walk; sorted by (file, line) so the output is independent of the
 // order files were discovered and indexed in.
@@ -326,20 +379,38 @@ func (a *ProjectAnalyzer) warnDetachedDirectives(walked map[string]bool) {
 		}
 		groups := a.directives[file]
 		for _, line := range slices.Sorted(maps.Keys(groups)) {
-			if g := groups[line]; !g.attached && len(g.names) > 0 {
-				a.warnDirectivef(g.at, "%s", detachedDirectiveMessage(g.names))
+			g := groups[line]
+			if misplaced := g.misplaced(); len(misplaced) > 0 {
+				a.warnDirectivef(g.at, "%s", detachedDirectiveMessage(misplaced))
 			}
+			a.warnTypeDirective(g)
 		}
 	}
 }
 
-// detachedDirectiveMessage words the detached diagnostic for the recognised
-// Directive names of one group.
+// detachedDirectiveMessage words the detached diagnostic for the misplaced
+// Directive names of one group: each name with the placement it needs. The
+// text for route directives alone predates the type directive.
 func detachedDirectiveMessage(names []string) string {
-	if len(names) == 1 {
-		return "directive " + names[0] + " has no effect — it is not directly above an analyzed route registration"
+	const (
+		routeNeeds = "not directly above an analyzed route registration"
+		typeNeeds  = "not in the doc comment of a package-level type declaration"
+	)
+	route := slices.DeleteFunc(slices.Clone(names), func(n string) bool { return n == directiveNameSchema })
+	switch {
+	case len(names) == 1 && len(route) == 1:
+		return "directive " + names[0] + " has no effect — it is " + routeNeeds
+	case len(names) == 1:
+		return "directive " + names[0] + " has no effect — it is " + typeNeeds
+	case len(route) == len(names):
+		return "directives " + strings.Join(names, ", ") + " have no effect — they are " + routeNeeds
 	}
-	return "directives " + strings.Join(names, ", ") + " have no effect — they are not directly above an analyzed route registration"
+	verb := " is "
+	if len(route) > 1 {
+		verb = " are "
+	}
+	return "directives " + strings.Join(names, ", ") + " have no effect — " + strings.Join(route, ", ") + verb + routeNeeds +
+		", and " + directiveNameSchema + " is " + typeNeeds
 }
 
 // applyRouteDirectives stamps the Directives attached to the registration call

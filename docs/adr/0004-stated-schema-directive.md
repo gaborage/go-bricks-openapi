@@ -1,9 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-10-10
 ---
-
-Status flips to accepted when #117 lands.
 
 # A `schema` type directive states the wire schema of a Marshaler type the project declares
 

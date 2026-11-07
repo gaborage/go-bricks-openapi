@@ -191,7 +191,7 @@ func IsTypedPayload(ti *models.TypeInfo) bool {
 
 // isFallbackLeaf reports whether a schema leaf is a fallback: a named type
 // outside WellKnownTypeNames (an unresolved name, or a demoted ref), a uintptr
-// or untyped builtin, a Marshaler type, a recursion cut, or an unmodelled leaf.
+// or untyped builtin, a Marshaler type with no Stated schema (#117), a recursion cut, or an unmodelled leaf.
 // An anonymous struct is no fallback, like a ref: a fallback among its fields
 // warns as a field and leaves the payload typed, as it would in a registered
 // struct.
@@ -203,6 +203,8 @@ func isFallbackLeaf(leaf *models.TypeShape) bool {
 		return leaf.Name == goTypeUintptr || models.UntypedBuiltinNames[leaf.Name]
 	case models.ShapeRef, models.ShapeKindOnly, models.ShapeText, models.ShapeStruct:
 		return false
+	case models.ShapeMarshaler:
+		return leaf.Stated == nil
 	default:
 		return true
 	}

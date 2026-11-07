@@ -200,7 +200,11 @@ func (a *ProjectAnalyzer) literalCycleRoot(key string) string {
 // type through the methods its embedded fields promote (a literal declares
 // none), with its leaf: what structMarshalerLeaf returns for a named struct.
 func (a *ProjectAnalyzer) literalMarshalerLeaf(lit *ast.StructType, c resolveCtx) (models.TypeShape, bool) {
-	return methodSetLeaf(a.promotedMethods(lit, c, nil), anonStructDisplay, anonStructDisplay, c)
+	m, fb := a.promotedMethods(lit, c, nil).marshaler(anonStructDisplay)
+	if !m.found() {
+		return models.TypeShape{}, false
+	}
+	return methodSetLeaf(m, fb, anonStructDisplay, nil, c), true
 }
 
 // sameLiteral reports whether two build-tagged declarations' anonymous

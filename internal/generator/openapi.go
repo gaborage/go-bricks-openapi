@@ -1790,7 +1790,8 @@ func wellKnownShape(s models.TypeShape) (wellKnownType, bool) {
 // shed first (stripPointers). The Resolution-only leaves type as: a ref, a
 // $ref; a kind-only scalar, its kind alone (#92: no format, no unsigned
 // floor); a text Marshaler leaf, a string (#111); a Marshaler or recursive
-// leaf, {} (any JSON value), never descending into a Marshaler's Elem. An
+// leaf, {} (any JSON value), never descending into a Marshaler's Elem; a
+// text or Marshaler leaf with a Stated schema, exactly that (#117). An
 // anonymous struct is an inline object (setInlineObject).
 func setTypeAndFormat(prop *OpenAPIProperty, shape models.TypeShape) {
 	s := stripPointers(shape)
@@ -1820,14 +1821,28 @@ func setTypeAndFormat(prop *OpenAPIProperty, shape models.TypeShape) {
 		prop.Ref = refPath(s.Name)
 	case models.ShapeKindOnly:
 		prop.Type = s.Name
-	case models.ShapeText:
-		prop.Type = typeString
-	case models.ShapeMarshaler, models.ShapeRecursive:
+	case models.ShapeText, models.ShapeMarshaler:
+		setMarshalerLeaf(prop, s)
+	case models.ShapeRecursive:
 		return // {}: any JSON value
 	case models.ShapeStruct:
 		setInlineObject(prop, s.Struct)
 	default:
 		setBasicTypeAndFormat(prop, s.Name)
+	}
+}
+
+// setMarshalerLeaf types a Marshaler leaf: exactly its Stated schema's type
+// and format when it has one (#117: no implied format, no unsigned floor),
+// else a string for a text leaf (#111) and {} (any JSON value) for any other.
+func setMarshalerLeaf(prop *OpenAPIProperty, s models.TypeShape) {
+	switch {
+	case s.Stated != nil:
+		prop.Type, prop.Format = s.Stated.Type, s.Stated.Format
+	case s.Kind == models.ShapeText:
+		prop.Type = typeString
+	default:
+		// {}: any JSON value
 	}
 }
 
