@@ -3503,8 +3503,9 @@ func (a *ProjectAnalyzer) screenUnresolvedPayload(typeInfo *models.TypeInfo, ast
 // uuid.UUID (or time.Time) is indistinguishable there from the well-known type:
 // kept, the generator would document it inline and orphan its component. A
 // slice or array payload keeps its Shape — the array wrapper is built from it —
-// so a slice of such a colliding project type is still inlined by its element
-// name.
+// and the generator documents its items as a $ref to the element's component,
+// so a slice of such a colliding project type is never typed as the
+// well-known type.
 func shedRegisteredPayloadShape(ti *models.TypeInfo) {
 	if ti.Shape != nil && !isSequence(ti.Shape.Kind) {
 		ti.Shape = nil

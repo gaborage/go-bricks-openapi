@@ -957,25 +957,13 @@ func payloadShapeSchema(s models.TypeShape) *OpenAPIProperty {
 
 // structSlicePayloadSchema documents a slice or array payload of a registered
 // project struct ([]Item, []*Item, [2]Address): Name is the element's
-// component. A project struct named like a well-known type ([]uuid.UUID) is
-// still typed inline as that type, a documented residual.
+// component, so items is always its $ref. Only a registered project struct
+// reaches here (the analyzer's shedRegisteredPayloadShape); a genuine
+// well-known element ([]time.Time, []uuid.UUID from google/uuid) carries a
+// Resolution and is typed inline by payloadShapeSchema, so a project struct
+// spelled like one (a local uuid.UUID) still gets its own component.
 func structSlicePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
-	items := &OpenAPIProperty{}
-	if elem := response.Shape.Elem; elem != nil && isWellKnownElem(*elem) {
-		setTypeAndFormat(items, *elem)
-	} else {
-		items.Ref = refPath(schemaName(response))
-	}
-	return &OpenAPIProperty{Type: typeArray, Items: items}
-}
-
-// isWellKnownElem reports whether a slice element resolves to a well-known
-// schema, so the items path can prefer that over an element $ref. One pointer
-// level is shed first, exactly as the struct-field path does: a *time.Time item
-// is the same date-time string as a time.Time item.
-func isWellKnownElem(elem models.TypeShape) bool {
-	_, ok := wellKnownShape(shapeAfterPointer(elem))
-	return ok
+	return &OpenAPIProperty{Type: typeArray, Items: &OpenAPIProperty{Ref: refPath(schemaName(response))}}
 }
 
 // setWellKnown stamps a resolved well-known type onto prop. The format is
@@ -1382,8 +1370,8 @@ func addRequestFieldRefs(out map[string]bool, req *models.TypeInfo) {
 // time.Time, keeps its Name but is typed inline, so it must not mark that name
 // referenced — a coincidental project struct of the same short name that
 // nothing else references would be emitted as an orphan component); a
-// registered struct slice names its element unless that element is
-// well-known; and a registered struct (no Shape) always does.
+// registered struct slice always names its element; and a registered struct
+// (no Shape) always does.
 func payloadNamesComponent(ti *models.TypeInfo) bool {
 	switch {
 	case ti.Name == "":
@@ -1392,8 +1380,6 @@ func payloadNamesComponent(ti *models.TypeInfo) bool {
 		return true
 	case ti.Resolution != nil:
 		return false
-	case ti.Shape != nil && isSequence(*ti.Shape):
-		return ti.Shape.Elem == nil || !isWellKnownElem(*ti.Shape.Elem)
 	default:
 		return true
 	}
@@ -1682,15 +1668,6 @@ func stripPointers(s models.TypeShape) models.TypeShape {
 	return s
 }
 
-// shapeAfterPointer unwraps ONE pointer level. isWellKnownElem uses it; field
-// and payload typing shed every level through stripPointers.
-func shapeAfterPointer(s models.TypeShape) models.TypeShape {
-	if s.Kind == models.ShapePointer && s.Elem != nil {
-		return *s.Elem
-	}
-	return s
-}
-
 // isSequence reports whether s is a slice or a fixed-size array level. Every
 // rule here treats the two alike except the base64 rules (wellKnownShape's
 // []byte arm and constraintsFor's byteSlice test), which match a slice only:
@@ -1747,8 +1724,7 @@ type wellKnownType struct {
 // Matching is by name, spelled with the declaring package's name. The analyzer
 // reads a field's or payload's qualifier through its file's imports and
 // writes that spelling into the Resolution (t.Time under import t "time" is
-// time.Time). A registered struct slice payload's element is matched as
-// written (structSlicePayloadSchema).
+// time.Time).
 var wellKnownFormats = map[string]wellKnownType{
 	goTypeTimeTime:      {typeString, formatDateTime},
 	goTypeTimeDuration:  {typeInteger, formatInt64},
