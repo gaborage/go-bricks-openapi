@@ -513,7 +513,9 @@ nested Go module, is not.
   parameters, and its other fields as an inline `requestBody` object, with
   no component (none when it has only parameters); a jose tag on any of its
   fields gives an `application/jose` body whose description names no
-  component. `doctor` counts it as a typed request. An empty `struct{}`,
+  component. `doctor` counts it as a typed request when it has a field the
+  body or parameters can carry (one whose fields are all blank or
+  unexported, like `struct{ _ int }`, counts as untyped). An empty `struct{}`,
   go-bricks' request type for a route that takes no input, has nothing to
   document and raises no warning of its own.
 - A route path built from a `var` (including a `:=` local) is an Unresolved

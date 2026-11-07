@@ -151,4 +151,9 @@ func TestJOSEAnonymousRequestBody(t *testing.T) {
 	assert.Equal(t, joseTokenSchema(), rb.Content[mediaJOSE].Schema)
 
 	assert.Equal(t, joseDescription("Sealed"), joseRequestDescription(&models.TypeInfo{Name: "Sealed", JOSE: true}))
+
+	// A jose-tagged anonymous literal embedding a Marshaler type resolves to
+	// the Marshaler leaf, so it gets the Marshaler description.
+	leaf := models.TypeShape{Kind: models.ShapeMarshaler, Name: "time.Time"}
+	assert.Equal(t, joseUndocumentedDescription, joseRequestDescription(&models.TypeInfo{JOSE: true, Resolution: &leaf}))
 }

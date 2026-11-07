@@ -367,6 +367,21 @@ func TestAnonymousJOSERequest(t *testing.T) {
 		require.NotNil(t, route.Request.Resolution, params)
 		assert.Equal(t, want, renderShape(*route.Request.Resolution), params)
 	}
+
+	// A jose-tagged literal that embeds a Marshaler type is a struct
+	// Marshaler request: its Resolution is the Marshaler leaf, not the
+	// struct, so the generator gives it joseUndocumentedDescription
+	// (TestJOSEAnonymousRequestBody pins that side).
+	route, warnings := analyzeNonStructRequest(t,
+		"req struct{ _ struct{} `jose:\"decrypt=a,verify=b\"`; time.Time; ID int64 `param:\"id\"` }, ctx server.HandlerContext", "Address")
+	require.Len(t, warnings, 1)
+	require.NotNil(t, route.Request)
+	assert.True(t, route.Request.JOSE)
+	assert.Empty(t, route.Request.Name)
+	require.Len(t, route.Request.Fields, 1)
+	assert.Equal(t, "id", route.Request.Fields[0].ParamName)
+	require.NotNil(t, route.Request.Resolution)
+	assert.Contains(t, []models.ShapeKind{models.ShapeMarshaler, models.ShapeText}, route.Request.Resolution.Kind)
 }
 
 // TestAnonymousRequestWarnsAsNamed pins that an anonymous struct request
