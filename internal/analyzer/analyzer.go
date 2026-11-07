@@ -4019,7 +4019,7 @@ func isJSONExcluded(f *models.FieldInfo) bool {
 // os.FileMode and fs.FileMode (one type: os.FileMode = fs.FileMode) are a
 // uint32 with no marshal methods, so they are here only, never in
 // models.WellKnownTypeNames: the Resolution replaces the name with uint32
-// before the generator looks it up, which keeps uint32's unsigned floor.
+// before the generator looks it up, which keeps uint32's type range.
 var knownUnderlyingBuiltins = map[string]string{
 	models.WellKnownTimeDuration: goTypeInt64,  // encoding/json marshals it as its int64 ns count
 	models.WellKnownTimeMonth:    goTypeInt,    // an int with no marshaler, written as its number

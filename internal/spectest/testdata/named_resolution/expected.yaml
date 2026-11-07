@@ -173,6 +173,7 @@ components:
             type: integer
             format: int32
             minimum: 0
+            maximum: 255
         attrs:
           type: object
           additionalProperties:
@@ -223,12 +224,14 @@ components:
             type: integer
             format: int32
             minimum: 0
+            maximum: 255
         flagPtrs:
           type: array
           items:
             type: integer
             format: int32
             minimum: 0
+            maximum: 255
         flagSlice:
           type: string
           format: byte
@@ -248,6 +251,7 @@ components:
             type: integer
             format: int32
             minimum: 0
+            maximum: 255
         grid:
           type: array
           items:
@@ -271,6 +275,7 @@ components:
             type: integer
             format: int32
             minimum: 0
+            maximum: 255
         memberMap:
           type: object
           additionalProperties:

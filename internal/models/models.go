@@ -192,7 +192,7 @@ const (
 // emitted; a name this set lacked would be warned about and left untyped.
 // os.FileMode and fs.FileMode are deliberately absent: the analyzer resolves
 // both to uint32 before the generator looks a name up, and a generator entry
-// could only lose the unsigned floor uint32 carries.
+// could only lose the type range uint32 carries.
 var WellKnownTypeNames = map[string]bool{
 	WellKnownTimeTime:      true,
 	WellKnownTimeDuration:  true,

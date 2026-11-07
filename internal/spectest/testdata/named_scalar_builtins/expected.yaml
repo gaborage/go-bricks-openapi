@@ -204,10 +204,12 @@ components:
           type: integer
           format: int32
           minimum: 0
+          maximum: 255
         raw:
           type: integer
           format: int32
           minimum: 0
+          maximum: 255
         text:
           type: array
           items:

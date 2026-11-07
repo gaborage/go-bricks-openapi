@@ -1611,7 +1611,7 @@ func bareFieldProperty(field *models.FieldInfo) *OpenAPIProperty {
 
 	if isQuotedScalar(field, prop) {
 		// json ",string": a fresh string property, so the scalar's format and
-		// the uint minimum: 0 pre-stamp go with the discarded one, and no
+		// its type-derived bounds go with the discarded one, and no
 		// validate keyword applies (#115, as for a text leaf, #111).
 		prop = &OpenAPIProperty{Type: typeString, Description: field.Description}
 	} else {
@@ -1741,8 +1741,8 @@ type wellKnownType struct {
 //     methods. A defined type over net.IP drops MarshalText and is resolved
 //     by the analyzer to []byte (base64); the alias and direct uses keep
 //     this entry. os.FileMode and fs.FileMode are not here: the analyzer
-//     resolves both to uint32 first, which keeps the unsigned floor an entry
-//     here would lose.
+//     resolves both to uint32 first, which keeps the uint32 type range an
+//     entry here would lose.
 //
 // Matching is by name, spelled with the declaring package's name. The analyzer
 // reads a field's or payload's qualifier through its file's imports and
@@ -1788,8 +1788,8 @@ func wellKnownShape(s models.TypeShape) (wellKnownType, bool) {
 // setTypeAndFormat maps a field's resolved shape to OpenAPI type and format,
 // recursing through slice, array and map elements. Every pointer level is
 // shed first (stripPointers). The Resolution-only leaves type as: a ref, a
-// $ref; a kind-only scalar, its kind alone (#92: no format, no unsigned
-// floor); a text Marshaler leaf, a string (#111); a Marshaler or recursive
+// $ref; a kind-only scalar, its kind alone (#92: no format, no type-derived
+// bounds); a text Marshaler leaf, a string (#111); a Marshaler or recursive
 // leaf, {} (any JSON value), never descending into a Marshaler's Elem. An
 // anonymous struct is an inline object (setInlineObject).
 func setTypeAndFormat(prop *OpenAPIProperty, shape models.TypeShape) {
@@ -1847,6 +1847,12 @@ func setInlineObject(prop *OpenAPIProperty, st *models.AnonymousStruct) {
 // setBasicTypeAndFormat maps a leaf type NAME to its OpenAPI type and format.
 // A container's Name is "", and an unmodeled shape's is too, so both fall to
 // the object default exactly as the "unknown" string did.
+//
+// It also writes the type-range pre-stamp: minimum: 0 on every unsigned width,
+// and inclusive minimum/maximum on the widths narrower than their emitted
+// format (narrowIntRanges). applyValidationConstraints runs afterwards and
+// overwrites a stamped keyword only when the validate tag sets it, even with a
+// looser bound (#107).
 func setBasicTypeAndFormat(prop *OpenAPIProperty, name string) {
 	switch name {
 	case goTypeString:
@@ -1890,10 +1896,37 @@ func setBasicTypeAndFormat(prop *OpenAPIProperty, name string) {
 		// Both maps and structs are represented as "object" in OpenAPI
 		prop.Type = typeObject
 	}
+	stampNarrowIntRange(prop, name)
 }
 
 // floatPtr returns a pointer to v, for the *float64 schema constraint fields.
 func floatPtr(v float64) *float64 { return &v }
+
+// intRange is a Go integer type's inclusive value range.
+type intRange struct{ min, max float64 }
+
+// narrowIntRanges holds the integer widths whose range is narrower than the
+// format they are emitted with, so the format alone would admit values the Go
+// type cannot hold (encoding/json and go-bricks param binding reject them).
+var narrowIntRanges = map[string]intRange{
+	goTypeInt8:   {math.MinInt8, math.MaxInt8},
+	goTypeInt16:  {math.MinInt16, math.MaxInt16},
+	goTypeUint8:  {0, math.MaxUint8},
+	goTypeByte:   {0, math.MaxUint8},
+	goTypeUint16: {0, math.MaxUint16},
+	goTypeUint32: {0, math.MaxUint32},
+}
+
+// stampNarrowIntRange pre-stamps a narrow width's inclusive range onto prop;
+// any other name is left alone. It never sets exclusiveMinimum/Maximum.
+func stampNarrowIntRange(prop *OpenAPIProperty, name string) {
+	r, ok := narrowIntRanges[name]
+	if !ok {
+		return
+	}
+	prop.Minimum = floatPtr(r.min)
+	prop.Maximum = floatPtr(r.max)
+}
 
 // applyExample stamps a coerced `example` onto prop, or omits it entirely.
 //

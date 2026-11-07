@@ -183,6 +183,7 @@ paths:
               type: integer
               format: int32
               minimum: 0
+              maximum: 255
       responses:
         "200":
           description: Successful response
@@ -197,6 +198,7 @@ paths:
                       type: integer
                       format: int32
                       minimum: 0
+                      maximum: 255
                   meta:
                     type: object
                     properties:
@@ -244,6 +246,7 @@ paths:
                       type: integer
                       format: int32
                       minimum: 0
+                      maximum: 255
                   meta:
                     type: object
                     properties:
@@ -286,6 +289,7 @@ paths:
                       type: integer
                       format: int32
                       minimum: 0
+                      maximum: 255
                   meta:
                     type: object
                     properties:
@@ -328,6 +332,7 @@ paths:
                       type: integer
                       format: int32
                       minimum: 0
+                      maximum: 255
                   meta:
                     type: object
                     properties:
@@ -450,24 +455,28 @@ components:
             type: integer
             format: int32
             minimum: 0
+            maximum: 255
         digest:
           type: array
           items:
             type: integer
             format: int32
             minimum: 0
+            maximum: 255
         empty:
           type: array
           items:
             type: integer
             format: int32
             minimum: 0
+            maximum: 255
         flags:
           type: array
           items:
             type: integer
             format: int32
             minimum: 0
+            maximum: 255
         ints:
           type: array
           items:
@@ -479,6 +488,7 @@ components:
             type: integer
             format: int32
             minimum: 0
+            maximum: 255
         keyMap:
           type: object
           additionalProperties:
@@ -487,6 +497,7 @@ components:
               type: integer
               format: int32
               minimum: 0
+              maximum: 255
         keyPairs:
           type: array
           items:
@@ -495,6 +506,7 @@ components:
               type: integer
               format: int32
               minimum: 0
+              maximum: 255
         keys:
           type: array
           items:
@@ -503,6 +515,7 @@ components:
               type: integer
               format: int32
               minimum: 0
+              maximum: 255
         maybeAddrs:
           type: array
           items:
@@ -518,6 +531,7 @@ components:
             type: integer
             format: int32
             minimum: 0
+            maximum: 255
         maybeRaw:
           type: string
           format: byte
@@ -532,6 +546,7 @@ components:
             type: integer
             format: int32
             minimum: 0
+            maximum: 255
         raw:
           type: string
           format: byte
@@ -544,24 +559,28 @@ components:
             type: integer
             format: int32
             minimum: 0
+            maximum: 255
         sampleWide:
           type: array
           items:
             type: integer
             format: int32
             minimum: 0
+            maximum: 65535
         sized:
           type: array
           items:
             type: integer
             format: int32
             minimum: 0
+            maximum: 255
         wide:
           type: array
           items:
             type: integer
             format: int32
             minimum: 0
+            maximum: 65535
     ErrorResponse:
       type: object
       properties:

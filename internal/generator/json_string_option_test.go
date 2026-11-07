@@ -23,7 +23,7 @@ func quotedField(s, r models.TypeShape) *models.FieldInfo {
 // TestJSONStringOptionQuotesScalars pins the retyped shapes (#115):
 // encoding/json writes a bool, integer, float or json.Number tagged ",string"
 // as a JSON string, through at most one pointer, so the field is a bare
-// {type: string} with no format and no unsigned floor. The type is read from
+// {type: string} with no format and no type-derived bounds. The type is read from
 // the Resolution: a named scalar (Cents), a well-known number and a kind-only
 // scalar count by what they resolve to. A pointer written in the field's own
 // declaration (*int64, *Cents) is quoted by both engines and stays nullable.
