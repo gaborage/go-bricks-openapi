@@ -2486,7 +2486,7 @@ func (a *ProjectAnalyzer) payloadTypeInfo(expr ast.Expr, packageName string, ser
 
 // joseLiteralPayload reports whether a payload's root, every written pointer
 // shed, is an anonymous struct with a jose tag (hasJOSETag). Such a payload
-// is not documented yet (issue 171): payloadTypeInfo resolves it to no
+// is not documented yet (issue 176): payloadTypeInfo resolves it to no
 // TypeInfo, as before anonymous struct payloads were documented, so its
 // route keeps the untyped fallback under application/json, and nothing
 // under it registers or warns.
@@ -3366,14 +3366,6 @@ func (a *ProjectAnalyzer) populateHandler(h *handlerAnalysis, astFile *ast.File,
 const nonStructRequestWarning = "request type %s is not a struct: go-bricks binds requests by struct fields and panics on any other type, " +
 	"at request time before v0.69.0 and at route registration from v0.69.0 (F26, gaborage/go-bricks#1811); no requestBody emitted"
 
-// anonymousRequestWarning is the one warning a route raises when its request
-// type is an anonymous struct with a field, which go-bricks binds by its
-// fields but this tool does not document yet; the argument is the type as
-// written. A field-less one (struct{}) raises nothing (warnNonStructRequest).
-const anonymousRequestWarning = "request type %s is an anonymous struct: go-bricks binds it, but this tool does not document one yet " +
-	"— no requestBody and no query or header parameters are emitted, and path parameters fall back to strings " +
-	"(declare it as a named struct for a typed spec)"
-
 // populateRequestType resolves a handler's request type the way
 // populateTypeFields resolves a response, except for what does not register
 // as a struct. go-bricks binds every request by its struct fields and panics
@@ -3385,11 +3377,16 @@ const anonymousRequestWarning = "request type %s is an anonymous struct: go-bric
 // is what makes doctor count it as an untyped request. A generic
 // instantiation request, or one declared as one, is left untyped the same
 // way, with the generic request warning instead of F26 unless its generic
-// type is a non-struct, and so is an anonymous struct request, with the
-// anonymous request warning, or none when it has no field (warnNonStructRequest).
-// A struct request's parameters that go-bricks cannot bind warn first
-// (warnUnbindableParams).
+// type is a non-struct, and so is a field-less anonymous struct request
+// (struct{}), with no warning (warnNonStructRequest). An anonymous struct
+// request with a field is documented as a named struct of its fields is
+// (anonymousRequest). A struct request's parameters that go-bricks cannot
+// bind warn first (warnUnbindableParams).
 func (a *ProjectAnalyzer) populateRequestType(h *handlerAnalysis, astFile *ast.File, filePath string) {
+	if lit := anonymousStruct(h.requestExpr); lit != nil && lit.Fields.NumFields() > 0 {
+		h.request = a.anonymousRequest(lit, h.requestType, astFile, filePath)
+		return
+	}
 	if h.request != nil {
 		a.warnUnbindableParams(h.request, astFile, filePath)
 		if registered := a.registerPayloadType(h.request, astFile, filePath); registered != nil {

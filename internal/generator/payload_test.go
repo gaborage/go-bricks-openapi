@@ -65,8 +65,10 @@ func TestSuccessEnvelopeAnnotatesOnlyBareObject(t *testing.T) {
 }
 
 // TestReferencedSchemaNamesWalksResponseResolution pins that a response's
-// Resolution marks the components its ref leaves name, that a resolved
-// well-known payload marks nothing, and that a request is never walked.
+// Resolution marks the components its ref leaves name and that a resolved
+// well-known payload marks nothing. A request's Resolution marks its ref
+// leaves too (an anonymous struct request's body fields, issue 171), never
+// the request's own name.
 func TestReferencedSchemaNamesWalksResponseResolution(t *testing.T) {
 	timeShape := named(goTypeTimeTime)
 	requestRes := refTo("Hidden")
@@ -76,7 +78,7 @@ func TestReferencedSchemaNamesWalksResponseResolution(t *testing.T) {
 		{Method: "POST", Path: "/req", Request: &models.TypeInfo{Name: "Req", Resolution: &requestRes}},
 	}
 	got := referencedSchemaNames(routes, map[string]*models.TypeInfo{})
-	assert.Equal(t, map[string]bool{"Address": true}, got)
+	assert.Equal(t, map[string]bool{"Address": true, "Hidden": true}, got)
 }
 
 // TestPayloadNamesComponentArms covers each arm of payloadNamesComponent.

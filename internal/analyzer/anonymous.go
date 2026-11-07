@@ -19,16 +19,16 @@ import (
 // struct's dominance rule and parameter deduplication (dropDominatedFields,
 // dropDuplicateParams), so a literal is extracted, and raises its warnings,
 // only for a field that reaches the document; a payload's is extracted as
-// soon as the payload resolves. A request of anonymous struct type is not
-// documented yet (issue 171): it warns (anonymousRequestWarning), unless it
-// has no field.
+// soon as the payload resolves. A request of anonymous struct type is
+// documented as a named struct of its fields is (anonymousRequest): its
+// parameters typed, its other fields an inline requestBody object.
 //
 // Accepted residuals:
 //   - every build-tagged declaration of a named type over a literal is
 //     extracted, so a malformed tag or a dropped embed in it warns once per
 //     declaration, though only the first is documented;
 //   - a jose tag inside an anonymous struct payload is ignored, as before,
-//     tracked in issue 171: the route stays application/json, and a payload
+//     tracked in issue 176: the route stays application/json, and a payload
 //     whose root, every written pointer shed, is such a struct still resolves
 //     to nothing (joseLiteralPayload), keeping the untyped fallback, rather
 //     than document its plaintext as JSON.
@@ -257,4 +257,38 @@ func (a *ProjectAnalyzer) registerInlineRefs(fields []models.FieldInfo, astFile 
 	for i := range fields {
 		a.registerFieldRefAt(&fields[i], astFile, filePath, depth)
 	}
+}
+
+// anonymousRequest documents a request of anonymous struct type (struct{…},
+// *struct{…}; issue 171), lit as written in the handler's file, as a named
+// struct of its fields is documented, though it names no component: its
+// parameters that cannot bind warn first, as a named request's do; its path,
+// query and header fields are kept as its Fields, the parameters; and its
+// Resolution, the literal resolved as a payload's (its fields warning and
+// registering their refs as fields, one level below the root), types its
+// inline requestBody, from which the generator drops the parameters. A
+// params-only, non-JOSE one gets no Resolution, so no requestBody, as its
+// named twin gets none. A literal that embeds a Marshaler type is one (ADR
+// 0002) and is documented as a struct Marshaler request (#111). written is
+// the request type as written.
+func (a *ProjectAnalyzer) anonymousRequest(lit *ast.StructType, written string, astFile *ast.File, filePath string) *models.TypeInfo {
+	site := structSite{st: lit, pkg: astFile.Name.Name, file: astFile, path: filePath}
+	a.warnUnbindableSite(site)
+	ti := &models.TypeInfo{JOSE: hasJOSETag(lit)}
+	c := newResolveCtx(astFile, filePath, false)
+	c.st.inline = true
+	r := a.resolveShape(a.typeShape(lit), c)
+	if r.Kind != models.ShapeStruct || r.Struct == nil {
+		ti.Fields, _ = a.requestParamFields(site)
+		ti.Resolution = &r
+		a.warnMarshalerRequest(written, c.st.first)
+		return ti
+	}
+	a.warnInlineFields(&r)
+	a.registerInlineRefs(r.Struct.Fields, astFile, filePath, 1)
+	ti.Fields = paramFields(r.Struct.Fields)
+	if ti.JOSE || len(ti.Fields) < len(r.Struct.Fields) {
+		ti.Resolution = &r
+	}
+	return ti
 }
