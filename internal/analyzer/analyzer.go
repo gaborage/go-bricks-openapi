@@ -2955,13 +2955,15 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 // A return whose first result is a plain identifier is resolved through the
 // bindings collected by collectResultBindings, so the common
 // `res := server.Accepted(x); res.Headers = ...; return res, nil` shape is
-// documented with its real status instead of the 200 default.
+// documented with its real status instead of the 200 default. A naked `return`
+// resolves the first named result through the same bindings.
 func (a *ProjectAnalyzer) extractSuccessStatus(funcDecl *ast.FuncDecl, serverAliases map[string]struct{}) int {
 	if funcDecl.Body == nil {
 		return 0
 	}
 	shadows := newShadowIndex(funcDecl)
 	bindings := a.collectResultBindings(funcDecl.Body, serverAliases, shadows)
+	namedResult := firstNamedResult(funcDecl)
 	status := 0
 	ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
 		// Do not descend into nested closures: their returns belong to the closure,
@@ -2974,7 +2976,7 @@ func (a *ProjectAnalyzer) extractSuccessStatus(funcDecl *ast.FuncDecl, serverAli
 		if !ok {
 			return true
 		}
-		if s := a.statusFromReturn(ret, bindings, serverAliases, shadows); s != 0 {
+		if s := a.statusFromReturn(ret, bindings, namedResult, serverAliases, shadows); s != 0 {
 			status = s // last-wins: keep scanning, terminal return is authoritative
 		}
 		return true
@@ -2983,28 +2985,68 @@ func (a *ProjectAnalyzer) extractSuccessStatus(funcDecl *ast.FuncDecl, serverAli
 }
 
 // statusFromReturn resolves the success status a single return statement
-// documents: a direct server-constructor call, or an identifier previously bound
-// to one (or to a Result composite literal). An ambiguously bound identifier —
-// one assigned more than once anywhere in the body — resolves to 0 so the
-// generator keeps its 200 default rather than guessing a branch.
+// documents: a direct server-constructor call, an identifier previously bound
+// to one (or to a Result composite literal), a Result composite literal returned
+// with a nil error, or — for a naked `return` — the binding of namedResult, the
+// handler's first named result ("" when its results are unnamed). An ambiguously
+// bound identifier — one assigned more than once anywhere in the body — resolves
+// to 0 so the generator keeps its 200 default rather than guessing a branch.
+//
+// A returned literal counts only when the error result is the bare nil
+// identifier: go-bricks ignores the result whenever the error is non-nil, and
+// the idiomatic `return server.Result[T]{}, err` would otherwise resolve to an
+// explicit 200 and, under last-wins, override the handler's real success status.
 func (a *ProjectAnalyzer) statusFromReturn(
 	ret *ast.ReturnStmt,
 	bindings map[string]*resultBinding,
+	namedResult string,
 	serverAliases map[string]struct{},
 	shadows shadowIndex,
 ) int {
 	if len(ret.Results) == 0 {
-		return 0
+		return boundStatus(bindings, namedResult)
 	}
 	switch res := ret.Results[0].(type) {
 	case *ast.CallExpr:
 		return a.statusFromServerCall(res, serverAliases, shadows)
 	case *ast.Ident:
-		if b, ok := bindings[res.Name]; ok && !b.ambiguous {
-			return b.status
+		return boundStatus(bindings, res.Name)
+	case *ast.CompositeLit:
+		if returnsNilError(ret) {
+			return a.statusFromResultLiteral(res, serverAliases, shadows)
 		}
 	}
 	return 0
+}
+
+// boundStatus returns the status of an unambiguous binding of name, or 0 when
+// name is unbound or bound ambiguously.
+func boundStatus(bindings map[string]*resultBinding, name string) int {
+	if b, ok := bindings[name]; ok && !b.ambiguous {
+		return b.status
+	}
+	return 0
+}
+
+// returnsNilError reports whether a return statement's second result is the
+// bare nil identifier, the only error expression known to let go-bricks serve
+// the first result.
+func returnsNilError(ret *ast.ReturnStmt) bool {
+	if len(ret.Results) != 2 {
+		return false
+	}
+	ident, ok := ret.Results[1].(*ast.Ident)
+	return ok && ident.Name == "nil"
+}
+
+// firstNamedResult returns the name of a function's first named result, or ""
+// when its results are unnamed or absent. A naked `return` returns that result.
+func firstNamedResult(funcDecl *ast.FuncDecl) string {
+	results := funcDecl.Type.Results
+	if results == nil || len(results.List) == 0 || len(results.List[0].Names) == 0 {
+		return ""
+	}
+	return results.List[0].Names[0].Name
 }
 
 // resultBinding records what a local identifier was bound to inside a handler
