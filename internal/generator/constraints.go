@@ -131,8 +131,10 @@ func (s *constraintSet) setMinimum(b numericBound) { mergeNumeric(&s.minimum, b,
 func (s *constraintSet) setMaximum(b numericBound) { mergeNumeric(&s.maximum, b, false) }
 
 // applyTo writes every set keyword onto prop and leaves unset ones alone — so
-// a pre-stamped value (the uint minimum: 0) survives an empty set and is
-// overwritten only by an explicit bound, exactly as the applicator loop did.
+// a pre-stamped value (the type-range pre-stamp: an unsigned minimum: 0 and a
+// narrow width's minimum/maximum) survives an empty set and is overwritten
+// only by an explicit bound, even a looser one, exactly as the applicator
+// loop did.
 //
 // The pattern != "" guard (as opposed to an unconditional write) is
 // unobservable today because nothing pre-stamps Pattern; if a pre-stamp ever
@@ -233,8 +235,9 @@ func constraintsFor(shape models.TypeShape, constraints map[string]string) *cons
 
 // applyValidationConstraints fills prop's constraint keywords from the field's
 // validate tag: collection-scope rules onto prop, element-scope (post-dive)
-// rules onto prop.Items. Must run after setTypeAndFormat — the uint minimum: 0
-// pre-stamp relies on an explicit min/gte overwriting it here.
+// rules onto prop.Items. Must run after setTypeAndFormat — the type-range
+// pre-stamp (unsigned minimum: 0, narrow-width minimum/maximum) relies on an
+// explicit bound overwriting only the keyword it sets here.
 //
 // Element rules apply only when prop is an array whose items are an inline
 // schema. A $ref must stand alone (OpenAPI 3.0 ignores its siblings), so

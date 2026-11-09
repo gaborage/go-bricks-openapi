@@ -9,9 +9,10 @@ import (
 	"github.com/gaborage/go-bricks-openapi/internal/models"
 )
 
-// byteItemProp is what a bare byte field emits: the items of a [N]byte array.
+// byteItemProp is what a bare byte field emits, its 0..255 range included
+// (#107): the items of a [N]byte array.
 func byteItemProp() *OpenAPIProperty {
-	return &OpenAPIProperty{Type: typeInteger, Format: formatInt32, Minimum: floatPtr(0)}
+	return &OpenAPIProperty{Type: typeInteger, Format: formatInt32, Minimum: floatPtr(0), Maximum: floatPtr(255)}
 }
 
 // TestFixedByteArrayFieldIsIntegerArray pins #98's generator rule:

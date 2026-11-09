@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -129,7 +130,8 @@ func TestWellKnownNetAndFileModeAreTyped(t *testing.T) {
 	data := func(path string) map[string]any {
 		return digMap(t, spec.Paths, path, "get", "responses", "200", "content", "application/json", "schema", "properties", "data")
 	}
-	mode := map[string]any{"type": "integer", "format": "int64", "minimum": 0}
+	// go-yaml decodes uint32's maximum, 4.294967295e+09, as a float64 (#107).
+	mode := map[string]any{"type": "integer", "format": "int64", "minimum": 0, "maximum": float64(math.MaxUint32)}
 	str := map[string]any{"type": "string"}
 	assert.Equal(t, mode, data("/mode"), "a payload root is never nullable")
 	assert.Equal(t, mode, data("/perm"))
