@@ -928,7 +928,9 @@ func (w *routeWalker) writtenValue(rhs ast.Expr, view bindingView) (value regist
 }
 
 // groupBinding is the accumulated prefix of `<parent>.Group(arg)`: the
-// parent's binding in effect at this position plus the resolved argument. The
+// parent's binding in effect at this position plus the resolved argument in
+// go-bricks' canonical prefix form (normalizeGroupPrefix), so the accumulated
+// prefix is canonical and joinRoutePath can join it to a route path. The
 // argument is resolved through the same lexical constant chain as a route
 // path, so a group opened on a function-local constant keeps its prefix. An
 // unresolvable arg (or an unresolved parent) still yields a registrar — with
@@ -945,7 +947,7 @@ func (w *routeWalker) groupBinding(parent *ast.Ident, arg ast.Expr, view binding
 	}
 	value, resolved := resolvePathExpr(arg, view.scopes, w.constants)
 	return registrarPrefix{
-		path:     inherited.path + value,
+		path:     inherited.path + normalizeGroupPrefix(value),
 		resolved: inherited.resolved && resolved,
 		cause:    inherited.cause,
 	}
@@ -1034,7 +1036,7 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, view bindingView) *model
 	route := &models.Route{
 		Method: strings.ToUpper(shape.method),
 		Tags:   []string{},
-		Path:   normalizePath(prefix.path + rawPath),
+		Path:   normalizePath(joinRoutePath(prefix.path, rawPath)),
 		// Module is set at build time (WithModule in the opts loop overrides it),
 		// so no later stamping pass needs a zero-value sentinel.
 		Module: w.moduleName,
@@ -1131,7 +1133,7 @@ func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, view bindingView) *mo
 	route := &models.Route{
 		Method: strings.ToUpper(m),
 		Tags:   []string{},
-		Path:   normalizePath(group.path + rawPath),
+		Path:   normalizePath(joinRoutePath(group.path, rawPath)),
 		Module: w.moduleName,
 	}
 	// Raw Add routes are schema-free: the framework records them with zero-valued
