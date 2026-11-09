@@ -4700,7 +4700,7 @@ func (a *ProjectAnalyzer) parseParameterTags(tag string) (paramType, paramName s
 }
 
 // parseStructTags extracts relevant information from struct field tags
-// Returns a parsedTags struct containing JSONName, JSONString, ParamType, ParamName, Description, Example, and RawValidation
+// Returns a parsedTags struct containing JSONName, JSONSkip, JSONString, ParamType, ParamName, Description, Example, and RawValidation
 func (a *ProjectAnalyzer) parseStructTags(tag string) parsedTags {
 	if tag == "" {
 		return parsedTags{}
