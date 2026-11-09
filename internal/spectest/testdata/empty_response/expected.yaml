@@ -80,10 +80,8 @@ components:
                       message:
                         type: string
                         description: Violated validation rule
-                      value:
-                        description: Submitted value (any type)
                   maxItems: 100
-              description: Contextual error payload, emitted in development environments only
+              description: Contextual error payload, sent only when app.debug is enabled in a development environment
             message:
               type: string
               description: Human-readable error message
