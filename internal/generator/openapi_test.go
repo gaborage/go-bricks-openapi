@@ -3132,6 +3132,25 @@ func TestNo422AndTypedErrorEnvelope(t *testing.T) {
 	assert.Contains(t, spec, "traceId", "meta is typed, not a bare object")
 }
 
+// TestErrorResponseSchemaFollowsCurrentGoBricks pins the ErrorResponse details
+// shape to go-bricks v0.61.0+: a validationErrors entry carries only field and
+// message (the value key was dropped), and details is sent only when app.debug
+// is on in a development environment.
+func TestErrorResponseSchemaFollowsCurrentGoBricks(t *testing.T) {
+	details := errorResponseSchema().Properties[propNameError].Properties["details"]
+	require.NotNil(t, details)
+	assert.Equal(t, "Contextual error payload, sent only when app.debug is enabled in a development environment", details.Description)
+
+	validationErrors := details.Properties["validationErrors"]
+	require.NotNil(t, validationErrors)
+	require.NotNil(t, validationErrors.Items)
+	itemKeys := make([]string, 0, len(validationErrors.Items.Properties))
+	for k := range validationErrors.Items.Properties {
+		itemKeys = append(itemKeys, k)
+	}
+	assert.ElementsMatch(t, []string{"field", "message"}, itemKeys)
+}
+
 // TestAssignOperationIDs covers module-qualification, explicit WithHandlerName
 // override, and deterministic de-duplication.
 func TestAssignOperationIDs(t *testing.T) {
@@ -3731,6 +3750,12 @@ func TestPathTemplateVars(t *testing.T) {
 		{name: "multiple vars", path: "/orgs/{orgID}/users/{id}", expected: []string{"orgID", "id"}},
 		{name: "catch-all wildcard stays literal", path: "/files/*", expected: nil},
 		{name: "bare braces are too short to be a var", path: "/{}", expected: nil},
+		{name: "mid-segment var at end", path: "/m/a{x}", expected: []string{"x"}},
+		{name: "mid-segment var before literal segment", path: "/files/file_{name}/raw", expected: []string{"name"}},
+		{name: "two vars in one segment", path: "/r/{a}-{b}", expected: []string{"a", "b"}},
+		{name: "var name containing a colon", path: "/n/a{x:y}", expected: []string{"x:y"}},
+		{name: "literal colon beside a var", path: "/x/:a{b}", expected: []string{"b"}},
+		{name: "unclosed brace is not a var", path: "/u/{id", expected: nil},
 	}
 
 	for _, tt := range tests {
