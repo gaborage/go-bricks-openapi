@@ -4029,57 +4029,10 @@ func TestSetTypeAndFormatNestedByteSlice(t *testing.T) {
 	assert.Equal(t, formatByte, m.AdditionalProperties.Format)
 }
 
-// TestResponsePayloadSchemaWellKnownElement locks the items path for a NAMED
-// well-known element: []time.Time / []uuid.UUID payloads are arrays of the
-// well-known scalar. The element $ref branch must not win here — no component
-// is emitted for a well-known type, so the reference would dangle and the
-// document would fail validation.
-func TestResponsePayloadSchemaWellKnownElement(t *testing.T) {
-	for _, tc := range []struct {
-		elem, wantType, wantFormat string
-	}{
-		{goTypeTimeTime, typeString, formatDateTime},
-		{goTypeUUID, typeString, formatUUID},
-		{goTypeRawMessage, "", ""}, // any JSON value: untyped items ({})
-	} {
-		got := responsePayloadSchema(&models.TypeInfo{
-			Name:  "Time", // the analyzer stamps the element's type name
-			Shape: payloadSlice(named(tc.elem)),
-		})
-		assert.Equal(t, typeArray, got.Type, tc.elem)
-		require.NotNil(t, got.Items, tc.elem)
-		assert.Empty(t, got.Items.Ref, "a well-known element is a scalar, not a $ref")
-		assert.Equal(t, tc.wantType, got.Items.Type, tc.elem)
-		assert.Equal(t, tc.wantFormat, got.Items.Format, tc.elem)
-	}
-}
-
-// TestResponsePayloadSchemaWellKnownPointerElement is the pointer arm of the
-// test above. slicePayloadTypeInfo already sheds a pointer element before
-// stamping the Shape, so this shape does not arise from the analyzer today; the
-// items path normalizes one pointer level anyway, exactly as the struct-field
-// path does, so a *T element can never fall through to a dangling $ref.
-func TestResponsePayloadSchemaWellKnownPointerElement(t *testing.T) {
-	for _, tc := range []struct {
-		elem, wantType, wantFormat string
-	}{
-		{goTypeTimeTime, typeString, formatDateTime},
-		{goTypeUUID, typeString, formatUUID},
-		{goTypeRawMessage, "", ""}, // any JSON value: untyped items ({})
-	} {
-		got := responsePayloadSchema(&models.TypeInfo{
-			Name:  "Time", // the analyzer stamps the element's type name
-			Shape: payloadSlice(ptrOf(named(tc.elem))),
-		})
-		assert.Equal(t, typeArray, got.Type, tc.elem)
-		require.NotNil(t, got.Items, tc.elem)
-		assert.Empty(t, got.Items.Ref, "a well-known element is a scalar, not a $ref")
-		assert.Equal(t, tc.wantType, got.Items.Type, tc.elem)
-		assert.Equal(t, tc.wantFormat, got.Items.Format, tc.elem)
-	}
-
-	// *[]byte sheds the pointer to the well-known slice shape, and a plain
-	// pointer-to-primitive element keeps its scalar mapping.
+// TestResponsePayloadSchemaPointerElement pins a nameless slice payload's
+// pointer element: *[]byte sheds the pointer to the well-known base64 shape,
+// and a pointer-to-primitive element keeps its scalar mapping.
+func TestResponsePayloadSchemaPointerElement(t *testing.T) {
 	blob := responsePayloadSchema(&models.TypeInfo{Shape: payloadSlice(ptrOf(sliceOf(prim(goTypeByte))))})
 	require.NotNil(t, blob.Items)
 	assert.Equal(t, typeString, blob.Items.Type)
@@ -4159,9 +4112,10 @@ func TestRawMessageIsUntypedInEveryPosition(t *testing.T) {
 	})
 
 	// server.Result[[]json.RawMessage]: the analyzer stamps the element's bare
-	// name, which must not become a $ref (no component exists for it).
+	// name and a Resolution, which types the items inline — never a $ref (no
+	// component exists for it).
 	t.Run("slice payload items", func(t *testing.T) {
-		got := responsePayloadSchema(&models.TypeInfo{Name: "RawMessage", Package: "json", Shape: payloadSlice(raw)})
+		got := responsePayloadSchema(&models.TypeInfo{Name: "RawMessage", Package: "json", Shape: payloadSlice(raw), Resolution: payloadSlice(raw)})
 		assert.Equal(t, &OpenAPIProperty{Type: typeArray, Items: untyped()}, got)
 	})
 }

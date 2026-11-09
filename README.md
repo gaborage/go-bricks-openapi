@@ -423,9 +423,8 @@ nested Go module, is not.
   recognized through the import its qualifier names. A project package never
   declares one, so a project package `net` declaring `type IP int`, used as
   `net.IP`, is an integer, and a project struct so spelled is resolved in its
-  own package too (for a slice payload of one, see the response payload entry
-  below). The package that declares one names it under an alias too (`t.Time`
-  with `import t "time"`): `time`, `os`, `io/fs`, `net`, `net/netip`,
+  own package too. The package that declares one names it under an alias too
+  (`t.Time` with `import t "time"`): `time`, `os`, `io/fs`, `net`, `net/netip`,
   `encoding/json`, and, for `uuid.UUID`, `github.com/google/uuid`,
   `github.com/gofrs/uuid` (and its `/v5`) and `github.com/satori/go.uuid`.
   Any other package from outside the module is matched by spelling alone: a
@@ -455,9 +454,7 @@ nested Go module, is not.
   base64 string, while `[N]byte` (payload or field) and `[]*byte` are integer
   arrays. A project struct is referenced, even one whose short name collides
   with a well-known type (a project package `uuid` declaring
-  `type UUID struct`); a slice payload of such a colliding project struct
-  (`server.Result[[]uuid.UUID]`) is still typed inline as the well-known
-  type's array. A payload that ends in a fallback — a Marshaler type
+  `type UUID struct`). A payload that ends in a fallback — a Marshaler type
   other than a text one, recursion, `uintptr`, `error`/`complex64`/`complex128`, or a type that
   resolves to no schema (a third-party type such as `decimal.Decimal`, or an
   undeclared name) — raises one warning, so `--strict` fails on it. The exception is a bare
