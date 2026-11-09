@@ -10,6 +10,7 @@ import (
 	"go/token"
 	"go/types"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -927,7 +928,9 @@ func (w *routeWalker) writtenValue(rhs ast.Expr, view bindingView) (value regist
 }
 
 // groupBinding is the accumulated prefix of `<parent>.Group(arg)`: the
-// parent's binding in effect at this position plus the resolved argument. The
+// parent's binding in effect at this position plus the resolved argument in
+// go-bricks' canonical prefix form (normalizeGroupPrefix), so the accumulated
+// prefix is canonical and joinRoutePath can join it to a route path. The
 // argument is resolved through the same lexical constant chain as a route
 // path, so a group opened on a function-local constant keeps its prefix. An
 // unresolvable arg (or an unresolved parent) still yields a registrar — with
@@ -944,7 +947,7 @@ func (w *routeWalker) groupBinding(parent *ast.Ident, arg ast.Expr, view binding
 	}
 	value, resolved := resolvePathExpr(arg, view.scopes, w.constants)
 	return registrarPrefix{
-		path:     inherited.path + value,
+		path:     inherited.path + normalizeGroupPrefix(value),
 		resolved: inherited.resolved && resolved,
 		cause:    inherited.cause,
 	}
@@ -1033,7 +1036,7 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, view bindingView) *model
 	route := &models.Route{
 		Method: strings.ToUpper(shape.method),
 		Tags:   []string{},
-		Path:   normalizePath(prefix.path + rawPath),
+		Path:   normalizePath(joinRoutePath(prefix.path, rawPath)),
 		// Module is set at build time (WithModule in the opts loop overrides it),
 		// so no later stamping pass needs a zero-value sentinel.
 		Module: w.moduleName,
@@ -1130,7 +1133,7 @@ func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, view bindingView) *mo
 	route := &models.Route{
 		Method: strings.ToUpper(m),
 		Tags:   []string{},
-		Path:   normalizePath(group.path + rawPath),
+		Path:   normalizePath(joinRoutePath(group.path, rawPath)),
 		Module: w.moduleName,
 	}
 	// Raw Add routes are schema-free: the framework records them with zero-valued
@@ -3411,11 +3414,34 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 }
 
 // populateHandler resolves a found handler's request and response in the file
-// declaring it, raising their warnings.
+// declaring it, raising their warnings. A bodiless response (markBodiless) is
+// left unresolved: none of its payload reaches the wire, so it registers no
+// component and raises no payload warning.
 func (a *ProjectAnalyzer) populateHandler(h *handlerAnalysis, astFile *ast.File, filePath string) {
 	a.populateRequestType(h, astFile, filePath)
+	if markBodiless(h) {
+		return
+	}
 	a.populateTypeFields(h.response, h.responseType, astFile, filePath)
 	a.warnGenericPayload(h)
+}
+
+// markBodiless marks the response of a handler whose resolved success status
+// is 204 NoContent and reports true. go-bricks writes a 204 with no body
+// whatever the payload (its envelope, raw and JOSE writers all short-circuit),
+// so the route is documented like server.NoContent(). The payload's Name and
+// Shape are kept, so doctor still counts a named or builtin payload as typed;
+// a payload that resolved to no TypeInfo (a generic instantiation) gets a bare
+// NoContent marker.
+func markBodiless(h *handlerAnalysis) bool {
+	if h.successStatus != http.StatusNoContent {
+		return false
+	}
+	if h.response == nil {
+		h.response = &models.TypeInfo{}
+	}
+	h.response.NoContent = true
+	return true
 }
 
 // nonStructRequestWarning is the one warning a route raises when its request
