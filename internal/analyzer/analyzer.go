@@ -10,6 +10,7 @@ import (
 	"go/token"
 	"go/types"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -3413,11 +3414,34 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 }
 
 // populateHandler resolves a found handler's request and response in the file
-// declaring it, raising their warnings.
+// declaring it, raising their warnings. A bodiless response (markBodiless) is
+// left unresolved: none of its payload reaches the wire, so it registers no
+// component and raises no payload warning.
 func (a *ProjectAnalyzer) populateHandler(h *handlerAnalysis, astFile *ast.File, filePath string) {
 	a.populateRequestType(h, astFile, filePath)
+	if markBodiless(h) {
+		return
+	}
 	a.populateTypeFields(h.response, h.responseType, astFile, filePath)
 	a.warnGenericPayload(h)
+}
+
+// markBodiless marks the response of a handler whose resolved success status
+// is 204 NoContent and reports true. go-bricks writes a 204 with no body
+// whatever the payload (its envelope, raw and JOSE writers all short-circuit),
+// so the route is documented like server.NoContent(). The payload's Name and
+// Shape are kept, so doctor still counts a named or builtin payload as typed;
+// a payload that resolved to no TypeInfo (a generic instantiation) gets a bare
+// NoContent marker.
+func markBodiless(h *handlerAnalysis) bool {
+	if h.successStatus != http.StatusNoContent {
+		return false
+	}
+	if h.response == nil {
+		h.response = &models.TypeInfo{}
+	}
+	h.response.NoContent = true
+	return true
 }
 
 // nonStructRequestWarning is the one warning a route raises when its request
