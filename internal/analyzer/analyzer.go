@@ -10,6 +10,7 @@ import (
 	"go/token"
 	"go/types"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -927,7 +928,9 @@ func (w *routeWalker) writtenValue(rhs ast.Expr, view bindingView) (value regist
 }
 
 // groupBinding is the accumulated prefix of `<parent>.Group(arg)`: the
-// parent's binding in effect at this position plus the resolved argument. The
+// parent's binding in effect at this position plus the resolved argument in
+// go-bricks' canonical prefix form (normalizeGroupPrefix), so the accumulated
+// prefix is canonical and joinRoutePath can join it to a route path. The
 // argument is resolved through the same lexical constant chain as a route
 // path, so a group opened on a function-local constant keeps its prefix. An
 // unresolvable arg (or an unresolved parent) still yields a registrar — with
@@ -944,7 +947,7 @@ func (w *routeWalker) groupBinding(parent *ast.Ident, arg ast.Expr, view binding
 	}
 	value, resolved := resolvePathExpr(arg, view.scopes, w.constants)
 	return registrarPrefix{
-		path:     inherited.path + value,
+		path:     inherited.path + normalizeGroupPrefix(value),
 		resolved: inherited.resolved && resolved,
 		cause:    inherited.cause,
 	}
@@ -1033,7 +1036,7 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, view bindingView) *model
 	route := &models.Route{
 		Method: strings.ToUpper(shape.method),
 		Tags:   []string{},
-		Path:   normalizePath(prefix.path + rawPath),
+		Path:   normalizePath(joinRoutePath(prefix.path, rawPath)),
 		// Module is set at build time (WithModule in the opts loop overrides it),
 		// so no later stamping pass needs a zero-value sentinel.
 		Module: w.moduleName,
@@ -1130,7 +1133,7 @@ func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, view bindingView) *mo
 	route := &models.Route{
 		Method: strings.ToUpper(m),
 		Tags:   []string{},
-		Path:   normalizePath(group.path + rawPath),
+		Path:   normalizePath(joinRoutePath(group.path, rawPath)),
 		Module: w.moduleName,
 	}
 	// Raw Add routes are schema-free: the framework records them with zero-valued
@@ -2503,7 +2506,7 @@ func (a *ProjectAnalyzer) payloadTypeInfo(expr ast.Expr, packageName string, ser
 
 // joseLiteralPayload reports whether a payload's root, every written pointer
 // shed, is an anonymous struct with a jose tag (hasJOSETag). Such a payload
-// is not documented yet (issue 171): payloadTypeInfo resolves it to no
+// is not documented yet (issue 176): payloadTypeInfo resolves it to no
 // TypeInfo, as before anonymous struct payloads were documented, so its
 // route keeps the untyped fallback under application/json, and nothing
 // under it registers or warns.
@@ -3411,11 +3414,34 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 }
 
 // populateHandler resolves a found handler's request and response in the file
-// declaring it, raising their warnings.
+// declaring it, raising their warnings. A bodiless response (markBodiless) is
+// left unresolved: none of its payload reaches the wire, so it registers no
+// component and raises no payload warning.
 func (a *ProjectAnalyzer) populateHandler(h *handlerAnalysis, astFile *ast.File, filePath string) {
 	a.populateRequestType(h, astFile, filePath)
+	if markBodiless(h) {
+		return
+	}
 	a.populateTypeFields(h.response, h.responseType, astFile, filePath)
 	a.warnGenericPayload(h)
+}
+
+// markBodiless marks the response of a handler whose resolved success status
+// is 204 NoContent and reports true. go-bricks writes a 204 with no body
+// whatever the payload (its envelope, raw and JOSE writers all short-circuit),
+// so the route is documented like server.NoContent(). The payload's Name and
+// Shape are kept, so doctor still counts a named or builtin payload as typed;
+// a payload that resolved to no TypeInfo (a generic instantiation) gets a bare
+// NoContent marker.
+func markBodiless(h *handlerAnalysis) bool {
+	if h.successStatus != http.StatusNoContent {
+		return false
+	}
+	if h.response == nil {
+		h.response = &models.TypeInfo{}
+	}
+	h.response.NoContent = true
+	return true
 }
 
 // nonStructRequestWarning is the one warning a route raises when its request
@@ -3424,14 +3450,6 @@ func (a *ProjectAnalyzer) populateHandler(h *handlerAnalysis, astFile *ast.File,
 // a struct; earlier versions register the route and panic binding a request.
 const nonStructRequestWarning = "request type %s is not a struct: go-bricks binds requests by struct fields and panics on any other type, " +
 	"at request time before v0.69.0 and at route registration from v0.69.0 (F26, gaborage/go-bricks#1811); no requestBody emitted"
-
-// anonymousRequestWarning is the one warning a route raises when its request
-// type is an anonymous struct with a field, which go-bricks binds by its
-// fields but this tool does not document yet; the argument is the type as
-// written. A field-less one (struct{}) raises nothing (warnNonStructRequest).
-const anonymousRequestWarning = "request type %s is an anonymous struct: go-bricks binds it, but this tool does not document one yet " +
-	"— no requestBody and no query or header parameters are emitted, and path parameters fall back to strings " +
-	"(declare it as a named struct for a typed spec)"
 
 // populateRequestType resolves a handler's request type the way
 // populateTypeFields resolves a response, except for what does not register
@@ -3444,11 +3462,16 @@ const anonymousRequestWarning = "request type %s is an anonymous struct: go-bric
 // is what makes doctor count it as an untyped request. A generic
 // instantiation request, or one declared as one, is left untyped the same
 // way, with the generic request warning instead of F26 unless its generic
-// type is a non-struct, and so is an anonymous struct request, with the
-// anonymous request warning, or none when it has no field (warnNonStructRequest).
-// A struct request's parameters that go-bricks cannot bind warn first
-// (warnUnbindableParams).
+// type is a non-struct, and so is a field-less anonymous struct request
+// (struct{}), with no warning (warnNonStructRequest). An anonymous struct
+// request with a field is documented as a named struct of its fields is
+// (anonymousRequest). A struct request's parameters that go-bricks cannot
+// bind warn first (warnUnbindableParams).
 func (a *ProjectAnalyzer) populateRequestType(h *handlerAnalysis, astFile *ast.File, filePath string) {
+	if lit := anonymousStruct(h.requestExpr); lit != nil && lit.Fields.NumFields() > 0 {
+		h.request = a.anonymousRequest(lit, h.requestType, astFile, filePath)
+		return
+	}
 	if h.request != nil {
 		a.warnUnbindableParams(h.request, astFile, filePath)
 		if registered := a.registerPayloadType(h.request, astFile, filePath); registered != nil {
@@ -3562,8 +3585,9 @@ func (a *ProjectAnalyzer) screenUnresolvedPayload(typeInfo *models.TypeInfo, ast
 // uuid.UUID (or time.Time) is indistinguishable there from the well-known type:
 // kept, the generator would document it inline and orphan its component. A
 // slice or array payload keeps its Shape — the array wrapper is built from it —
-// so a slice of such a colliding project type is still inlined by its element
-// name.
+// and the generator documents its items as a $ref to the element's component,
+// so a slice of such a colliding project type is never typed as the
+// well-known type.
 func shedRegisteredPayloadShape(ti *models.TypeInfo) {
 	if ti.Shape != nil && !isSequence(ti.Shape.Kind) {
 		ti.Shape = nil
@@ -4051,7 +4075,7 @@ func (a *ProjectAnalyzer) registerResolutionRefs(f *models.FieldInfo, astFile *a
 // isJSONExcluded reports whether a field never reaches the emitted document:
 // json:"-" with no param/query/header tag to carry it in as a parameter.
 func isJSONExcluded(f *models.FieldInfo) bool {
-	return f.JSONName == jsonSkipValue && f.ParamType == ""
+	return f.JSONSkip && f.ParamType == ""
 }
 
 // knownUnderlyingBuiltins maps qualified stdlib/library types with a non-struct
@@ -4423,7 +4447,7 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 		tagText := unquoteLiteral(field.Tag.Value)
 		a.warnUnreadableTagKeys(field.Tag, typeName, tagText)
 		tags = a.parseStructTags(tagText)
-		if tags.jsonName == jsonSkipValue {
+		if tags.jsonSkip {
 			return nil, false // json:"-" — excluded
 		}
 	}
@@ -4522,6 +4546,7 @@ func (a *ProjectAnalyzer) parseFieldTags(fieldInfo *models.FieldInfo, tag *ast.B
 	tags := a.parseStructTags(tagValue)
 
 	fieldInfo.JSONName = tags.jsonName
+	fieldInfo.JSONSkip = tags.jsonSkip
 	fieldInfo.JSONString = tags.jsonString
 	fieldInfo.ParamType = tags.paramType
 	fieldInfo.ParamName = tags.paramName
@@ -4639,6 +4664,7 @@ func (a *ProjectAnalyzer) instantiationShape(expr, base ast.Expr, args []ast.Exp
 // parsedTags holds the extracted information from struct field tags
 type parsedTags struct {
 	jsonName      string
+	jsonSkip      bool
 	jsonString    bool
 	paramType     string
 	paramName     string
@@ -4647,27 +4673,18 @@ type parsedTags struct {
 	rawValidation string
 }
 
-// parseJSONTagName extracts the field name from a json tag, handling the special "-" sentinel
-// Returns the field name or "-" if the field should be skipped
-func (a *ProjectAnalyzer) parseJSONTagName(jsonTag string) string {
-	if jsonTag == "" {
-		return ""
+// parseJSONTagName splits a json tag value into the field's name (the part
+// before the first comma: "email,omitempty" -> "email") and whether
+// encoding/json skips the field. skip is true only when the whole value is
+// "-": `json:"-,"` and `json:"-,omitempty"` name the field "-" and keep it
+// (issue 155). A bare "-" keeps the name "-" too; callers decide skipping by
+// skip alone, never by the name.
+func (a *ProjectAnalyzer) parseJSONTagName(jsonTag string) (name string, skip bool) {
+	if jsonTag == jsonSkipValue {
+		return jsonSkipValue, true
 	}
-
-	// Split by comma and take first part as field name
-	// Example: "fieldName,omitempty" -> "fieldName"
-	parts := strings.Split(jsonTag, ",")
-	if len(parts) == 0 {
-		return ""
-	}
-
-	switch parts[0] {
-	case jsonSkipValue:
-		// Preserve "-" sentinel so downstream code can skip field
-		return jsonSkipValue
-	default:
-		return parts[0]
-	}
+	name, _, _ = strings.Cut(jsonTag, ",")
+	return name, false
 }
 
 // jsonTagHasStringOption reports whether a json tag carries the ",string"
@@ -4707,7 +4724,7 @@ func (a *ProjectAnalyzer) parseParameterTags(tag string) (paramType, paramName s
 }
 
 // parseStructTags extracts relevant information from struct field tags
-// Returns a parsedTags struct containing JSONName, JSONString, ParamType, ParamName, Description, Example, and RawValidation
+// Returns a parsedTags struct containing JSONName, JSONSkip, JSONString, ParamType, ParamName, Description, Example, and RawValidation
 func (a *ProjectAnalyzer) parseStructTags(tag string) parsedTags {
 	if tag == "" {
 		return parsedTags{}
@@ -4717,7 +4734,7 @@ func (a *ProjectAnalyzer) parseStructTags(tag string) parsedTags {
 
 	// Parse json tag: `json:"fieldName,omitempty"`
 	if jsonTag := lookupStructTag(tag, tagJSON); jsonTag != "" {
-		result.jsonName = a.parseJSONTagName(jsonTag)
+		result.jsonName, result.jsonSkip = a.parseJSONTagName(jsonTag)
 		result.jsonString = jsonTagHasStringOption(jsonTag)
 	}
 

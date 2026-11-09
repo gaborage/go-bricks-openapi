@@ -562,8 +562,10 @@ func classifyRoute(route *models.Route) routeClassification {
 // a body (#111), which carries a Resolution and is typed exactly when it is a
 // string both ways. A params-only, non-JOSE one keeps its Name, so it stays
 // typed; a zero-field one is not params-only and is untyped unless it is a
-// text type. Text Marshaler payloads are typed (a Marshaler type other than a
-// text one is a fallback leaf).
+// text type. An anonymous struct request (#171) is typed: one with a body or
+// a jose tag carries its struct as its Resolution, and a params-only one
+// keeps its parameters as its Fields. Text Marshaler payloads are typed (a
+// Marshaler type other than a text one is a fallback leaf).
 func isTypedPayload(ti *models.TypeInfo) bool {
 	return analyzer.IsTypedPayload(ti)
 }

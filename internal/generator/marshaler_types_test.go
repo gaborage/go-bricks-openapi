@@ -138,3 +138,22 @@ func TestJOSEMarshalerRequestBody(t *testing.T) {
 	assert.Contains(t, joseDescription("X"), "conforms to the X schema")
 	assert.Contains(t, joseDescription("X"), refPath("X"))
 }
+
+// TestJOSEAnonymousRequestBody pins issue 171's JOSE request: an anonymous
+// struct request's Resolution is the struct itself, so its description says
+// the plaintext has no component; a named one still names its component.
+func TestJOSEAnonymousRequestBody(t *testing.T) {
+	gen := New(defaultTitle, defaultVersion, defaultDescription)
+	anon := models.TypeShape{Kind: models.ShapeStruct, Struct: &models.AnonymousStruct{}}
+	rb := gen.buildRequestBody(&models.TypeInfo{JOSE: true, Resolution: &anon})
+	assert.Equal(t, joseAnonymousDescription, rb.Description)
+	assert.NotContains(t, rb.Description, refComponentPrefix)
+	assert.Equal(t, joseTokenSchema(), rb.Content[mediaJOSE].Schema)
+
+	assert.Equal(t, joseDescription("Sealed"), joseRequestDescription(&models.TypeInfo{Name: "Sealed", JOSE: true}))
+
+	// A jose-tagged anonymous literal embedding a Marshaler type resolves to
+	// the Marshaler leaf, so it gets the Marshaler description.
+	leaf := models.TypeShape{Kind: models.ShapeMarshaler, Name: "time.Time"}
+	assert.Equal(t, joseUndocumentedDescription, joseRequestDescription(&models.TypeInfo{JOSE: true, Resolution: &leaf}))
+}

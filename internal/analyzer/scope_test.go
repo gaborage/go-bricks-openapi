@@ -539,7 +539,7 @@ func TestEmptyStringConstResolves(t *testing.T) {
 		{
 			name:      "empty const alone is a valid root path",
 			body:      "const prefix = \"\"\n\tserver.GET(hr, r, prefix, m.h)",
-			wantPaths: []string{""},
+			wantPaths: []string{"/"}, // go-bricks serves an empty path at "/"
 		},
 	}
 

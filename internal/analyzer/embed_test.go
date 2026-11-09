@@ -622,6 +622,37 @@ func TestKeyDominance(t *testing.T) {
 	assert.Empty(t, a.Warnings(t.Context()))
 }
 
+// TestDashNamedKeyDominance pins issue 155's dominance key: json:"-," names
+// the key "-", so an outer field tagged json:"-," shadows a promoted field
+// of that key, while a bare json:"-" outer field has no key and shadows
+// nothing, leaving the promoted "-" in place.
+func TestDashNamedKeyDominance(t *testing.T) {
+	a := analyzeDirectiveProject(t, map[string]string{
+		"go.mod": resolveGoMod,
+		filepath.Join("mod", "module.go"): rowsModule("",
+			"type DashInner struct {\n\tD int `json:\"-,omitempty\"`\n}\n"+
+				"type EDashShadow struct {\n\tDashInner\n\tO string `json:\"-,\"`\n}\n"+
+				"type EDashSkipOuter struct {\n\tDashInner\n\tO string `json:\"-\"`\n}\n",
+			"\tShadow EDashShadow `json:\"shadow\"`\n\tSkip EDashSkipOuter `json:\"skip\"`\n"),
+	})
+	shadow := a.typeRegistry["EDashShadow"]
+	require.NotNil(t, shadow)
+	require.Len(t, shadow.Fields, 1, "the outer \"-\" field hides the promoted one")
+	assert.Equal(t, "O", shadow.Fields[0].Name)
+	assert.Equal(t, map[string]string{"-": goTypeString}, renders(t, shadow))
+
+	skip := a.typeRegistry["EDashSkipOuter"]
+	require.NotNil(t, skip)
+	keys := map[string]string{}
+	for i := range skip.Fields {
+		f := &skip.Fields[i]
+		keys[f.Name] = f.JSONName
+		assert.Equal(t, f.Name == "O", f.JSONSkip, f.Name)
+	}
+	assert.Equal(t, map[string]string{"D": "-", "O": "-"}, keys, "the promoted \"-\" survives a skipped outer field")
+	assert.Empty(t, a.Warnings(t.Context()))
+}
+
 // TestParameterKeys pins that a path, query or header parameter keeps the
 // body key encoding/json gives it (its JSON name, or its Go name), since
 // go-bricks decodes the body into the whole request struct: it hides a body

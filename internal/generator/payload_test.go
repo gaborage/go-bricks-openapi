@@ -65,8 +65,10 @@ func TestSuccessEnvelopeAnnotatesOnlyBareObject(t *testing.T) {
 }
 
 // TestReferencedSchemaNamesWalksResponseResolution pins that a response's
-// Resolution marks the components its ref leaves name, that a resolved
-// well-known payload marks nothing, and that a request is never walked.
+// Resolution marks the components its ref leaves name and that a resolved
+// well-known payload marks nothing. A request's Resolution marks its ref
+// leaves too (an anonymous struct request's body fields, issue 171), never
+// the request's own name.
 func TestReferencedSchemaNamesWalksResponseResolution(t *testing.T) {
 	timeShape := named(goTypeTimeTime)
 	requestRes := refTo("Hidden")
@@ -76,14 +78,14 @@ func TestReferencedSchemaNamesWalksResponseResolution(t *testing.T) {
 		{Method: "POST", Path: "/req", Request: &models.TypeInfo{Name: "Req", Resolution: &requestRes}},
 	}
 	got := referencedSchemaNames(routes, map[string]*models.TypeInfo{})
-	assert.Equal(t, map[string]bool{"Address": true}, got)
+	assert.Equal(t, map[string]bool{"Address": true, "Hidden": true}, got)
 }
 
 // TestPayloadNamesComponentArms covers each arm of payloadNamesComponent.
 func TestPayloadNamesComponentArms(t *testing.T) {
 	timeShape := named(goTypeTimeTime)
 	items := sliceOf(named("Item"))
-	times := sliceOf(ptrOf(named(goTypeTimeTime)))
+	uuids := sliceOf(ptrOf(named(goTypeUUID)))
 	bare := models.TypeShape{Kind: models.ShapeSlice}
 	cases := []struct {
 		name string
@@ -94,7 +96,7 @@ func TestPayloadNamesComponentArms(t *testing.T) {
 		{"jose", &models.TypeInfo{Name: "UUID", JOSE: true, Resolution: &timeShape}, true},
 		{"resolved", &models.TypeInfo{Name: "Time", Shape: &timeShape, Resolution: &timeShape}, false},
 		{"struct slice", &models.TypeInfo{Name: "Item", Shape: &items}, true},
-		{"well-known element", &models.TypeInfo{Name: "Time", Shape: &times}, false},
+		{"project struct named like a well-known type", &models.TypeInfo{Name: "UUID", Package: "uuid", Shape: &uuids}, true},
 		{"slice without element", &models.TypeInfo{Name: "Item", Shape: &bare}, true},
 		{"registered", &models.TypeInfo{Name: "Item"}, true},
 	}
@@ -106,7 +108,8 @@ func TestPayloadNamesComponentArms(t *testing.T) {
 }
 
 // TestStructSlicePayloadSchema pins a registered struct slice: an array of
-// $ref to its element, unless the element is well-known.
+// $ref to its element, even when the element is a project struct spelled like
+// a well-known type (a local uuid.UUID).
 func TestStructSlicePayloadSchema(t *testing.T) {
 	items := sliceOf(ptrOf(named("Item")))
 	got := responsePayloadSchema(&models.TypeInfo{Name: "Item", Shape: &items})
@@ -114,8 +117,6 @@ func TestStructSlicePayloadSchema(t *testing.T) {
 	assert.Equal(t, refPath("Item"), got.Items.Ref)
 
 	uuids := sliceOf(named(goTypeUUID))
-	got = responsePayloadSchema(&models.TypeInfo{Name: "UUID", Shape: &uuids})
-	require.NotNil(t, got.Items)
-	assert.Empty(t, got.Items.Ref)
-	assert.Equal(t, formatUUID, got.Items.Format)
+	got = responsePayloadSchema(&models.TypeInfo{Name: "UUID", Package: "uuid", Shape: &uuids})
+	assert.Equal(t, &OpenAPIProperty{Type: typeArray, Items: &OpenAPIProperty{Ref: refPath("UUID")}}, got)
 }
