@@ -42,6 +42,11 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.POST(hr, r, "/literal-status-write", m.literalStatusWrite, server.WithTags("shapes"))
 	server.POST(hr, r, "/ambiguous", m.ambiguous, server.WithTags("shapes"))
 	server.POST(hr, r, "/conditional-status", m.conditionalStatus, server.WithTags("shapes"))
+	server.POST(hr, r, "/literal", m.literal, server.WithTags("shapes"))
+	server.POST(hr, r, "/literal-meta", m.literalMeta, server.WithTags("shapes"))
+	server.POST(hr, r, "/named-bare", m.namedBare, server.WithTags("shapes"))
+	server.POST(hr, r, "/created-then-error", m.createdThenError, server.WithTags("shapes"))
+	server.POST(hr, r, "/created-then-ok-literal", m.createdThenOKLiteral, server.WithTags("shapes"))
 }
 
 // direct returns the constructor call directly -> 202.
@@ -99,4 +104,39 @@ func (m *Module) conditionalStatus(req ItemReq, ctx server.HandlerContext) (serv
 		res.Status = http.StatusCreated
 	}
 	return res, nil
+}
+
+// literal returns a Result composite literal directly with a nil error -> 201.
+func (m *Module) literal(req ItemReq, ctx server.HandlerContext) (server.Result[ItemResponse], server.IAPIError) {
+	return server.Result[ItemResponse]{Status: http.StatusCreated, Data: toResponse(req)}, nil
+}
+
+// literalMeta returns a ResultWithMeta composite literal directly -> 202.
+func (m *Module) literalMeta(req ItemReq, ctx server.HandlerContext) (server.ResultWithMeta[ItemResponse], server.IAPIError) {
+	return server.ResultWithMeta[ItemResponse]{Status: http.StatusAccepted, Data: toResponse(req)}, nil
+}
+
+// namedBare binds its first named result and returns with no results -> 201.
+func (m *Module) namedBare(req ItemReq, ctx server.HandlerContext) (res server.Result[ItemResponse], apiErr server.IAPIError) {
+	res = server.Created(toResponse(req))
+	return
+}
+
+// createdThenError ends on a zero-value literal returned with a non-nil error.
+// go-bricks ignores the result when the error is non-nil, so the literal does
+// not override the earlier Created -> 201 (plus the inferred 404).
+func (m *Module) createdThenError(req ItemReq, ctx server.HandlerContext) (server.Result[ItemResponse], server.IAPIError) {
+	if req.Name != "" {
+		return server.Created(toResponse(req)), nil
+	}
+	return server.Result[ItemResponse]{}, server.NewNotFoundError("item")
+}
+
+// createdThenOKLiteral ends on a literal with no Status and a nil error. The
+// last recognised return wins, and that literal is served as 200 -> 200.
+func (m *Module) createdThenOKLiteral(req ItemReq, ctx server.HandlerContext) (server.Result[ItemResponse], server.IAPIError) {
+	if req.Name == "new" {
+		return server.Created(toResponse(req)), nil
+	}
+	return server.Result[ItemResponse]{Data: toResponse(req)}, nil
 }
