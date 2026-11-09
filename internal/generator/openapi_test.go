@@ -3705,6 +3705,12 @@ func TestPathTemplateVars(t *testing.T) {
 		{name: "multiple vars", path: "/orgs/{orgID}/users/{id}", expected: []string{"orgID", "id"}},
 		{name: "catch-all wildcard stays literal", path: "/files/*", expected: nil},
 		{name: "bare braces are too short to be a var", path: "/{}", expected: nil},
+		{name: "mid-segment var at end", path: "/m/a{x}", expected: []string{"x"}},
+		{name: "mid-segment var before literal segment", path: "/files/file_{name}/raw", expected: []string{"name"}},
+		{name: "two vars in one segment", path: "/r/{a}-{b}", expected: []string{"a", "b"}},
+		{name: "var name containing a colon", path: "/n/a{x:y}", expected: []string{"x:y"}},
+		{name: "literal colon beside a var", path: "/x/:a{b}", expected: []string{"b"}},
+		{name: "unclosed brace is not a var", path: "/u/{id", expected: nil},
 	}
 
 	for _, tt := range tests {

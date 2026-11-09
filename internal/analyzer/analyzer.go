@@ -2031,16 +2031,21 @@ func lookupConst(name string, scopes constScopes, at token.Pos, pkgConsts map[st
 }
 
 // normalizePath converts an Echo-style route path into OpenAPI 3.0 path
-// templating. Echo names path parameters with a leading colon (":id"); OpenAPI
-// templates them with braces ("{id}"). Each "/"-delimited segment is rewritten
-// independently so literal segments and the leading/trailing slashes are
-// preserved verbatim:
+// templating. It follows echo's DefaultRouter.Add: an unescaped ":" starts a
+// path parameter anywhere in a segment, its name running to the next "/"
+// (further colons included), and OpenAPI templates it with braces. An escaped
+// "\:" is a literal colon; echo drops the backslash, so the path does too.
+// Everything else is preserved verbatim:
 //
 //	/users/:id             -> /users/{id}
 //	/orgs/:orgID/users/:id -> /orgs/{orgID}/users/{id}
+//	/files/file_:name/raw  -> /files/file_{name}/raw
+//	/n/a:x:y               -> /n/a{x:y}
+//	/e/a\:x                -> /e/a:x
+//	/x/\:a:b               -> /x/:a{b}
 //
-// A bare ":" with no name is left untouched (defensive — Echo would not register
-// such a route, and emitting "{}" would produce an invalid template).
+// A bare ":" with no name is left untouched (defensive — emitting "{}" would
+// produce an invalid template).
 //
 // Echo catch-all wildcards ("/files/*", "/assets/*filepath") are intentionally
 // left as literal segments. Templating them ("{path}") would require a matching
@@ -2054,14 +2059,26 @@ func normalizePath(path string) string {
 		return path
 	}
 
-	segments := strings.Split(path, "/")
-	for i, seg := range segments {
-		if strings.HasPrefix(seg, ":") && len(seg) > 1 {
-			segments[i] = "{" + seg[1:] + "}"
+	var b strings.Builder
+	b.Grow(len(path) + 2)
+	for i := 0; i < len(path); i++ {
+		switch {
+		case strings.HasPrefix(path[i:], `\:`):
+			b.WriteByte(':')
+			i++
+		case path[i] == ':':
+			name, _, _ := strings.Cut(path[i+1:], "/")
+			if name == "" {
+				b.WriteByte(':')
+				continue
+			}
+			b.WriteString("{" + name + "}")
+			i += len(name)
+		default:
+			b.WriteByte(path[i])
 		}
 	}
-
-	return strings.Join(segments, "/")
+	return b.String()
 }
 
 // extractConstants adds the file's package-level string constants to the
