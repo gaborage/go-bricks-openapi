@@ -720,6 +720,25 @@ const joseUndocumentedDescription = "JOSE compact serialization (signed-then-enc
 	"is a base64url-encoded JWE compact form whose plaintext, after\n" +
 	"decrypt+verify, is its type's own JSON encoding, which is not documented.\n"
 
+// joseAnonymousDescription is joseDescription for a JOSE request of anonymous
+// struct type (issue 171): its plaintext is that struct, which has no
+// component to name.
+const joseAnonymousDescription = "JOSE compact serialization (signed-then-encrypted). The wire payload\n" +
+	"is a base64url-encoded JWE compact form whose plaintext, after\n" +
+	"decrypt+verify, is the JSON encoding of the handler's anonymous\n" +
+	"request struct, which has no schema component.\n"
+
+// joseRequestDescription is a JOSE request's RequestBody description: an
+// anonymous struct request's, whose Resolution is the struct itself, names
+// no component (joseAnonymousDescription); any other's is joseDescription of
+// its Name.
+func joseRequestDescription(req *models.TypeInfo) string {
+	if req.Name == "" && req.Resolution != nil && req.Resolution.Kind == models.ShapeStruct {
+		return joseAnonymousDescription
+	}
+	return joseDescription(req.Name)
+}
+
 // jsonMediaRef builds a single-entry application/json content map whose schema is
 // a $ref to the named component.
 func jsonMediaRef(name string) map[string]*OpenAPIMediaType {
@@ -1309,7 +1328,10 @@ func (g *OpenAPIGenerator) generateSchemasFromTypes(types map[string]*models.Typ
 // Marshaler request (#111) is not in the registry and keeps only its
 // parameters; its body, if any, comes from its Resolution, so its own name is
 // never a $ref. This walk is the only marking its struct parameters get, and
-// without it their $refs would dangle.
+// without it their $refs would dangle. A request's Resolution is walked too:
+// an anonymous struct request (issue 171) has no name at all, and its inline
+// requestBody $refs the structs its body fields name, which only that walk
+// marks.
 //
 // The other half of that invariant lives in generateSchemasFromTypes: a type with
 // non-empty Fields but ZERO serializable properties (e.g. every field json:"-")
@@ -1330,13 +1352,16 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 		// $ref, but joseDescription names the plaintext component in prose ("see
 		// #/components/schemas/<Name>") whenever Name is set, so a named JOSE
 		// payload is always referenced.
-		if r.Response != nil && payloadNamesComponent(r.Response) {
-			out[schemaName(r.Response)] = true
+		// A bodiless (NoContent) response documents no body, so it marks
+		// nothing: neither its Name nor its Resolution's refs.
+		resp := bodyPayload(r.Response)
+		if resp != nil && payloadNamesComponent(resp) {
+			out[schemaName(resp)] = true
 		}
 		// A resolved payload names no component itself; the structs its
 		// Resolution reaches are $ref'd from its schema.
-		if r.Response != nil && r.Response.Resolution != nil {
-			addRefNames(out, *r.Response.Resolution)
+		if resp != nil && resp.Resolution != nil {
+			addRefNames(out, *resp.Resolution)
 		}
 		// Requests, by contrast, are referenced ONLY when JOSE — for the same
 		// joseDescription prose reason. See the note above on why non-JOSE request
@@ -1350,17 +1375,33 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 	return out
 }
 
-// addRequestFieldRefs marks the $ref leaves of a request's own Fields. A
-// registered request's Fields are its registry entry's, so this repeats what
-// addFieldSchemaRefs marks; a struct Marshaler request (#111) is not in the
-// registry and keeps only parameters, whose struct targets would otherwise go
-// unmarked. It never marks the request's own name.
+// bodyPayload returns a response payload that documents a body, or nil for
+// none: a nil response or a bodiless (NoContent) one, whose payload a 204
+// route keeps (issue 144) but never puts on the wire.
+func bodyPayload(resp *models.TypeInfo) *models.TypeInfo {
+	if resp == nil || resp.NoContent {
+		return nil
+	}
+	return resp
+}
+
+// addRequestFieldRefs marks the $ref leaves of a request's own Fields and of
+// its Resolution. A registered request's Fields are its registry entry's, so
+// this repeats what addFieldSchemaRefs marks; a struct Marshaler request
+// (#111) is not in the registry and keeps only parameters, whose struct
+// targets would otherwise go unmarked. An anonymous struct request (issue
+// 171) is not in the registry either: its body fields live only in its
+// Resolution, whose $ref targets its inline requestBody names. It never marks
+// the request's own name.
 func addRequestFieldRefs(out map[string]bool, req *models.TypeInfo) {
 	if req == nil {
 		return
 	}
 	for j := range req.Fields {
 		addRefNames(out, req.Fields[j].ResolvedShape())
+	}
+	if req.Resolution != nil {
+		addRefNames(out, *req.Resolution)
 	}
 }
 
@@ -1477,7 +1518,7 @@ func routeTypeRegistry(project *models.Project) map[string]*models.TypeInfo {
 		for ri := range project.Modules[mi].Routes {
 			route := &project.Modules[mi].Routes[ri]
 			add(route.Request)
-			add(route.Response)
+			add(bodyPayload(route.Response))
 		}
 	}
 	return types
@@ -1520,11 +1561,11 @@ func objectProperties(fields []models.FieldInfo) (props map[string]*OpenAPIPrope
 // verbatim (URL, ID), as encoding/json writes a field with no tag or one
 // whose tag names no key (json:",omitempty"). ok is false for a path, query
 // or header param, emitted as an OpenAPI parameter (extractParameters), never
-// as a property; for a json:"-" field; and for a field with neither a JSON
-// name nor a Go name, which no JSON document can address (keyed "", it would
-// also put "" in required).
+// as a property; for a bare json:"-" field (JSONSkip: json:"-," is keyed
+// "-"); and for a field with neither a JSON name nor a Go name, which no JSON
+// document can address (keyed "", it would also put "" in required).
 func propertyName(field *models.FieldInfo) (string, bool) {
-	if field.ParamType != "" || field.JSONName == "-" {
+	if field.ParamType != "" || field.JSONSkip {
 		return "", false
 	}
 	if field.JSONName != "" {
@@ -2155,9 +2196,10 @@ func appendMissingPathParams(params []Parameter, path string) []Parameter {
 // buildRequestBody builds the Request Body Object for a request type. When the
 // request carries a jose: tag the Content-Type is application/jose with a
 // string-token wire schema and the plaintext shape is named in the description
-// (a JOSE request with no Name, a struct Marshaler type, gets the nameless
-// joseUndocumentedDescription); a request with a Resolution (a struct Marshaler
-// request, #111) is typed from it, {} or a string; otherwise the schema is a
+// (a JOSE request with no Name gets a nameless one: joseRequestDescription);
+// a request with a Resolution (a struct Marshaler request, #111, {} or a
+// string, or an anonymous struct request, issue 171, an inline object) is
+// typed from it; otherwise the schema is a
 // $ref to the documented plaintext component. Takes the
 // full TypeInfo (rather than a positional bool) so future flags compose without
 // signature churn.
@@ -2174,7 +2216,7 @@ func (g *OpenAPIGenerator) buildRequestBody(reqType *models.TypeInfo) *OpenAPIRe
 	case isJOSE:
 		// Description on the RequestBody Object (spec-compliant) names the plaintext
 		// schema; the Media Type schema describes the JOSE string-token wire shape.
-		rb.Description = joseDescription(schemaName)
+		rb.Description = joseRequestDescription(reqType)
 		rb.Content = map[string]*OpenAPIMediaType{mediaJOSE: {Schema: joseTokenSchema()}}
 	case reqType != nil && reqType.Resolution != nil:
 		rb.Content = map[string]*OpenAPIMediaType{mediaJSON: {Schema: payloadShapeSchema(*reqType.Resolution)}}

@@ -605,7 +605,8 @@ func (v bindingView) registrar(ident *ast.Ident) (registrarPrefix, bool) {
 // untraceable value — but that hides a known registrar declared further out.
 // Its prefix is unknown: keeping the hidden registrar's prefix would be a
 // guess, and so would dropping it, so hiding a group registrar makes it
-// untraced. Hiding the prefix-less root registrar leaves it a prefix-less
+// untraced. Hiding the prefix-less root registrar (or a group whose
+// canonical prefix is empty, such as Group("/")) leaves it a prefix-less
 // registrar, the treatment every registrar the walk cannot trace gets.
 func (v bindingView) shadowedRegistrar(ident *ast.Ident) (registrarPrefix, bool) {
 	for _, from := range v.scopes.hidden(ident.Name, ident.Pos()) {

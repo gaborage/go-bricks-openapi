@@ -102,7 +102,7 @@ func TestAddFieldSchemaRefsWalksResolution(t *testing.T) {
 		*resolved(named("C"), marshalerOf("C", sliceOf(refTo("Hidden")))),
 		*resolved(named("D"), recursiveLeaf("D")),
 		*resolved(named("T"), sliceOf(textLeaf("T"))),
-		{Name: "E", JSONName: "-", Shape: named("Excluded")},
+		{Name: "E", JSONName: "-", JSONSkip: true, Shape: named("Excluded")},
 	}}
 	out := map[string]bool{}
 	addFieldSchemaRefs(out, map[string]*models.TypeInfo{"Rows": ti, "nil": nil})

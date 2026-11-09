@@ -282,7 +282,24 @@ paths:
           in: path
           required: true
           schema:
+            type: integer
+            format: int64
+        - name: q
+          in: query
+          required: false
+          schema:
             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                body:
+                  type: string
+              required:
+                - body
       responses:
         "200":
           description: Successful response
