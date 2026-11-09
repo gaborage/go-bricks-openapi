@@ -169,13 +169,16 @@ func (a *ProjectAnalyzer) registerPayloadRefs(r *models.TypeShape, sites map[str
 // payload with a resolved schema: a registered struct (or a well-known type
 // that keeps its name), or a payload whose schema has no fallback leaf. So
 // Result[AnyD] ({}) is typed and Result[Tier] ({}) is not, and an anonymous
-// struct, like a registered one, is typed whatever its fields hold. doctor and
-// generate's route count classify routes by it.
+// struct, like a registered one, is typed whatever its fields hold. A
+// params-only anonymous struct request (anonymousRequest) has neither a Name
+// nor a Resolution, only its parameter Fields, and is typed too: a nameless
+// response keeps no Fields. doctor and generate's route count classify
+// routes by it.
 func IsTypedPayload(ti *models.TypeInfo) bool {
 	if ti == nil {
 		return false
 	}
-	if ti.Resolution == nil && ti.Name != "" {
+	if ti.Resolution == nil && (ti.Name != "" || len(ti.Fields) > 0) {
 		return true
 	}
 	s := ti.ResolvedShape()
@@ -289,12 +292,7 @@ func (a *ProjectAnalyzer) requestParamFields(s structSite) ([]models.FieldInfo, 
 	fields := a.extractStructFields(s.st, s.file, s.path, map[string]struct{}{a.structIdentity(s.st): {}}, 0)
 	a.quietEmbeds = false
 	total := len(fields)
-	params := fields[:0]
-	for i := range fields {
-		if fields[i].ParamType != "" {
-			params = append(params, fields[i])
-		}
-	}
+	params := paramFields(fields)
 	for i := range params {
 		a.warnResolvedField(&params[i])
 	}
@@ -305,6 +303,18 @@ func (a *ProjectAnalyzer) requestParamFields(s structSite) ([]models.FieldInfo, 
 	// with UnmarshalJSON) reads its body through its own method, so it gets
 	// a body.
 	return params, total > 0 && len(params) == total
+}
+
+// paramFields returns the path, query and header fields of fields, in order,
+// in a new slice.
+func paramFields(fields []models.FieldInfo) []models.FieldInfo {
+	var params []models.FieldInfo
+	for i := range fields {
+		if fields[i].ParamType != "" {
+			params = append(params, fields[i])
+		}
+	}
+	return params
 }
 
 // structMarshalerJOSE reports whether the struct a Marshaler payload names

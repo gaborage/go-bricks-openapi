@@ -147,8 +147,10 @@ type TypeInfo struct {
 	// Resolution is its text or Marshaler leaf, its Name is cleared and its
 	// Fields are only its parameters. A params-only (at least one field, every
 	// one a parameter), non-JOSE one keeps its Name and parameter Fields and has
-	// no Resolution; a zero-field one is not params-only. Also nil for a
-	// registered struct payload,
+	// no Resolution; a zero-field one is not params-only. A request of
+	// anonymous struct type (issue 171) has no Name and keeps its parameter
+	// Fields; its Resolution is the struct itself, set when it has a body
+	// field or a jose tag. Also nil for a registered struct payload,
 	// the NoContentResult marker, a payload whose root resolves to nothing, and
 	// a nameless composite whose resolution has an unmodelled leaf
 	// (map[string]Fn), which is typed from its Shape like the field of its type.
