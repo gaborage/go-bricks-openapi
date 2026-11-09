@@ -463,3 +463,123 @@ func handle(server *fake, ctx Ctx) (Result, Err) {
 `
 	assert.Equal(t, 0, statusForSource(t, src, nil))
 }
+
+// TestExtractSuccessStatusReturnedLiteral covers a Result / ResultWithMeta
+// composite literal returned directly (issue 142). The literal counts only when
+// the error result is the bare nil identifier: go-bricks ignores the result
+// whenever the error is non-nil, so a zero-value literal on an error path must
+// not override an earlier success status.
+func TestExtractSuccessStatusReturnedLiteral(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"result_status_created", "\treturn server.Result[Resp]{Status: http.StatusCreated, Data: req}, nil", 201},
+		{"result_with_meta_status_accepted", "\treturn server.ResultWithMeta[Resp]{Status: http.StatusAccepted}, nil", 202},
+		{"no_status_key", "\treturn server.Result[Resp]{Data: req}, nil", 200},
+		{"unreadable_status", "\treturn server.Result[Resp]{Status: code}, nil", 0},
+		{
+			"zero_literal_with_error_constructor_after_created",
+			"\tif req.Name != \"\" {\n\t\treturn server.Created(req), nil\n\t}\n\treturn server.Result[Resp]{}, server.NewNotFoundError(\"item\")",
+			201,
+		},
+		{
+			"status_literal_with_error_variable_after_created",
+			"\tif req.Name != \"\" {\n\t\treturn server.Created(req), nil\n\t}\n\treturn server.Result[Resp]{Status: http.StatusAccepted}, apiErr",
+			201,
+		},
+		{
+			"no_status_literal_with_nil_after_created",
+			"\tif req.Name == \"new\" {\n\t\treturn server.Created(req), nil\n\t}\n\treturn server.Result[Resp]{Data: req}, nil",
+			200,
+		},
+		{
+			"literal_inside_closure_ignored",
+			"\tf := func() (server.Result[Resp], server.IAPIError) {\n\t\treturn server.Result[Resp]{Status: http.StatusAccepted}, nil\n\t}\n\t_ = f\n\treturn server.Created(req), nil",
+			201,
+		},
+		{"non_server_literal", "\treturn Envelope[Resp]{Status: http.StatusCreated}, nil", 0},
+		// Parsed only, never type-checked: a lone literal has no nil error result.
+		{"literal_without_error_result", "\treturn server.Result[Resp]{Status: http.StatusCreated}", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, statusForHandlerBody(t, tt.body))
+		})
+	}
+}
+
+// TestExtractSuccessStatusReturnedLiteralAlias verifies a returned literal
+// honours a local alias of the server import.
+func TestExtractSuccessStatusReturnedLiteralAlias(t *testing.T) {
+	src := `package mod
+
+import (
+	"net/http"
+
+	srv "github.com/gaborage/go-bricks/server"
+)
+
+func handle(req Req, ctx srv.HandlerContext) (srv.Result[Resp], srv.IAPIError) {
+	return srv.Result[Resp]{Status: http.StatusCreated}, nil
+}
+`
+	assert.Equal(t, 201, statusForSource(t, src, map[string]struct{}{"srv": {}}))
+	assert.Equal(t, 0, statusForSource(t, src, map[string]struct{}{"other": {}}),
+		"an unrelated alias set must not match the srv qualifier")
+}
+
+// TestExtractSuccessStatusNakedReturn covers a return with no results in a
+// handler with named results: it returns the first named result as bound.
+func TestExtractSuccessStatusNakedReturn(t *testing.T) {
+	const signature = `package mod
+
+import "github.com/gaborage/go-bricks/server"
+
+func handle(req Req, ctx server.HandlerContext) (res server.Result[Resp], apiErr server.IAPIError) {
+`
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"bound_named_result", "\tres = server.Created(req)\n\treturn", 201},
+		{"unbound_named_result", "\treturn", 0},
+		{
+			"ambiguous_binding",
+			"\tres = server.Created(req)\n\tif req.Name == \"\" {\n\t\tres = server.Accepted(req)\n\t}\n\treturn",
+			0,
+		},
+		{"other_identifier_bound", "\tout := server.Created(req)\n\t_ = out\n\treturn", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, statusForSource(t, signature+tt.body+"\n}\n", nil))
+		})
+	}
+}
+
+// TestFirstNamedResult covers the signature shapes the naked-return path reads
+// its result name from.
+func TestFirstNamedResult(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"named", "package p\nfunc f() (res R, err E) { return }\n", "res"},
+		{"grouped", "package p\nfunc f() (a, b R) { return }\n", "a"},
+		{"unnamed", "package p\nfunc f() (R, E) { return nil, nil }\n", ""},
+		{"no_results", "package p\nfunc f() {}\n", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, err := parser.ParseFile(token.NewFileSet(), "f.go", tt.src, 0)
+			require.NoError(t, err)
+			fn, ok := file.Decls[0].(*ast.FuncDecl)
+			require.True(t, ok)
+			assert.Equal(t, tt.want, firstNamedResult(fn))
+		})
+	}
+}

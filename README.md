@@ -290,6 +290,10 @@ nested Go module, is not.
   string is not assignable to type main.Scope`) instead of binding; from v0.58.1
   it binds. The binding warning follows the v0.58.1+ binder, so it does not
   warn on such a parameter.
+- On go-bricks v0.45.0 through v0.60.x, a `validationErrors` entry also
+  carries `value`, and `details` is sent in any development environment even
+  with `app.debug` off. The `ErrorResponse` schema follows v0.61.0+, so it
+  documents neither.
 - A generic type instantiation (`Page[Address]`, `pg.List[string]`, or a
   named type declared as one, `type AddrPage Page[Address]`) is not resolved
   until #114 substitutes its type arguments. A field or a path, query or
