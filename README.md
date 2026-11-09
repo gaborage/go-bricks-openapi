@@ -130,15 +130,20 @@ exit "$status"
 
 ### Comment directives
 
-A directive is an `//openapi:<name>[ <args>]` comment in a comment group whose
-**last line sits directly above a route registration call**. A directive
-anywhere else (inside the call, on the handler, above an enclosing `if`,
-separated from the call by a blank line, after code on the same line as in
-`server.GET(...) //openapi:public`, or above a registration the analyzer never
-walks) is not attached to any route and raises a warning. Anything after a
-second `//` on the directive line is a human comment and is ignored. Directives
-are this tool's own annotations — go-bricks parses none of them, so they have
-no runtime effect.
+A directive is an `//openapi:<name>[ <args>]` comment, and each name has one
+placement. A **route directive** (`public`, `errors`) sits in a comment group
+whose **last line sits directly above a route registration call**. A route
+directive anywhere else (inside the call, on the handler, above an enclosing
+`if`, separated from the call by a blank line, after code on the same line as
+in `server.GET(...) //openapi:public`, or above a registration the analyzer
+never walks) is not attached to any route and raises a warning. The **type
+directive** (`schema`) sits in the **doc comment of a package-level type
+declaration**: above an ungrouped `type X …`, or above one type inside a
+`type ( … )` group. Placement is judged per name, so one comment group can
+apply one directive and report another. Anything after a second `//` on the
+directive line is a human comment and is ignored. Directives are this tool's
+own annotations — go-bricks parses none of them, so they have no runtime
+effect.
 
 ```go
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
@@ -155,6 +160,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 | --- | --- | --- |
 | `//openapi:public` | none | Emits `security: []` for that operation. By default every operation carries the tenant security scheme; a route that needs no auth (health checks, login, webhooks) opts out this way. go-bricks itself has no per-route tenant opt-out API as of v0.71.1. |
 | `//openapi:errors` | a single-line, comma-separated list of status codes (400–599); whitespace after commas is tolerated | Adds one error response per code, referencing the same error envelope the route's `400`/`500` use, described with the canonical HTTP status text. |
+| `//openapi:schema` | a type, exactly `string`, `integer`, `number` or `boolean`, and an optional format token copied verbatim (`//openapi:schema string decimal`) | States the wire schema of a Marshaler type the project declares (a Stated schema). In every JSON body position (field, pointer field, slice item, map value, nested container, `Result[T]` payload, request body) the type is documented as exactly `{type: <type>}` plus `format` when given, inline with no component, instead of `{}`; a pointer field adds `nullable: true`, a `Result[*T]` payload does not. Its Marshaler warning is not raised, and its routes count as typed. `validate` keywords stay dropped (a slice's or map's cardinality and `required` are kept) and `example:` is converted to the stated type, dropped when it has no valid form in it. Path, query and header parameters and JOSE routes are unchanged. It has no effect, with a warning, on a type that is not a Marshaler type, on a generic type, on a plain alias (state it on the aliased type, whose Stated schema the alias uses), on a type with an encode-side method (`MarshalJSON`, `MarshalJSONTo`, `MarshalText`, `AppendText`) outside its value method set, and on a type that encodes as text both ways stated as anything but `string`. An alias that is itself a marshal-method receiver takes its own directive; a defined type over the type and a struct embedding it do not inherit it. Repeated identical lines collapse; lines that differ, in one doc comment or across build-tagged declarations of the type, warn and none applies. |
 
 Every operation keeps its unconditional `400`/`500` responses (plus `401`/`415`
 on JOSE routes); a declared code that is already present is deduplicated
@@ -198,13 +204,20 @@ Inference does not touch the success response. A 4xx/5xx returned as a non-error
 `Result` — `server.NewResult(http.StatusNotFound, x)`, `Result{Status: 409}` —
 is a misuse the tool does not model: the operation keeps its `200` default.
 
-An unknown `//openapi:<name>`, an argument on `//openapi:public`, and a
-malformed or out-of-range `errors` token each raise an analyzer warning naming
-the offender — so they fail `generate --strict` with no artifact emitted. The
-remaining valid `errors` tokens are still applied. A recognised directive that
-attaches to no route raises the same kind of warning, once per comment group and
-located at its first recognised directive:
-`mod/module.go:12: directive public has no effect — it is not directly above an analyzed route registration`.
+An unknown `//openapi:<name>`, an argument on `//openapi:public`, a
+malformed or out-of-range `errors` token, and missing, unknown or extra
+`schema` arguments each raise an analyzer warning naming the offender — so
+they fail `generate --strict` with no artifact emitted. The remaining valid
+`errors` tokens are still applied. A recognised directive outside its
+placement (a Detached directive) raises the same kind of warning, once per
+comment group and located at its first recognised directive:
+`mod/module.go:12: directive public has no effect — it is not directly above an analyzed route registration`,
+or, for `schema` (above a route registration, on a type declared in a function
+body, trailing a declaration, or above a non-type declaration),
+`directive schema has no effect — it is not in the doc comment of a package-level type declaration`.
+A `schema` directive on a whole `type ( … )` group, and one on a type that
+cannot take it, raises its own "has no effect" warning instead, whether or not
+a route reaches the type.
 A directive above a registration the analyzer recognises but then drops (an
 unresolved path; a group prefix that is unresolvable, depends on control flow or
 cannot be traced; a non-static method) is covered by that registration's own
@@ -316,8 +329,16 @@ nested Go module, is not.
     request with no field at all is not such a request and gets a body (`{}`
     with a warning, or `{type: string}`), on a GET too. A jose-tagged struct
     Marshaler type keeps its route `application/jose`, but its plaintext is
-    not documented (the request and response descriptions say so). There is
-    no per-field override yet (#117).
+    not documented (the request and response descriptions say so). A
+    Marshaler type the project declares can state its wire schema with
+    `//openapi:schema` (see Comment directives), which replaces `{}` and the
+    warning. That one schema is trusted in both directions, so it can be
+    wrong for a type that encodes or decodes through its methods in one
+    direction only. It has no effect on a type with an encode-side method
+    outside its value method set, which stays `{}` with its warning; it goes
+    on the declaration of the name the Marshaler warning names, so an alias
+    that is itself a marshal-method receiver takes its own. Out-of-module
+    types (`decimal.Decimal`) cannot carry it (#148).
 
   A defined type over a Marshaler type drops its declared methods and is
   documented from the underlying type, but keeps what an underlying struct's

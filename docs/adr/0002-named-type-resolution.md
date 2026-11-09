@@ -17,7 +17,7 @@ A named non-struct type (`type Tags []string`, `type Cents int64`, `b.Cents`) wi
 
 - Every remaining fallback on a field will warn, as payload fallbacks already do, so `--strict` will newly fail for fields of unresolvable out-of-module types (`decimal.Decimal`) and of Marshaler types. There is no per-field override yet.
 
-  > **Amended (2026-10-10, lands with #117).** ADR 0004 (proposed) will add a Stated schema: an `//openapi:schema` type directive in a Marshaler type's doc comment will state its wire schema, which will be used in place of `{}` and silence the warning. It will cover only types the project declares; out-of-module types (`decimal.Decimal`) will still have no override.
+  > **Amended (2026-10-10, landed with #117).** ADR 0004 adds a Stated schema: an `//openapi:schema` type directive in a Marshaler type's doc comment states its wire schema, which is used in place of `{}` and silences the warning. It covers only types the project declares; out-of-module types (`decimal.Decimal`) still have no override.
 
 - A pointer to a named slice or map (`*Tags`) will be documented exactly as the pointer to its underlying type (`*[]string`): no `nullable`.
 - A type whose marshal methods are all on its pointer is a Marshaler type in every position. `encoding/json` ignores such a method on a non-addressable value — a map value, or a payload returned by value — and writes the underlying type there. But one component serves every position and both `Result[T]` and `Result[*T]` routes, so modelling each position would make the shared schema wrong for one of them; `{}` accepts both forms.

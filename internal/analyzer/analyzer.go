@@ -127,6 +127,8 @@ type ProjectAnalyzer struct {
 	usedNames        map[string]struct{}                // final schema names already taken
 	directives       map[string]map[int]*directiveGroup // filename -> end line of a Directive comment group -> the group and its attached flag
 	directiveFiles   map[string]struct{}                // files already Directive-indexed (keeps diagnostics once-only)
+	statedDecls      map[string][]statedDecl            // typeKey -> declarations whose doc comment carries a valid schema directive (#117)
+	schemaVerdicts   map[string]schemaVerdict           // typeKey -> memoized Stated schema verdict (schemaVerdictFor)
 	depthWarned      bool                               // once-latch: registration-depth cap already warned this run
 	tagWarned        map[string]struct{}                // dedupes malformed-struct-tag warnings by "file:line:col"
 	uintptrWarned    map[string]struct{}                // dedupes uintptr-field warnings by "file:line:col"
@@ -258,6 +260,8 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	a.pkgCache = make(map[string]map[string]*ast.File)
 	a.directives = make(map[string]map[int]*directiveGroup)
 	a.directiveFiles = make(map[string]struct{})
+	a.statedDecls = nil
+	a.schemaVerdicts = nil
 	a.nameAssign = make(map[string]string)
 	a.usedNames = make(map[string]struct{})
 	a.depthWarned = false

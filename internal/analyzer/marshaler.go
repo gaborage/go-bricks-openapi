@@ -44,14 +44,31 @@ const (
 
 // marshalerMethods is what a type's own method set says about its JSON form.
 type marshalerMethods struct {
-	encode  bool       // MarshalJSON, MarshalJSONTo, MarshalText or AppendText
-	decode  bool       // UnmarshalJSON, UnmarshalJSONFrom or UnmarshalText
-	first   string     // the first matching method name met, for the warning
-	has     methodBits // every matching method
-	ptrText bool       // MarshalText is not in the value method set (pointer receiver only)
+	encode bool       // MarshalJSON, MarshalJSONTo, MarshalText or AppendText
+	decode bool       // UnmarshalJSON, UnmarshalJSONFrom or UnmarshalText
+	first  string     // the first matching method name met, for the warning
+	has    methodBits // every matching method
+	ptr    methodBits // the matching methods not in the value method set (pointer receiver only)
+	// owner is the typeKey of the type declaring the first matching method,
+	// when it is declared on the type or a type it aliases (depth 0); "" when
+	// it is promoted, or well-known. A Stated schema is looked up on it.
+	owner string
 }
 
 func (m marshalerMethods) found() bool { return m.encode || m.decode }
+
+// ptrEncode returns the first encode-side method (in marshalerMethodOrder)
+// that is not in the value method set, or "" when every one is: encoding/json
+// skips such a method on a non-addressable value (a map value, a payload
+// returned by value), so no one Stated schema fits every position (#117).
+func (m marshalerMethods) ptrEncode() string {
+	for _, method := range marshalerMethodOrder {
+		if sig := marshalerSignatures[method]; sig.encode && m.ptr&sig.bit != 0 {
+			return method
+		}
+	}
+	return ""
+}
 
 // textBothWays reports whether encoding/json writes and reads the type as a
 // JSON string on every toolchain and in every position (ADR 0002):
@@ -64,7 +81,7 @@ func (m marshalerMethods) found() bool { return m.encode || m.decode }
 // decode target is always addressable.
 func (m marshalerMethods) textBothWays() bool {
 	const jsonSpecific = bitMarshalJSON | bitMarshalJSONTo | bitUnmarshalJSON | bitUnmarshalJSONFrom
-	return m.has&bitMarshalText != 0 && m.has&bitUnmarshalText != 0 && m.has&jsonSpecific == 0 && !m.ptrText
+	return m.has&bitMarshalText != 0 && m.has&bitUnmarshalText != 0 && m.has&jsonSpecific == 0 && m.ptr&bitMarshalText == 0
 }
 
 // typePred tests one parameter or result type; imports maps the method's own
@@ -185,7 +202,7 @@ func (a *ProjectAnalyzer) marshalerCandidate(decl ast.Decl, name string) (*ast.F
 }
 
 // with records one matching method: its side, its name if it is the first,
-// and whether a MarshalText is missing from the value method set (ptrOnly).
+// and whether it is missing from the value method set (ptrOnly).
 func (m marshalerMethods) with(method string, ptrOnly bool) marshalerMethods {
 	if m.first == "" {
 		m.first = method
@@ -194,7 +211,9 @@ func (m marshalerMethods) with(method string, ptrOnly bool) marshalerMethods {
 	m.encode = m.encode || sig.encode
 	m.decode = m.decode || !sig.encode
 	m.has |= sig.bit
-	m.ptrText = m.ptrText || (ptrOnly && method == methodMarshalText)
+	if ptrOnly {
+		m.ptr |= sig.bit
+	}
 	return m
 }
 
@@ -277,6 +296,7 @@ type methodEntry struct {
 	ambiguous bool   // two embeds tie at the shallowest depth: in no method set, and it hides deeper ones
 	ptrOnly   bool   // in the pointer's method set only: declared on *T, or promoted only through value embeds from such
 	owner     string // depth 0: the declaring type, as a warning names it
+	ownerKey  string // depth 0: the declaring type's typeKey, "" for a well-known type
 	via       string // depth > 0: the embedded field it is promoted through, as written
 }
 
@@ -306,6 +326,9 @@ func (ms methodSet) marshaler(typeName string) (m marshalerMethods, fb fieldFall
 		}
 		if !m.found() {
 			fb = e.fallback(typeName, method)
+			if e.depth == 0 {
+				m.owner = e.ownerKey
+			}
 		}
 		m = m.with(method, e.ptrOnly)
 	}
@@ -357,11 +380,11 @@ func promote(embeds []embedMethods) methodSet {
 // not: a non-exact one is in the method set, so it shadows a promoted one.
 func (a *ProjectAnalyzer) declaredMethods(name string, c resolveCtx) methodSet {
 	ms := methodSet{}
-	owner := c.display(name)
+	owner, ownerKey := c.display(name), c.typeKey(name)
 	for _, pf := range a.samePackageFiles(c.file, c.path) {
 		a.visitMarshalerMethods(pf.file, name, func(method string, exact, ptr bool) {
 			e := ms[method]
-			ms[method] = methodEntry{exact: e.exact || exact, ptrOnly: e.ptrOnly || ptr, owner: owner}
+			ms[method] = methodEntry{exact: e.exact || exact, ptrOnly: e.ptrOnly || ptr, owner: owner, ownerKey: ownerKey}
 		})
 	}
 	return ms

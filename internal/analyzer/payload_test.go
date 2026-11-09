@@ -604,6 +604,8 @@ func TestIsTypedPayload(t *testing.T) {
 		{"ref", resolved(tsSlice(models.TypeShape{Kind: models.ShapeRef, Name: "User"})), true},
 		{"kind-only", resolved(models.TypeShape{Kind: models.ShapeKindOnly, Name: kindInteger}), true},
 		{"marshaler", resolved(models.TypeShape{Kind: models.ShapeMarshaler, Name: rowTier}), false},
+		{"stated marshaler", resolved(tsSlice(models.TypeShape{Kind: models.ShapeMarshaler, Name: rowTier,
+			Stated: &models.StatedSchema{Type: "string", Format: "decimal"}})), true},
 		{"text", resolved(tsSlice(models.TypeShape{Kind: models.ShapeText, Name: rowTier})), true},
 		{"recursive", resolved(tsMap(models.TypeShape{Kind: models.ShapeRecursive, Name: "Tree"})), false},
 		{"uintptr", resolved(tsPrim(goTypeUintptr)), false},

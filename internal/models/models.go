@@ -280,6 +280,17 @@ const (
 	ShapeText ShapeKind = "text"
 )
 
+// StatedSchema is a Stated schema (CONTEXT.md): the scalar wire schema the
+// project states for a Marshaler type it declares, with an
+// `//openapi:schema <type> [<format>]` type directive. Type is string,
+// integer, number or boolean; Format is copied verbatim and may be empty.
+// A plain value, so another source (a project-level mapping) can feed the
+// same Resolution.
+type StatedSchema struct {
+	Type   string
+	Format string
+}
+
 // TypeShape is the syntactic container structure of a field's declared type,
 // decoded once from the AST at extraction. Purely syntactic — it carries no
 // registry knowledge, and an Instantiation's arguments are decoded but never
@@ -306,6 +317,14 @@ type TypeShape struct {
 	// Struct is the anonymous struct a ShapeStruct carries; nil for every
 	// other kind. One pointer, like Inst, for the same reason.
 	Struct *AnonymousStruct
+	// Stated is the Stated schema of a ShapeMarshaler or ShapeText leaf
+	// whose type carries an applicable `//openapi:schema` directive; nil
+	// otherwise, and for every other kind. A stated leaf keeps its Kind (so
+	// every Marshaler-type rule, such as dropping validate keywords, still
+	// applies to it) but emits exactly the stated type and format in place
+	// of {} or a bare string, raises no Marshaler warning, and is not a
+	// fallback leaf. One pointer, like Inst.
+	Stated *StatedSchema
 }
 
 // AnonymousStruct is what a ShapeStruct node carries. A Shape's carries only

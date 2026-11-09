@@ -296,7 +296,8 @@ func isMarshalerLeaf(s models.TypeShape) bool {
 // from the field's Resolution, and the option quotes it when it is a boolean,
 // integer or number: a named scalar (Cents), a well-known number (json.Number,
 // time.Duration) and a kind-only scalar count by what they resolve to. A
-// Marshaler leaf is {} or a string, so it never counts. Both encoding/json
+// Marshaler leaf never counts, even one whose Stated schema is a number
+// (#117): encoding/json writes it through its own method. Both encoding/json
 // engines ignore the option past one pointer, so the Resolution may hold at
 // most one pointer level, written in the field's own declaration (*int64,
 // *Cents). A parameter is bound by its own tag, never by json.
@@ -313,7 +314,7 @@ func isMarshalerLeaf(s models.TypeShape) bool {
 // the Shape tells a pointer written in the field's own declaration from one
 // reached through a named type.
 func isQuotedScalar(field *models.FieldInfo, prop *OpenAPIProperty) bool {
-	if !field.JSONString || field.ParamType != "" {
+	if !field.JSONString || field.ParamType != "" || isMarshalerLeaf(field.ResolvedShape()) {
 		return false
 	}
 	if prop.Type != typeBoolean && !isEffectiveNumeric(prop.Type) {
