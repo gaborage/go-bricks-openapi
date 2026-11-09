@@ -761,9 +761,10 @@ func jsonMediaRef(name string) map[string]*OpenAPIMediaType {
 //     discovered (closing the "orphan component" window).
 //
 // Error responses: 400 and 500 are always present. 400 covers binding AND
-// validation failures — v0.45 returns 400 with details.validationErrors for
-// both; 422 only arises from handler-level BusinessLogicError, which is
-// invisible to static analysis, so it is never emitted here. The error schema
+// validation failures — go-bricks (v0.45 through v0.71) returns 400 with
+// details.validationErrors for both; 422 only arises from handler-level
+// BusinessLogicError, which is invisible to static analysis, so it is never
+// emitted here. The error schema
 // is JOSEErrorEnvelope for JOSE routes (pre-trust failures leak nothing beyond
 // {code,message}), RawErrorResponse for raw routes, and ErrorResponse
 // otherwise.
@@ -1212,8 +1213,10 @@ func successResponseSchema() *OpenAPISchema {
 // errorResponseSchema mirrors go-bricks' error envelope:
 // {error:{code,message,details?}, meta:{timestamp,traceId}}. details carries
 // contextual payloads — a 400 validation failure holds
-// validationErrors: [{field,message,value}] — and is emitted only in
-// development environments, so it is documented but not required.
+// validationErrors: [{field,message}] — and go-bricks sends it only when
+// app.debug is on in a development environment, so it is documented but not
+// required. The shape follows go-bricks v0.61.0+: v0.45.0 through v0.60.x also
+// sent a value key per entry and gated details on the environment alone.
 func errorResponseSchema() *OpenAPISchema {
 	return &OpenAPISchema{
 		Type: typeObject,
@@ -1226,7 +1229,7 @@ func errorResponseSchema() *OpenAPISchema {
 					propNameMessage: {Type: typeString, Description: "Human-readable error message"},
 					"details": {
 						Type:        typeObject,
-						Description: "Contextual error payload, emitted in development environments only",
+						Description: "Contextual error payload, sent only when app.debug is enabled in a development environment",
 						Properties: map[string]*OpenAPIProperty{
 							"validationErrors": {
 								Type: typeArray,
@@ -1240,7 +1243,6 @@ func errorResponseSchema() *OpenAPISchema {
 									Properties: map[string]*OpenAPIProperty{
 										"field":   {Type: typeString, Description: "Field that failed validation"},
 										"message": {Type: typeString, Description: "Violated validation rule"},
-										"value":   {Description: "Submitted value (any type)"},
 									},
 								},
 							},
@@ -2154,16 +2156,25 @@ func (g *OpenAPIGenerator) extractParameters(route *models.Route) ([]Parameter, 
 }
 
 // pathTemplateVars returns the {var} names of a path template, in order of
-// appearance. Literal segments (including Echo catch-all "*" remnants) are
-// ignored.
+// appearance. A {var} may sit anywhere in a segment ("/m/a{x}"), as kin's own
+// path normalization reads it. Literal text (including Echo catch-all "*"
+// remnants), an empty "{}" and an unclosed "{" are ignored.
 func pathTemplateVars(path string) []string {
 	var vars []string
-	for _, seg := range strings.Split(path, "/") {
-		if len(seg) > 2 && strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}") {
-			vars = append(vars, seg[1:len(seg)-1])
+	for {
+		_, rest, ok := strings.Cut(path, "{")
+		if !ok {
+			return vars
 		}
+		name, after, closed := strings.Cut(rest, "}")
+		if !closed {
+			return vars
+		}
+		if name != "" {
+			vars = append(vars, name)
+		}
+		path = after
 	}
-	return vars
 }
 
 // appendMissingPathParams appends a required string path parameter for every
