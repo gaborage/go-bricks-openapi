@@ -27,6 +27,8 @@ var anonRequestParityCorpus = []struct {
 	{"Paging; Z int ´json:\"z\"´", false},
 	{"X int ´json:\"x\" validate:\"required,min=1,max=9\"´; M string ´json:\"m\" validate:\"email\"´; S []string ´json:\"s\" validate:\"min=1,dive,max=3\"´", false},
 	{"O Office ´json:\"o\"´; Os []*Office ´json:\"os\"´; Q string ´query:\"q\" validate:\"max=5\"´", true},
+	{"time.Time; ID int64 ´param:\"id\"´", false},
+	{"time.Time; ID int64 ´param:\"id\"´; Z int ´json:\"z\"´", true},
 }
 
 // writeAnonRequestParityProject writes a module with, per corpus row i, a
@@ -49,6 +51,8 @@ func writeAnonRequestParityProject(t *testing.T, dir string) {
 	module := `package anonreqparity
 
 import (
+	"time"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -66,6 +70,8 @@ type Paging struct {
 	Size int ` + "`query:\"size\" validate:\"max=50\"`" + `
 }
 type Office struct{ Floor int ` + "`json:\"floor\"`" + ` }
+
+var _ time.Time
 
 ` + decls.String() + `
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {

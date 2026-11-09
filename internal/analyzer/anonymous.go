@@ -269,7 +269,8 @@ func (a *ProjectAnalyzer) registerInlineRefs(fields []models.FieldInfo, astFile 
 // inline requestBody, from which the generator drops the parameters. A
 // params-only, non-JOSE one gets no Resolution, so no requestBody, as its
 // named twin gets none. A literal that embeds a Marshaler type is one (ADR
-// 0002) and is documented as a struct Marshaler request (#111). written is
+// 0002) and is documented as a struct Marshaler request (#111), params-only
+// ones included: those, too, get no Resolution and no warning. written is
 // the request type as written.
 func (a *ProjectAnalyzer) anonymousRequest(lit *ast.StructType, written string, astFile *ast.File, filePath string) *models.TypeInfo {
 	site := structSite{st: lit, pkg: astFile.Name.Name, file: astFile, path: filePath}
@@ -279,7 +280,13 @@ func (a *ProjectAnalyzer) anonymousRequest(lit *ast.StructType, written string, 
 	c.st.inline = true
 	r := a.resolveShape(a.typeShape(lit), c)
 	if r.Kind != models.ShapeStruct || r.Struct == nil {
-		ti.Fields, _ = a.requestParamFields(site)
+		var paramsOnly bool
+		ti.Fields, paramsOnly = a.requestParamFields(site)
+		if paramsOnly && !ti.JOSE {
+			// Bound from parameters only, as populateMarshalerRequest's
+			// named twin: no body, so no Resolution and no warning.
+			return ti
+		}
 		ti.Resolution = &r
 		a.warnMarshalerRequest(written, c.st.first)
 		return ti

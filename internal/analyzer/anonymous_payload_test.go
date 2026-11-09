@@ -388,7 +388,8 @@ func TestAnonymousJOSERequest(t *testing.T) {
 // raises the warnings its named twin does: a parameter go-bricks cannot bind
 // raises the binding warning, once, and a literal embedding a Marshaler type
 // is a struct Marshaler request, typed {} with its warning, its parameters
-// kept.
+// kept, unless it is params-only: then, as its named twin, it has no body,
+// so no Resolution and no warning.
 func TestAnonymousRequestWarnsAsNamed(t *testing.T) {
 	route, warnings := analyzeNonStructRequest(t, "req struct{ F func() `query:\"f\"`; A int }, ctx server.HandlerContext", "Address")
 	require.Len(t, warnings, 1)
@@ -396,8 +397,15 @@ func TestAnonymousRequestWarnsAsNamed(t *testing.T) {
 	require.NotNil(t, route.Request)
 
 	route, warnings = analyzeNonStructRequest(t, "req struct{ time.Time; ID int64 `param:\"id\"` }, ctx server.HandlerContext", "Address")
+	assert.Empty(t, warnings)
+	require.NotNil(t, route.Request)
+	require.Len(t, route.Request.Fields, 1)
+	assert.Equal(t, "id", route.Request.Fields[0].ParamName)
+	assert.Nil(t, route.Request.Resolution)
+
+	route, warnings = analyzeNonStructRequest(t, "req struct{ time.Time; ID int64 `param:\"id\"`; Z int `json:\"z\"` }, ctx server.HandlerContext", "Address")
 	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "request type struct{time.Time; ID int64}: ")
+	assert.Contains(t, warnings[0], "request type struct{time.Time; ID int64; Z int}: ")
 	require.NotNil(t, route.Request)
 	require.Len(t, route.Request.Fields, 1)
 	assert.Equal(t, "id", route.Request.Fields[0].ParamName)
