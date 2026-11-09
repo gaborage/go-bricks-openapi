@@ -141,7 +141,7 @@ func renders(t *testing.T, ti *models.TypeInfo) map[string]string {
 	for i := range ti.Fields {
 		f := &ti.Fields[i]
 		key := f.JSONName
-		if key == "" || key == jsonSkipValue {
+		if key == "" || f.JSONSkip {
 			key = f.Name
 		}
 		if f.Resolution == nil {

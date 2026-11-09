@@ -347,7 +347,8 @@ type FieldInfo struct {
 	// extraction; hand-built test Projects must stamp it too — the generator
 	// has NO string-parsing fallback.
 	Shape         TypeShape
-	JSONName      string            // Parsed from `json:"name"` tag
+	JSONName      string            // Parsed from `json:"name"` tag; "-" for `json:"-,"` too
+	JSONSkip      bool              // Only a bare `json:"-"`: encoding/json skips the field. Never decide skipping by JSONName
 	JSONString    bool              // The json tag carries the ",string" option (`json:"id,string"`)
 	ParamType     string            // "path", "query", "header", or "" for body fields
 	ParamName     string            // Parsed from `param:"name"`, `query:"name"`, or `header:"name"` tags

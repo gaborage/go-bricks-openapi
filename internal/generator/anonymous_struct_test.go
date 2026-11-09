@@ -100,6 +100,7 @@ func TestInlineObjectMatchesComponent(t *testing.T) {
 	param := bodyField("ID", "", prim(goTypeInt64))
 	param.ParamType, param.ParamName = "path", "id"
 	skip := bodyField("Skip", "-", prim(goTypeInt))
+	skip.JSONSkip = true
 	fields := []models.FieldInfo{
 		requiredX(), param, skip, bodyField("", "", prim(goTypeString)), bodyField("Untagged", "", prim(goTypeBool)),
 		bodyField("Office", "office", refTo("Office")),

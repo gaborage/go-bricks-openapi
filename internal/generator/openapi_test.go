@@ -2545,7 +2545,7 @@ func TestTypeInfoToSchemaSkipsIgnoredFields(t *testing.T) {
 		Package: "test",
 		Fields: []models.FieldInfo{
 			{Name: "ID", Shape: prim("int64"), JSONName: "id", Required: true},
-			{Name: "Internal", Shape: prim("string"), JSONName: "-"}, // Should be skipped
+			{Name: "Internal", Shape: prim("string"), JSONName: "-", JSONSkip: true}, // Should be skipped
 			{Name: "Name", Shape: prim("string"), JSONName: "name"},
 		},
 	}

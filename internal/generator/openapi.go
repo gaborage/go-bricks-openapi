@@ -1575,11 +1575,11 @@ func objectProperties(fields []models.FieldInfo) (props map[string]*OpenAPIPrope
 // verbatim (URL, ID), as encoding/json writes a field with no tag or one
 // whose tag names no key (json:",omitempty"). ok is false for a path, query
 // or header param, emitted as an OpenAPI parameter (extractParameters), never
-// as a property; for a json:"-" field; and for a field with neither a JSON
-// name nor a Go name, which no JSON document can address (keyed "", it would
-// also put "" in required).
+// as a property; for a bare json:"-" field (JSONSkip: json:"-," is keyed
+// "-"); and for a field with neither a JSON name nor a Go name, which no JSON
+// document can address (keyed "", it would also put "" in required).
 func propertyName(field *models.FieldInfo) (string, bool) {
-	if field.ParamType != "" || field.JSONName == "-" {
+	if field.ParamType != "" || field.JSONSkip {
 		return "", false
 	}
 	if field.JSONName != "" {
