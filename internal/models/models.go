@@ -101,10 +101,13 @@ type TypeInfo struct {
 	// not registered (#111): the route stays application/jose, and its plaintext
 	// goes undocumented.
 	JOSE bool
-	// NoContent is true when the response type is server.NoContentResult — the
-	// route returns 204 with no body. Such a TypeInfo carries no Name/Fields, so
-	// no component schema is generated; later passes use this flag to emit a 204
-	// response instead of a 200 with a body.
+	// NoContent is true when the response type is server.NoContentResult, or
+	// when the handler's resolved success status is 204 (issue 144) — the route
+	// returns 204 with no body. The NoContentResult marker carries no
+	// Name/Fields; a 204 payload keeps its Name and Shape as written (so doctor
+	// still counts it typed) but is neither registered nor resolved. Either
+	// way no component schema is generated and nothing is marked referenced;
+	// the generator emits a bodiless 204 instead of a response with a body.
 	NoContent bool
 	// Shape is the decoded type of a response payload — the T of
 	// server.Result[T] / server.ResultWithMeta[T], or of a bare handler return
@@ -144,8 +147,10 @@ type TypeInfo struct {
 	// Resolution is its text or Marshaler leaf, its Name is cleared and its
 	// Fields are only its parameters. A params-only (at least one field, every
 	// one a parameter), non-JOSE one keeps its Name and parameter Fields and has
-	// no Resolution; a zero-field one is not params-only. Also nil for a
-	// registered struct payload,
+	// no Resolution; a zero-field one is not params-only. A request of
+	// anonymous struct type (issue 171) has no Name and keeps its parameter
+	// Fields; its Resolution is the struct itself, set when it has a body
+	// field or a jose tag. Also nil for a registered struct payload,
 	// the NoContentResult marker, a payload whose root resolves to nothing, and
 	// a nameless composite whose resolution has an unmodelled leaf
 	// (map[string]Fn), which is typed from its Shape like the field of its type.

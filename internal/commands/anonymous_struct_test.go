@@ -14,16 +14,15 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/gaborage/go-bricks-openapi/internal/analyzer"
-	"github.com/gaborage/go-bricks-openapi/internal/specvalidate"
 	"github.com/gaborage/go-bricks-openapi/internal/testutil"
 )
 
-// Issue 118, end to end: an anonymous struct payload is typed, and
-// an anonymous struct request warns.
+// Issues 118 and 171, end to end: an anonymous struct payload is typed, and
+// so is an anonymous struct request.
 
 // anonPayloadModSrc is a module whose request-less routes return anonymous
-// struct payloads, and whose /create route takes an anonymous struct
-// request.
+// struct payloads, and whose /create, /note and /sealed routes take an
+// anonymous struct request: params-only, with a body, and JOSE.
 const anonPayloadModSrc = `package svc
 
 import (
@@ -63,6 +62,20 @@ func (m *Module) stamp(ctx server.HandlerContext) (server.Result[struct {
 }
 
 func (m *Module) create(req struct{ ID int64 ` + "`param:\"id\"`" + ` }, ctx server.HandlerContext) (server.Result[int64], server.IAPIError) {
+	return server.Result[int64]{}, nil
+}
+
+func (m *Module) note(req struct {
+	ID   int64  ` + "`param:\"id\"`" + `
+	Body string ` + "`json:\"body\"`" + `
+}, ctx server.HandlerContext) (server.Result[int64], server.IAPIError) {
+	return server.Result[int64]{}, nil
+}
+
+func (m *Module) sealed(req struct {
+	_   struct{} ` + "`jose:\"decrypt=a,verify=b\"`" + `
+	PAN string   ` + "`json:\"pan\"`" + `
+}, ctx server.HandlerContext) (server.Result[int64], server.IAPIError) {
 	return server.Result[int64]{}, nil
 }
 `
@@ -105,42 +118,29 @@ func TestRunGenerateAnonymousPayloadsPassStrict(t *testing.T) {
 	assert.Contains(t, digMap(t, list, "items", "properties"), "b")
 }
 
-// TestRunGenerateAnonymousRequestFailsStrict pins that an anonymous struct
-// request raises one warning, so generate --strict fails with no artifact,
-// while a non-strict run emits a valid document with no requestBody and no
-// component for the request.
-func TestRunGenerateAnonymousRequestFailsStrict(t *testing.T) {
+// TestRunGenerateAnonymousRequestPassesStrict pins issue 171 end to end: an
+// anonymous struct request raises no warning, so generate --strict
+// --validate succeeds, documenting its body inline with no component for the
+// request.
+func TestRunGenerateAnonymousRequestPassesStrict(t *testing.T) {
 	dir := writeNonStructRequestProject(t, "struct{ Street string `json:\"street\"` }", "Address")
-	a := analyzer.New(dir)
-	_, err := a.AnalyzeProject()
-	require.NoError(t, err)
-	require.Len(t, a.Warnings(t.Context()), 1)
-	assert.True(t, strings.HasPrefix(a.Warnings(t.Context())[0], "request type struct{Street string} is an anonymous struct"),
-		a.Warnings(t.Context())[0])
-
 	out := filepath.Join(t.TempDir(), outputFileName)
 	var runErr error
 	stdout := testutil.CaptureStdout(t, func() {
-		runErr = runGenerate(t.Context(), &GenerateOptions{ProjectRoot: dir, OutputFile: out})
+		runErr = runGenerate(t.Context(), &GenerateOptions{ProjectRoot: dir, OutputFile: out, Strict: true, Validate: true})
 	})
 	require.NoError(t, runErr, stdout)
-	assert.Equal(t, "Warnings: 1", warningsSummary(t, stdout))
+	assert.Equal(t, "Warnings: 0", warningsSummary(t, stdout))
 	content, err := os.ReadFile(out)
 	require.NoError(t, err)
-	require.NoError(t, specvalidate.Validate(t.Context(), content))
 	var spec OpenAPISpec
 	require.NoError(t, yaml.Unmarshal(content, &spec))
-	assert.NotContains(t, digMap(t, spec.Paths, "/items", "post"), "requestBody")
+	body := digMap(t, spec.Paths, "/items", "post", "requestBody", "content", "application/json", "schema")
+	assert.Equal(t, "object", body["type"])
+	assert.Contains(t, digMap(t, body, "properties"), "street")
 	schemas, ok := spec.Components["schemas"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, []string{"Address", "ErrorResponse"}, slices.Sorted(maps.Keys(schemas)))
-
-	strictOut := filepath.Join(t.TempDir(), outputFileName)
-	testutil.CaptureStdout(t, func() {
-		runErr = runGenerate(t.Context(), &GenerateOptions{ProjectRoot: dir, OutputFile: strictOut, Strict: true})
-	})
-	require.Error(t, runErr, "--strict must fail on an anonymous struct request")
-	assert.NoFileExists(t, strictOut)
 }
 
 // TestRunEmptyAnonymousRequestPassesStrict pins that a struct{} request,
@@ -172,16 +172,17 @@ func TestRunEmptyAnonymousRequestPassesStrict(t *testing.T) {
 
 // TestDoctorClassifiesAnonymousStructs pins doctor's verdict: an anonymous
 // struct payload is a typed response, one that embeds a Marshaler type other
-// than a text one is not, and an anonymous struct request is an untyped
-// request.
+// than a text one is not, and an anonymous struct request is a typed request,
+// params-only, with a body, or JOSE (issue 171).
 func TestDoctorClassifiesAnonymousStructs(t *testing.T) {
 	dir := writeAnonPayloadProject(t, "\tserver.GET(hr, r, \"/item\", m.item)\n\tserver.GET(hr, r, \"/list\", m.list)\n"+
-		"\tserver.GET(hr, r, \"/stamp\", m.stamp)\n\tserver.POST(hr, r, \"/create/:id\", m.create)\n")
+		"\tserver.GET(hr, r, \"/stamp\", m.stamp)\n\tserver.POST(hr, r, \"/create/:id\", m.create)\n"+
+		"\tserver.POST(hr, r, \"/note/:id\", m.note)\n\tserver.POST(hr, r, \"/sealed\", m.sealed)\n")
 	project, err := analyzer.New(dir).AnalyzeProject()
 	require.NoError(t, err)
 	stats := calculateProjectStats(project)
-	assert.Equal(t, 3, stats.TypedResponseRoutes, "item, list and create's int64")
-	assert.Equal(t, 0, stats.TypedRequestRoutes)
+	assert.Equal(t, 5, stats.TypedResponseRoutes, "item, list, and create's, note's and sealed's int64")
+	assert.Equal(t, 3, stats.TypedRequestRoutes, "create, note and sealed")
 	untyped := append([]string{}, stats.UntypedRoutes...)
 	sort.Strings(untyped)
 	assert.Equal(t, []string{"stamp"}, untyped)

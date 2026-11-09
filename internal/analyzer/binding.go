@@ -100,8 +100,16 @@ var wellKnownBinderKinds = map[string]binderKind{
 // raises the binding warning as its one warning (setBindingWarning). A
 // request that is no struct of the module is not checked.
 func (a *ProjectAnalyzer) warnUnbindableParams(ti *models.TypeInfo, astFile *ast.File, filePath string) {
-	site, ok := a.payloadStructSite(ti, astFile, filePath)
-	if !ok || site.st.Fields == nil {
+	if site, ok := a.payloadStructSite(ti, astFile, filePath); ok {
+		a.warnUnbindableSite(site)
+	}
+}
+
+// warnUnbindableSite checks the parameters of the request struct declared at
+// site, a named struct or an anonymous request's literal, before its fields
+// are extracted (warnUnbindableParams).
+func (a *ProjectAnalyzer) warnUnbindableSite(site structSite) {
+	if site.st.Fields == nil {
 		return
 	}
 	for _, field := range site.st.Fields.List {
