@@ -3360,6 +3360,63 @@ func TestNormalizePath(t *testing.T) {
 			in:   "/files/:bucket/*",
 			want: "/files/{bucket}/*",
 		},
+		// echo starts a parameter at any unescaped ':', its name running to the
+		// next '/', and reads "\:" as a literal colon, dropping the backslash.
+		{
+			name: "mid_segment_param_at_end",
+			in:   "/m/a:x",
+			want: "/m/a{x}",
+		},
+		{
+			name: "mid_segment_param_then_literal_segment",
+			in:   "/files/file_:name/raw",
+			want: "/files/file_{name}/raw",
+		},
+		{
+			name: "param_name_runs_to_next_slash_past_colons",
+			in:   "/n/a:x:y",
+			want: "/n/a{x:y}",
+		},
+		{
+			name: "param_name_keeps_dot",
+			in:   "/d/:id.json",
+			want: "/d/{id.json}",
+		},
+		{
+			name: "segment_start_param_name_keeps_colon",
+			in:   "/k/:a:b",
+			want: "/k/{a:b}",
+		},
+		{
+			name: "nameless_colon_at_path_end_left_untouched",
+			in:   "/u/a:",
+			want: "/u/a:",
+		},
+		{
+			name: "escaped_colon_mid_segment_is_literal",
+			in:   `/e/a\:x`,
+			want: "/e/a:x",
+		},
+		{
+			name: "escaped_colon_then_param_in_same_segment",
+			in:   `/x/\:a:b`,
+			want: "/x/:a{b}",
+		},
+		{
+			name: "escaped_colon_at_segment_start_is_literal",
+			in:   `/s/\:lit`,
+			want: "/s/:lit",
+		},
+		{
+			name: "nameless_mid_segment_colon_left_untouched",
+			in:   "/a:/b",
+			want: "/a:/b",
+		},
+		{
+			name: "backslash_not_before_colon_kept",
+			in:   `/a\b/:id`,
+			want: `/a\b/{id}`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
