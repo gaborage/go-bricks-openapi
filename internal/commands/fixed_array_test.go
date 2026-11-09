@@ -18,17 +18,20 @@ import (
 )
 
 // Schemas the fixed-size array rows (#98) expect, as the YAML decoder reads
-// them back. byteItem is exactly what a bare byte field emits.
+// them back. byteItem is exactly what a bare byte field emits, its 0..255
+// type range included (#107).
 var (
-	byteItem     = map[string]any{"type": "integer", "format": "int32", "minimum": 0}
-	byteArray    = map[string]any{"type": "array", "items": byteItem}
+	byteItem  = map[string]any{"type": "integer", "format": "int32", "minimum": 0, "maximum": 255}
+	byteArray = map[string]any{"type": "array", "items": byteItem}
+	// uint16Array is a [4]uint16 field: byteArray with uint16's 0..65535 range.
+	uint16Array  = map[string]any{"type": "array", "items": map[string]any{"type": "integer", "format": "int32", "minimum": 0, "maximum": 65535}}
 	int64Array   = map[string]any{"type": "array", "items": map[string]any{"type": "integer", "format": "int64"}}
 	base64String = map[string]any{"type": "string", "format": "byte"}
 	addressRef   = map[string]any{"$ref": "#/components/schemas/Address"}
 	addressArray = map[string]any{"type": "array", "items": addressRef}
 	// boundedArray is a [4]byte or [4]uint16 field under
 	// validate:"min=1,max=4,dive,max=200": cardinality on the array, the dive
-	// bound on its items, over the unsigned floor.
+	// bound on its items, overwriting the type range's maximum.
 	boundedArray = map[string]any{
 		"type": "array", "minItems": 1, "maxItems": 4,
 		"items": map[string]any{"type": "integer", "format": "int32", "minimum": 0, "maximum": 200},
@@ -59,11 +62,11 @@ var fixedArrayFields = []fixedArrayField{
 	{json: "bounded", goType: "[4]byte", tags: `validate:"min=1,max=4,dive,max=200"`, want: boundedArray},
 	{json: "boundedWide", goType: "[4]uint16", tags: `validate:"min=1,max=4,dive,max=200"`, want: boundedArray},
 	{json: "sample", goType: "[4]byte", tags: `example:"AQIDBA=="`, want: byteArray}, // an array takes no scalar example
-	{json: "sampleWide", goType: "[4]uint16", tags: `example:"AQIDBA=="`, want: byteArray},
+	{json: "sampleWide", goType: "[4]uint16", tags: `example:"AQIDBA=="`, want: uint16Array},
 	// Must not move.
 	{json: "flags", goType: "[4]Flag", want: byteArray},
 	{json: "bytePtrs", goType: "[4]*byte", want: byteArray},
-	{json: "wide", goType: "[4]uint16", want: byteArray},
+	{json: "wide", goType: "[4]uint16", want: uint16Array},
 	{json: "ints", goType: "[3]int", want: int64Array},
 	{json: "maybeInts", goType: "*[4]int", want: int64Array},
 	{json: "blobs", goType: "[2][]byte", want: map[string]any{"type": "array", "items": base64String}},

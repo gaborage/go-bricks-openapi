@@ -331,6 +331,11 @@ func payloadRows() []payloadRow {
 		// C1: struct and well-known payloads are unchanged.
 		{result: "server.Result[time.Time]", res: "time.Time", name: "Time"},
 		{result: "server.Result[[]*time.Time]", res: "[]*time.Time", name: "Time"},
+		// Issue 192: a genuine well-known slice or array payload carries a
+		// Resolution, so the generator never reaches its struct-slice $ref arm.
+		{result: "server.Result[[]time.Time]", res: "[]time.Time", name: "Time"},
+		{result: "server.Result[[2]time.Time]", res: "[N]time.Time", name: "Time"},
+		{result: "server.Result[[]json.RawMessage]", res: "[]json.RawMessage", name: "RawMessage"},
 		// C2: an aliased import names the well-known type, spelled as the
 		// tables spell it.
 		{result: "server.Result[t.Time]", res: "time.Time", name: "Time"},
@@ -351,6 +356,7 @@ func payloadRowsModule(rows []payloadRow) string {
 	return `package mod
 
 import (
+	"encoding/json"
 	"time"
 	t "time"
 
@@ -362,6 +368,7 @@ import (
 
 var _ = time.Now
 var _ t.Time
+var _ json.RawMessage
 
 type Module struct{}
 

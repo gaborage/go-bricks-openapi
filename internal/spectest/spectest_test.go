@@ -2,6 +2,7 @@ package spectest
 
 import (
 	"flag"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,9 +133,10 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 // validate pipeline over a project whose named scalars are declared in
 // build-tagged files. Build constraints are not evaluated, so when the
 // variants disagree on width the schema carries the type alone — no format,
-// no unsigned floor — rather than one target's width, in every position (map
-// values and nested slices included). When they agree, the builtin's format
-// and floor are kept.
+// no type-derived bounds — rather than one target's width, in every position
+// (map values and nested slices included). When they agree, the builtin's
+// format and type-derived bounds are kept (uint32: 0..4294967295, #107).
+// go-yaml decodes the 4.294967295e+09 maximum as a float64 and 0 as an int.
 func TestNamedScalarBuildTaggedWidths(t *testing.T) {
 	integer := map[string]any{"type": "integer"}
 	cases := []struct {
@@ -153,7 +155,7 @@ func TestNamedScalarBuildTaggedWidths(t *testing.T) {
 			amd64:      "type Word int64\ntype UWord uint32\n",
 			i386:       "type Word int64\ntype UWord uint32\n",
 			size:       map[string]any{"type": "integer", "format": "int64"},
-			count:      map[string]any{"type": "integer", "format": "int64", "minimum": 0},
+			count:      map[string]any{"type": "integer", "format": "int64", "minimum": 0, "maximum": float64(math.MaxUint32)},
 			sizesItems: map[string]any{"type": "integer", "format": "int64"},
 		},
 	}

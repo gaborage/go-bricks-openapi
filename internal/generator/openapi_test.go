@@ -1583,24 +1583,69 @@ func TestFieldInfoToPropertyWellKnownStdlibScalars(t *testing.T) {
 	})
 }
 
-func TestSetTypeAndFormatUnsignedMinimum(t *testing.T) {
-	// Unsigned integers carry minimum:0; signed integers do not. uint and
-	// uint32 take int64 because int32 cannot hold their range.
-	for _, ut := range []struct {
+// TestSetTypeAndFormatTypeRange pins the type-range pre-stamp (#107): each
+// integer width narrower than its emitted format carries its Go range as
+// inclusive minimum/maximum (never exclusive*), every other unsigned width the
+// minimum: 0 floor alone, and the remaining signed widths no bound at all.
+func TestSetTypeAndFormatTypeRange(t *testing.T) {
+	none := (*float64)(nil)
+	for _, c := range []struct {
 		goType, format string
-	}{{"uint", formatInt64}, {"uint8", formatInt32}, {"uint16", formatInt32}, {"uint32", formatInt64}, {"uint64", formatInt64}} {
+		min, max       *float64
+	}{
+		{"int8", formatInt32, floatPtr(-128), floatPtr(127)},
+		{"int16", formatInt32, floatPtr(-32768), floatPtr(32767)},
+		{"uint8", formatInt32, floatPtr(0), floatPtr(255)},
+		{"byte", formatInt32, floatPtr(0), floatPtr(255)},
+		{"uint16", formatInt32, floatPtr(0), floatPtr(65535)},
+		{"uint32", formatInt64, floatPtr(0), floatPtr(4294967295)},
+		{"uint", formatInt64, floatPtr(0), none},
+		{"uint64", formatInt64, floatPtr(0), none},
+		{"int32", formatInt32, none, none},
+		{"rune", formatInt32, none, none},
+		{"int", formatInt64, none, none},
+		{"int64", formatInt64, none, none},
+	} {
 		prop := &OpenAPIProperty{}
-		setTypeAndFormat(prop, prim(ut.goType))
-		assert.Equal(t, typeInteger, prop.Type, ut.goType)
-		assert.Equal(t, ut.format, prop.Format, ut.goType)
-		if assert.NotNil(t, prop.Minimum, "%s must carry minimum:0", ut.goType) {
-			assert.Equal(t, 0.0, *prop.Minimum, ut.goType)
-		}
+		setTypeAndFormat(prop, prim(c.goType))
+		assert.Equal(t, &OpenAPIProperty{Type: typeInteger, Format: c.format, Minimum: c.min, Maximum: c.max}, prop, c.goType)
 	}
-	for _, st := range []string{"int", "int8", "int16", "int32", "int64"} {
+	for _, ft := range []string{goTypeFloat32, goTypeFloat64, goTypeString, goTypeBool} {
 		prop := &OpenAPIProperty{}
-		setTypeAndFormat(prop, prim(st))
-		assert.Nil(t, prop.Minimum, "%s (signed) must NOT carry minimum", st)
+		setTypeAndFormat(prop, prim(ft))
+		assert.Nil(t, prop.Minimum, ft)
+		assert.Nil(t, prop.Maximum, ft)
+	}
+}
+
+// TestTypeRangeExplicitBounds pins how an explicit validate bound meets the
+// type-range pre-stamp (#107): it overwrites only the keyword the tag sets,
+// even when looser than the type's range (no clamp, no warning), and a
+// one-sided bound keeps the other side's stamp.
+func TestTypeRangeExplicitBounds(t *testing.T) {
+	gen := New(defaultTitle, defaultVersion, defaultDescription)
+	tru := boolPtr(true)
+	for name, c := range map[string]struct {
+		goType string
+		rules  map[string]string
+		want   *OpenAPIProperty
+	}{
+		"uint8 max=100": {goTypeUint8, map[string]string{"max": "100"},
+			&OpenAPIProperty{Minimum: floatPtr(0), Maximum: floatPtr(100)}},
+		"uint16 max=70000 (looser wins)": {goTypeUint16, map[string]string{"max": "70000"},
+			&OpenAPIProperty{Minimum: floatPtr(0), Maximum: floatPtr(70000)}},
+		"int8 min=-200 (looser wins)": {goTypeInt8, map[string]string{"min": "-200"},
+			&OpenAPIProperty{Minimum: floatPtr(-200), Maximum: floatPtr(127)}},
+		"int8 lt=50": {goTypeInt8, map[string]string{"lt": "50"},
+			&OpenAPIProperty{Minimum: floatPtr(-128), Maximum: floatPtr(50), ExclusiveMaximum: tru}},
+		"int16 gt=-10": {goTypeInt16, map[string]string{"gt": "-10"},
+			&OpenAPIProperty{Minimum: floatPtr(-10), Maximum: floatPtr(32767), ExclusiveMinimum: tru}},
+		"int8 gt=200 (empty range kept)": {goTypeInt8, map[string]string{"gt": "200"},
+			&OpenAPIProperty{Minimum: floatPtr(200), Maximum: floatPtr(127), ExclusiveMinimum: tru}},
+	} {
+		c.want.Type, c.want.Format = typeInteger, formatInt32
+		got := gen.fieldInfoToProperty(&models.FieldInfo{Shape: prim(c.goType), JSONName: "v", Constraints: c.rules})
+		assert.Equal(t, c.want, got, name)
 	}
 }
 
@@ -2545,7 +2590,7 @@ func TestTypeInfoToSchemaSkipsIgnoredFields(t *testing.T) {
 		Package: "test",
 		Fields: []models.FieldInfo{
 			{Name: "ID", Shape: prim("int64"), JSONName: "id", Required: true},
-			{Name: "Internal", Shape: prim("string"), JSONName: "-"}, // Should be skipped
+			{Name: "Internal", Shape: prim("string"), JSONName: "-", JSONSkip: true}, // Should be skipped
 			{Name: "Name", Shape: prim("string"), JSONName: "name"},
 		},
 	}
@@ -3385,7 +3430,7 @@ func TestFieldInfoToPropertyNamedScalarExample(t *testing.T) {
 // scalar the analyzer resolved to a kind but no builtin — its build-tagged
 // declarations disagree on width (type Word int64 / type Word int32), so no
 // single format holds on every target. The property is typed from the
-// kind-only leaf alone, with no format and no unsigned floor, directly, behind
+// kind-only leaf alone, with no format and no type-derived bounds, directly, behind
 // a pointer and as slice items; constraints and example coercion then apply
 // to that kind-only schema exactly as they always have.
 func TestFieldInfoToPropertyNamedScalarKindOnly(t *testing.T) {
@@ -3966,8 +4011,8 @@ func TestApplyExample(t *testing.T) {
 }
 
 // TestSetTypeAndFormatPredeclaredAliases locks Go's predeclared integer aliases:
-// byte is uint8 (integer/int32 with the unsigned minimum:0 pre-stamp and no
-// maximum) and rune is int32 (integer/int32, signed, so no minimum). uintptr has
+// byte is uint8 (integer/int32 with uint8's 0..255 type-range pre-stamp) and
+// rune is int32 (integer/int32, signed, so no bounds). uintptr has
 // no meaningful API contract and stays the object fallback.
 func TestSetTypeAndFormatPredeclaredAliases(t *testing.T) {
 	byteProp := &OpenAPIProperty{}
@@ -3977,13 +4022,16 @@ func TestSetTypeAndFormatPredeclaredAliases(t *testing.T) {
 	if assert.NotNil(t, byteProp.Minimum, "byte is unsigned: minimum:0") {
 		assert.Equal(t, 0.0, *byteProp.Minimum)
 	}
-	assert.Nil(t, byteProp.Maximum, "no unsigned type emits a maximum")
+	if assert.NotNil(t, byteProp.Maximum, "byte is uint8: maximum:255") {
+		assert.Equal(t, 255.0, *byteProp.Maximum)
+	}
 
 	runeProp := &OpenAPIProperty{}
 	setTypeAndFormat(runeProp, prim(goTypeRune))
 	assert.Equal(t, typeInteger, runeProp.Type)
 	assert.Equal(t, formatInt32, runeProp.Format)
 	assert.Nil(t, runeProp.Minimum, "rune is signed (int32)")
+	assert.Nil(t, runeProp.Maximum, "rune (int32) carries no type-derived bound")
 
 	// []rune is an array of int32 — NOT a base64 string (only []byte is).
 	runes := &OpenAPIProperty{}
@@ -4029,57 +4077,10 @@ func TestSetTypeAndFormatNestedByteSlice(t *testing.T) {
 	assert.Equal(t, formatByte, m.AdditionalProperties.Format)
 }
 
-// TestResponsePayloadSchemaWellKnownElement locks the items path for a NAMED
-// well-known element: []time.Time / []uuid.UUID payloads are arrays of the
-// well-known scalar. The element $ref branch must not win here — no component
-// is emitted for a well-known type, so the reference would dangle and the
-// document would fail validation.
-func TestResponsePayloadSchemaWellKnownElement(t *testing.T) {
-	for _, tc := range []struct {
-		elem, wantType, wantFormat string
-	}{
-		{goTypeTimeTime, typeString, formatDateTime},
-		{goTypeUUID, typeString, formatUUID},
-		{goTypeRawMessage, "", ""}, // any JSON value: untyped items ({})
-	} {
-		got := responsePayloadSchema(&models.TypeInfo{
-			Name:  "Time", // the analyzer stamps the element's type name
-			Shape: payloadSlice(named(tc.elem)),
-		})
-		assert.Equal(t, typeArray, got.Type, tc.elem)
-		require.NotNil(t, got.Items, tc.elem)
-		assert.Empty(t, got.Items.Ref, "a well-known element is a scalar, not a $ref")
-		assert.Equal(t, tc.wantType, got.Items.Type, tc.elem)
-		assert.Equal(t, tc.wantFormat, got.Items.Format, tc.elem)
-	}
-}
-
-// TestResponsePayloadSchemaWellKnownPointerElement is the pointer arm of the
-// test above. slicePayloadTypeInfo already sheds a pointer element before
-// stamping the Shape, so this shape does not arise from the analyzer today; the
-// items path normalizes one pointer level anyway, exactly as the struct-field
-// path does, so a *T element can never fall through to a dangling $ref.
-func TestResponsePayloadSchemaWellKnownPointerElement(t *testing.T) {
-	for _, tc := range []struct {
-		elem, wantType, wantFormat string
-	}{
-		{goTypeTimeTime, typeString, formatDateTime},
-		{goTypeUUID, typeString, formatUUID},
-		{goTypeRawMessage, "", ""}, // any JSON value: untyped items ({})
-	} {
-		got := responsePayloadSchema(&models.TypeInfo{
-			Name:  "Time", // the analyzer stamps the element's type name
-			Shape: payloadSlice(ptrOf(named(tc.elem))),
-		})
-		assert.Equal(t, typeArray, got.Type, tc.elem)
-		require.NotNil(t, got.Items, tc.elem)
-		assert.Empty(t, got.Items.Ref, "a well-known element is a scalar, not a $ref")
-		assert.Equal(t, tc.wantType, got.Items.Type, tc.elem)
-		assert.Equal(t, tc.wantFormat, got.Items.Format, tc.elem)
-	}
-
-	// *[]byte sheds the pointer to the well-known slice shape, and a plain
-	// pointer-to-primitive element keeps its scalar mapping.
+// TestResponsePayloadSchemaPointerElement pins a nameless slice payload's
+// pointer element: *[]byte sheds the pointer to the well-known base64 shape,
+// and a pointer-to-primitive element keeps its scalar mapping.
+func TestResponsePayloadSchemaPointerElement(t *testing.T) {
 	blob := responsePayloadSchema(&models.TypeInfo{Shape: payloadSlice(ptrOf(sliceOf(prim(goTypeByte))))})
 	require.NotNil(t, blob.Items)
 	assert.Equal(t, typeString, blob.Items.Type)
@@ -4159,9 +4160,10 @@ func TestRawMessageIsUntypedInEveryPosition(t *testing.T) {
 	})
 
 	// server.Result[[]json.RawMessage]: the analyzer stamps the element's bare
-	// name, which must not become a $ref (no component exists for it).
+	// name and a Resolution, which types the items inline — never a $ref (no
+	// component exists for it).
 	t.Run("slice payload items", func(t *testing.T) {
-		got := responsePayloadSchema(&models.TypeInfo{Name: "RawMessage", Package: "json", Shape: payloadSlice(raw)})
+		got := responsePayloadSchema(&models.TypeInfo{Name: "RawMessage", Package: "json", Shape: payloadSlice(raw), Resolution: payloadSlice(raw)})
 		assert.Equal(t, &OpenAPIProperty{Type: typeArray, Items: untyped()}, got)
 	})
 }

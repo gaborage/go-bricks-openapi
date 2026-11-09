@@ -5,10 +5,9 @@
 // field of its type is, and never as a component: a struct reachable only
 // through one still registers. A request-less handler returning one is
 // recognised, so its status constructor and error responses are documented.
-// An anonymous struct request is bound by go-bricks but not documented yet:
-// no requestBody, no query parameter, and its path parameter falls back to a
-// string. Goldens do not capture warnings; the analyzer tests carry that
-// proof.
+// An anonymous struct request is documented as a named struct of its fields
+// (issue 171): typed path and query parameters and an inline requestBody.
+// Goldens do not capture warnings; the analyzer tests carry that proof.
 package anonymouspayload
 
 import (
@@ -136,8 +135,8 @@ func (m *Module) ack(ctx server.HandlerContext) (server.Result[struct{}], server
 	return server.Created(struct{}{}), nil
 }
 
-// note's request is an anonymous struct, bound by go-bricks but not
-// documented yet.
+// note's request is an anonymous struct, documented as a named struct of its
+// fields.
 func (m *Module) note(req struct {
 	ID   int64  `param:"id"`
 	Q    string `query:"q"`

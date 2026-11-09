@@ -12,7 +12,7 @@ import (
 )
 
 // Issue 118: an anonymous struct payload is documented inline, as a
-// field of its type is, and an anonymous struct request warns.
+// field of its type is, and so is an anonymous struct request (issue 171).
 
 // anonPayloadDecls declares the named types the anonymous payload rows reach.
 const anonPayloadDecls = `
@@ -247,7 +247,7 @@ func (m *Module) anon(ctx server.HandlerContext) (*struct{ A int }, server.IAPIE
 
 // TestJOSEAnonymousPayloadKeepsBase pins that a payload whose root, every
 // written pointer shed, is a jose-tagged anonymous struct is left as it was
-// before anonymous struct payloads were documented (issue 171): it resolves
+// before anonymous struct payloads were documented (issue 176): it resolves
 // to no response type, so the route keeps the untyped fallback, a struct only
 // it reaches does not register, a malformed tag in it raises nothing, and a
 // request-less handler returning one is not found. One under a slice is an
@@ -307,26 +307,41 @@ func (m *Module) list(req JReq, ctx server.HandlerContext) (server.Result[`+list
 	assert.Empty(t, a.Warnings(t.Context()))
 }
 
-// TestAnonymousStructRequestWarns pins that a request parameter of anonymous
-// struct type, in either position, behind one pointer or parenthesized, is
-// the request: go-bricks binds it, but it is not documented yet, so it raises
-// the anonymous request warning once and stays untyped, and its handler is
-// found. Behind two pointers it is a non-struct request (F26). Only a
-// field-less one is silent (TestEmptyAnonymousStructRequestIsSilent): one
-// whose fields are all blank or unexported still warns.
-func TestAnonymousStructRequestWarns(t *testing.T) {
-	cases := []struct{ params, written string }{
-		{"req struct{ ID int64 `param:\"id\"`; Q string `query:\"q\"` }, ctx server.HandlerContext", "struct{ID int64; Q string}"},
-		{"ctx server.HandlerContext, req *struct{ A int `json:\"a\" validate:\"required\"` }", "*struct{A int}"},
-		{"req (struct{ A int }), ctx server.HandlerContext", "(struct{A int})"},
-		{"req *(struct{ A int }), ctx server.HandlerContext", "*(struct{A int})"},
-		{"req struct{ _ int }, ctx server.HandlerContext", "struct{_ int}"},
+// TestAnonymousStructRequestIsDocumented pins issue 171: a request parameter
+// of anonymous struct type, in either position, behind one pointer or
+// parenthesized, is documented as a named struct of its fields, with no
+// warning. Its path, query and header fields are its Fields, the parameters;
+// its Resolution, the literal, types its inline requestBody, and a
+// params-only one, or one with no field the body could carry, gets none.
+// It names no component. Behind two pointers it is a non-struct request
+// (F26).
+func TestAnonymousStructRequestIsDocumented(t *testing.T) {
+	cases := []struct{ params, params2, resolution string }{
+		{"req struct{ ID int64 `param:\"id\"`; Q string `query:\"q\"`; H string `header:\"X-H\"` }, ctx server.HandlerContext", "path:id query:q header:X-H", ""},
+		{"ctx server.HandlerContext, req *struct{ A int `json:\"a\" validate:\"required\"` }", "", "struct{a int}"},
+		{"req (struct{ A int }), ctx server.HandlerContext", "", "struct{A int}"},
+		{"req *(struct{ ID int64 `param:\"id\"`; A int }), ctx server.HandlerContext", "path:id", "struct{ID int64; A int}"},
+		{"req struct{ _ int }, ctx server.HandlerContext", "", ""},
 	}
 	for _, c := range cases {
-		t.Run(c.written, func(t *testing.T) {
+		t.Run(c.params, func(t *testing.T) {
 			route, warnings := analyzeNonStructRequest(t, c.params, "Address")
-			assert.Equal(t, []string{fmt.Sprintf(anonymousRequestWarning, c.written)}, warnings)
-			assert.Nil(t, route.Request)
+			assert.Empty(t, warnings)
+			req := route.Request
+			require.NotNil(t, req)
+			assert.Empty(t, req.Name, "an anonymous request names no component")
+			assert.False(t, req.JOSE)
+			var params []string
+			for _, f := range req.Fields {
+				params = append(params, f.ParamType+":"+f.ParamName)
+			}
+			assert.Equal(t, c.params2, strings.Join(params, " "))
+			if c.resolution == "" {
+				assert.Nil(t, req.Resolution)
+			} else {
+				require.NotNil(t, req.Resolution)
+				assert.Equal(t, c.resolution, renderShape(*req.Resolution))
+			}
 			require.NotNil(t, route.Response, "the response is resolved independently of the request")
 			assert.Equal(t, "Address", route.Response.Name)
 		})
@@ -335,6 +350,67 @@ func TestAnonymousStructRequestWarns(t *testing.T) {
 	route, warnings := analyzeNonStructRequest(t, "req **struct{ A int }, ctx server.HandlerContext", "Address")
 	assert.Equal(t, []string{wantNonStructRequestWarning("**struct{A int}")}, warnings)
 	assertUntypedRequest(t, route.Request)
+}
+
+// TestAnonymousJOSERequest pins that a jose tag on any field of an anonymous
+// struct request makes it JOSE, with a Resolution even when it has no body
+// field, so the generator emits its application/jose body.
+func TestAnonymousJOSERequest(t *testing.T) {
+	for params, want := range map[string]string{
+		"req struct{ _ struct{} `jose:\"decrypt=a,verify=b\"`; PAN string `json:\"pan\"` }, ctx server.HandlerContext": "struct{pan string}",
+		"req struct{ _ struct{} `jose:\"decrypt=a,verify=b\"`; ID int64 `param:\"id\"` }, ctx server.HandlerContext":   "struct{ID int64}",
+	} {
+		route, warnings := analyzeNonStructRequest(t, params, "Address")
+		assert.Empty(t, warnings, params)
+		require.NotNil(t, route.Request, params)
+		assert.True(t, route.Request.JOSE, params)
+		require.NotNil(t, route.Request.Resolution, params)
+		assert.Equal(t, want, renderShape(*route.Request.Resolution), params)
+	}
+
+	// A jose-tagged literal that embeds a Marshaler type is a struct
+	// Marshaler request: its Resolution is the Marshaler leaf, not the
+	// struct, so the generator gives it joseUndocumentedDescription
+	// (TestJOSEAnonymousRequestBody pins that side).
+	route, warnings := analyzeNonStructRequest(t,
+		"req struct{ _ struct{} `jose:\"decrypt=a,verify=b\"`; time.Time; ID int64 `param:\"id\"` }, ctx server.HandlerContext", "Address")
+	require.Len(t, warnings, 1)
+	require.NotNil(t, route.Request)
+	assert.True(t, route.Request.JOSE)
+	assert.Empty(t, route.Request.Name)
+	require.Len(t, route.Request.Fields, 1)
+	assert.Equal(t, "id", route.Request.Fields[0].ParamName)
+	require.NotNil(t, route.Request.Resolution)
+	assert.Contains(t, []models.ShapeKind{models.ShapeMarshaler, models.ShapeText}, route.Request.Resolution.Kind)
+}
+
+// TestAnonymousRequestWarnsAsNamed pins that an anonymous struct request
+// raises the warnings its named twin does: a parameter go-bricks cannot bind
+// raises the binding warning, once, and a literal embedding a Marshaler type
+// is a struct Marshaler request, typed {} with its warning, its parameters
+// kept, unless it is params-only: then, as its named twin, it has no body,
+// so no Resolution and no warning.
+func TestAnonymousRequestWarnsAsNamed(t *testing.T) {
+	route, warnings := analyzeNonStructRequest(t, "req struct{ F func() `query:\"f\"`; A int }, ctx server.HandlerContext", "Address")
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], `is the query parameter "f" of type func(), which go-bricks cannot bind`)
+	require.NotNil(t, route.Request)
+
+	route, warnings = analyzeNonStructRequest(t, "req struct{ time.Time; ID int64 `param:\"id\"` }, ctx server.HandlerContext", "Address")
+	assert.Empty(t, warnings)
+	require.NotNil(t, route.Request)
+	require.Len(t, route.Request.Fields, 1)
+	assert.Equal(t, "id", route.Request.Fields[0].ParamName)
+	assert.Nil(t, route.Request.Resolution)
+
+	route, warnings = analyzeNonStructRequest(t, "req struct{ time.Time; ID int64 `param:\"id\"`; Z int `json:\"z\"` }, ctx server.HandlerContext", "Address")
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "request type struct{time.Time; ID int64; Z int}: ")
+	require.NotNil(t, route.Request)
+	require.Len(t, route.Request.Fields, 1)
+	assert.Equal(t, "id", route.Request.Fields[0].ParamName)
+	require.NotNil(t, route.Request.Resolution)
+	assert.NotEqual(t, models.ShapeStruct, route.Request.Resolution.Kind)
 }
 
 // TestEmptyAnonymousStructRequestIsSilent pins that a field-less anonymous
@@ -389,11 +465,11 @@ func TestAnonymousStructRequestHandlerIsFound(t *testing.T) {
 		"RESULT", "server.Result[map[string]func()]").Replace(src)
 	a, routes := analyzeSingleModule(t, src)
 	route := routeForPath(t, routes, nonStructRequestRouteKey)
-	assert.Nil(t, route.Request)
+	require.NotNil(t, route.Request)
 	assert.Nil(t, route.Response)
 	assert.Equal(t, 201, route.SuccessStatus)
 	assert.Equal(t, []int{404}, route.ErrorStatuses)
-	assert.Equal(t, []string{fmt.Sprintf(anonymousRequestWarning, "struct{A int}")}, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings(t.Context()))
 }
 
 // TestIsAnonymousStruct pins the request screen: a struct literal, one

@@ -1,0 +1,347 @@
+openapi: 3.0.1
+info:
+  title: Narrow_int_bounds API
+  version: 1.0.0
+  description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
+paths:
+  /v1/widths:
+    post:
+      operationId: narrowintboundsCreateWidths
+      summary: POST /v1/widths
+      tags:
+        - widths
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Widths'
+      responses:
+        "201":
+          description: Resource created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: integer
+                    format: int32
+                    minimum: -32768
+                    maximum: 32767
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/widths/{id}:
+    get:
+      operationId: narrowintboundsGetWidth
+      summary: GET /v1/widths/{id}
+      tags:
+        - widths
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            maximum: 4.294967295e+09
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 65535
+        - name: shift
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: -128
+            maximum: 127
+        - name: X-Hops
+          in: header
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 255
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                      maximum: 65535
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code (e.g. BAD_REQUEST, NOT_FOUND, INTERNAL_ERROR, or a custom business code)
+            details:
+              type: object
+              properties:
+                validationErrors:
+                  type: array
+                  description: Per-field validation failures (400 validation errors)
+                  items:
+                    type: object
+                    properties:
+                      field:
+                        type: string
+                        description: Field that failed validation
+                      message:
+                        type: string
+                        description: Violated validation rule
+                  maxItems: 100
+              description: Contextual error payload, sent only when app.debug is enabled in a development environment
+            message:
+              type: string
+              description: Human-readable error message
+          description: Error details
+        meta:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+              description: RFC3339 response timestamp
+            traceId:
+              type: string
+              description: W3C trace identifier for the request
+      required:
+        - error
+    Widths:
+      type: object
+      properties:
+        above:
+          type: integer
+          format: int32
+          minimum: -10
+          maximum: 32767
+          exclusiveMinimum: true
+        below:
+          type: integer
+          format: int32
+          minimum: -128
+          maximum: 50
+          exclusiveMaximum: true
+        big:
+          type: integer
+          format: int64
+        blob:
+          type: string
+          format: byte
+        capped:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 100
+        char:
+          type: integer
+          format: int32
+        count:
+          type: integer
+          format: int64
+        edge:
+          type: integer
+          format: int32
+          example: -32768
+          minimum: -32768
+          maximum: 32767
+        fits:
+          type: integer
+          format: int32
+          example: 200
+          minimum: 0
+          maximum: 255
+        huge:
+          type: integer
+          format: int64
+          minimum: 0
+        level:
+          type: integer
+          format: int32
+          minimum: -128
+          maximum: 127
+        limited:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 10
+        loose:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 70000
+        looseSample:
+          type: integer
+          format: int32
+          example: 68000
+          minimum: 0
+          maximum: 70000
+        maybeTiny:
+          type: integer
+          format: int32
+          minimum: -128
+          maximum: 127
+          nullable: true
+        octet:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 255
+        pair:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: -128
+            maximum: 127
+        plain:
+          type: integer
+          format: int32
+        port:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 65535
+        ratio:
+          type: number
+          format: float
+        raw:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 255
+        score:
+          type: number
+          format: double
+        short:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 65535
+        shorts:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 65535
+        sized:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 255
+        small:
+          type: integer
+          format: int32
+          minimum: -32768
+          maximum: 32767
+        tiny:
+          type: integer
+          format: int32
+          minimum: -128
+          maximum: 127
+        tooBig:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 255
+        tooSmall:
+          type: integer
+          format: int32
+          minimum: -128
+          maximum: 127
+        unsigned:
+          type: integer
+          format: int64
+          minimum: 0
+        word:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 4.294967295e+09
+        words:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+            minimum: 0
+            maximum: 4.294967295e+09
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+      description: Tenant identifier. Enforced only when the service runs with multitenancy enabled and a header-based tenant resolver; a missing or invalid tenant yields HTTP 400. Deployments resolving the tenant from the subdomain or URL path do not read this header.
+security:
+  - TenantID: []

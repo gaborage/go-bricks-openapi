@@ -653,6 +653,7 @@ paths:
                     type: integer
                     format: int32
                     minimum: 0
+                    maximum: 255
                   meta:
                     type: object
                     properties:
@@ -693,6 +694,7 @@ paths:
                       type: integer
                       format: int32
                       minimum: 0
+                      maximum: 255
                   meta:
                     type: object
                     properties:
@@ -1157,6 +1159,7 @@ paths:
                       type: integer
                       format: int32
                       minimum: 0
+                      maximum: 255
                   meta:
                     type: object
                     properties:
@@ -1234,6 +1237,7 @@ paths:
                       type: integer
                       format: int32
                       minimum: 0
+                      maximum: 255
                   meta:
                     type: object
                     properties:
@@ -1387,6 +1391,7 @@ paths:
                       type: integer
                       format: int32
                       minimum: 0
+                      maximum: 255
                   meta:
                     type: object
                     properties:

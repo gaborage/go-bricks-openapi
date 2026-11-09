@@ -444,9 +444,8 @@ nested Go module, is not.
   recognized through the import its qualifier names. A project package never
   declares one, so a project package `net` declaring `type IP int`, used as
   `net.IP`, is an integer, and a project struct so spelled is resolved in its
-  own package too (for a slice payload of one, see the response payload entry
-  below). The package that declares one names it under an alias too (`t.Time`
-  with `import t "time"`): `time`, `os`, `io/fs`, `net`, `net/netip`,
+  own package too. The package that declares one names it under an alias too
+  (`t.Time` with `import t "time"`): `time`, `os`, `io/fs`, `net`, `net/netip`,
   `encoding/json`, and, for `uuid.UUID`, `github.com/google/uuid`,
   `github.com/gofrs/uuid` (and its `/v5`) and `github.com/satori/go.uuid`.
   Any other package from outside the module is matched by spelling alone: a
@@ -476,9 +475,7 @@ nested Go module, is not.
   base64 string, while `[N]byte` (payload or field) and `[]*byte` are integer
   arrays. A project struct is referenced, even one whose short name collides
   with a well-known type (a project package `uuid` declaring
-  `type UUID struct`); a slice payload of such a colliding project struct
-  (`server.Result[[]uuid.UUID]`) is still typed inline as the well-known
-  type's array. A payload that ends in a fallback — a Marshaler type
+  `type UUID struct`). A payload that ends in a fallback — a Marshaler type
   other than a text one, recursion, `uintptr`, `error`/`complex64`/`complex128`, or a type that
   resolves to no schema (a third-party type such as `decimal.Decimal`, or an
   undeclared name) — raises one warning, so `--strict` fails on it. The exception is a bare
@@ -501,7 +498,7 @@ nested Go module, is not.
   (unless its build-tagged declarations disagree), and a request-less
   handler returning one is recognised as the route's handler, so its
   success status and inferred error statuses are documented. A jose tag
-  inside an anonymous struct payload is ignored, as before (#171): the
+  inside an anonymous struct payload is ignored, as before (#176): the
   route stays `application/json`, and a payload whose root (behind written
   pointers too) is a jose-tagged anonymous struct is left as before, with
   the untyped fallback. Generic payloads
@@ -533,14 +530,16 @@ nested Go module, is not.
   unresolved-generic warning instead (#114). A named pointer type over one
   (`type PP *Page[Address]`) gets the not-a-struct warning, like any named
   pointer type (`type PA *Address`). A request type that is an anonymous
-  struct with fields (`struct{…}`, `*struct{…}`) is bound by go-bricks but
-  not yet documented (#171): it gets no `requestBody` and no query or header
-  parameters (path parameters fall back to strings), is counted as an
-  untyped request in `doctor`, and is reported as a warning (so `--strict`
-  fails on it); declare it as a named struct. Its handler is still
-  recognised, so its success status and inferred error statuses are
-  documented. An empty `struct{}`, go-bricks' request type for a route that
-  takes no input, has nothing to document and raises no warning of its own.
+  struct with fields (`struct{…}`, `*struct{…}`) is documented as a named
+  struct of the same fields is (#171): typed path, query and header
+  parameters, and its other fields as an inline `requestBody` object, with
+  no component (none when it has only parameters); a jose tag on any of its
+  fields gives an `application/jose` body whose description names no
+  component. `doctor` counts it as a typed request when it has a field the
+  body or parameters can carry (one whose fields are all blank or
+  unexported, like `struct{ _ int }`, counts as untyped). An empty `struct{}`,
+  go-bricks' request type for a route that takes no input, has nothing to
+  document and raises no warning of its own.
 - A route path built from a `var` (including a `:=` local) is an Unresolved
   route: only `const` declarations resolve. The route is dropped from the spec
   with a warning.
@@ -625,7 +624,7 @@ nested Go module, is not.
   and a directive in any other copy is reported as detached. A named scalar
   declared at different widths in build-tagged files (`type Word int64` in one,
   `type Word int32` in another) is emitted with its type only, with no `format`
-  and no unsigned `minimum: 0`; `byte` and `uint8`, or `rune` and `int32`, are
+  and no type-derived bounds; `byte` and `uint8`, or `rune` and `int32`, are
   one width. When the copies also disagree on kind (`type Word string` in one),
   the type comes from the first scalar copy: the one in the field's own file,
   otherwise the one in the first file by name. The same applies wherever such

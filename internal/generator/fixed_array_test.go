@@ -9,9 +9,10 @@ import (
 	"github.com/gaborage/go-bricks-openapi/internal/models"
 )
 
-// byteItemProp is what a bare byte field emits: the items of a [N]byte array.
+// byteItemProp is what a bare byte field emits, its 0..255 range included
+// (#107): the items of a [N]byte array.
 func byteItemProp() *OpenAPIProperty {
-	return &OpenAPIProperty{Type: typeInteger, Format: formatInt32, Minimum: floatPtr(0)}
+	return &OpenAPIProperty{Type: typeInteger, Format: formatInt32, Minimum: floatPtr(0), Maximum: floatPtr(255)}
 }
 
 // TestFixedByteArrayFieldIsIntegerArray pins #98's generator rule:
@@ -132,9 +133,8 @@ func firstArray(prop *OpenAPIProperty) *OpenAPIProperty {
 }
 
 // TestFixedArrayPayloadSchema pins the payload side of #98: a [4]byte payload
-// is an integer array (not base64), a struct-element array $refs its
-// component, and a well-known-element array is inline — and only the struct
-// element names a component.
+// is an integer array (not base64), and a struct-element array $refs its
+// component, which it names.
 func TestFixedArrayPayloadSchema(t *testing.T) {
 	byteArr := &OpenAPIProperty{Type: typeArray, Items: byteItemProp()}
 	assert.Equal(t, byteArr, responsePayloadSchema(&models.TypeInfo{Shape: payloadArray(prim(goTypeByte))}))
@@ -145,8 +145,4 @@ func TestFixedArrayPayloadSchema(t *testing.T) {
 	addr := &models.TypeInfo{Name: "Address", Package: "mod", Shape: payloadArray(named("Address"))}
 	assert.Equal(t, &OpenAPIProperty{Type: typeArray, Items: &OpenAPIProperty{Ref: refPath("Address")}}, responsePayloadSchema(addr))
 	assert.True(t, payloadNamesComponent(addr))
-
-	times := &models.TypeInfo{Name: "Time", Package: "time", Shape: payloadArray(named(goTypeTimeTime))}
-	assert.Equal(t, &OpenAPIProperty{Type: typeArray, Items: &OpenAPIProperty{Type: typeString, Format: formatDateTime}}, responsePayloadSchema(times))
-	assert.False(t, payloadNamesComponent(times), "a well-known element is inline, never a component")
 }
