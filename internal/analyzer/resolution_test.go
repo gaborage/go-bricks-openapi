@@ -757,8 +757,11 @@ func TestUnresolvableFieldsWarn(t *testing.T) {
 			assert.Contains(t, w[0], "resolves to no schema", name)
 		}
 	}
-	for _, name := range []string{"Ch", "Anon", "AliasedTime", "AliasedRaw"} {
+	for _, name := range []string{"Anon", "AliasedTime", "AliasedRaw"} {
 		assert.Empty(t, fieldWarnings(a, name), name)
+	}
+	if w := fieldWarnings(a, "Ch"); assert.Len(t, w, 1) {
+		assert.Contains(t, w[0], "has type chan int, which holds a chan,", "issue 158")
 	}
 	// Issue 138: an Instantiation is not resolved, and now says so.
 	if w := fieldWarnings(a, "Page"); assert.Len(t, w, 1) {

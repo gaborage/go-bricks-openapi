@@ -449,6 +449,15 @@ nested Go module, is not.
   (`type C complex128`) — has no JSON schema. It is documented as an untyped
   object and reported as a warning (so `--strict` fails on it). Exclude the
   field with `json:"-"`, which also silences the warning.
+- A field whose type holds a func or a chan at any depth — a literal
+  (`func()`, `chan int`, `<-chan string`), a named type (`type F func()`), in
+  a slice, array, map or pointer, or an exported embed of a named func or
+  chan type — cannot be marshaled by encoding/json. It is documented as an
+  untyped object (a container keeps its array or map shape) and reported as
+  a warning (so `--strict` fails on it). Exclude the field with `json:"-"`,
+  which also silences the warning; an unexported embed is skipped silently.
+  A path, query or header parameter of such a type raises only its binding
+  warning.
 - A field type that resolves to no schema — a type from outside the module
   (`decimal.Decimal`, a go-bricks type such as `scheduler.ScheduleType`), or a
   defined type over a well-known struct (`type Stamp time.Time`,
