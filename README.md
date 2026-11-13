@@ -413,10 +413,20 @@ nested Go module, is not.
   declaration, or of a generic instantiation that may be a struct
   (`Page[Address]`, until #114) is dropped with a warning, so `--strict`
   fails, although `encoding/json` would promote such a struct's fields
-  (`sql.NullString`'s `String` and `Valid`). An unexported local generic
-  type declared as a non-struct type (`list[int]` for
-  `type list[T any] []T`) is skipped silently, as `encoding/json` skips
-  it. Exclude the embed with `json:"-"` to silence the warning. A
+  (`sql.NullString`'s `String` and `Valid`). An unexported embed of an
+  instantiation of a local or in-module generic type declared as a
+  non-struct type (`list[int]` for `type list[T any] []T`, directly or
+  through an alias or defined type such as `type ll = list[int]`,
+  `type lsd list[int]` or `type ol = b.List[int]`) is skipped silently,
+  json name or not, as `encoding/json` skips it; an exported one
+  (`type LL = list[int]`, `b.List[int]`) is one untyped-object property
+  with the unresolved-generic warning, until #114. An instantiation of a
+  generic alias of a pointer (`type ptr[T any] = *Base`), of a
+  well-known Marshaler type reached through aliases only
+  (`type raw[T any] = json.RawMessage`), or of a generic type declaring a
+  marshal method (`MarshalJSON` on `hidden[T]`) is dropped with a warning
+  whatever its name: the promoted method makes the embedding struct a
+  Marshaler. Exclude the embed with `json:"-"` to silence the warning. A
   well-known Marshaler embed adds no property even when a sibling embed at
   its depth cancels its methods, although `encoding/json` then writes it
   as one field keyed by its type name. Two fields of one key at the

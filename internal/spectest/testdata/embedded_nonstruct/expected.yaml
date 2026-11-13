@@ -188,6 +188,28 @@ components:
               description: W3C trace identifier for the request
       required:
         - error
+    GenExported:
+      type: object
+      properties:
+        LL:
+          type: object
+        List:
+          type: object
+        keep:
+          type: integer
+          format: int64
+    GenTagged:
+      type: object
+      properties:
+        keep:
+          type: integer
+          format: int64
+    GenUntagged:
+      type: object
+      properties:
+        keep:
+          type: integer
+          format: int64
     Named:
       type: object
       properties:
@@ -220,6 +242,12 @@ components:
           $ref: '#/components/schemas/Collided'
         dropped:
           $ref: '#/components/schemas/Dropped'
+        genE:
+          $ref: '#/components/schemas/GenExported'
+        genT:
+          $ref: '#/components/schemas/GenTagged'
+        genU:
+          $ref: '#/components/schemas/GenUntagged'
         named:
           $ref: '#/components/schemas/Named'
         promB:

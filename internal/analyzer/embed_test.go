@@ -342,8 +342,6 @@ func TestEmbeddedJSONNameSkipsUnexportedNonStruct(t *testing.T) {
 		{"JList", "list[int] `json:\"l\"`", nil},
 		{"JCnt", "cnt[int] `json:\"n\"`", nil},
 		{"JQc", "qc[int] `json:\"q\"`", nil},
-		{"JRawOf", "rawOf[int] `json:\"r\"`", nil},
-		{"RawOf", "rawOf[int]", nil},
 		{"JLuPair", "lu `json:\"u\"`\n\tlu2 `json:\"v\"`", nil},
 		{"JCentsExported", "Cents `json:\"c\"`", map[string]string{"c": goTypeInt64}},
 		{"JCU", "CU `json:\"c\"`", map[string]string{"c": goTypeInt}},
