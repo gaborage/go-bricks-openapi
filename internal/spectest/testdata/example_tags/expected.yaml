@@ -22,6 +22,15 @@ paths:
             format: int64
             example: 25
           example: 25
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            example: 18446744073709551615
+            minimum: 0
+          example: 18446744073709551615
       responses:
         "200":
           description: Successful response
@@ -131,16 +140,40 @@ components:
           type: array
           items:
             type: string
+        max_u:
+          type: integer
+          format: int64
+          example: 18446744073709551615
+          minimum: 0
         name:
           type: string
           example: bob
+        named_u:
+          type: integer
+          format: int64
+          example: 9223372036854775808
+          minimum: 0
         narrow:
           type: integer
           format: int32
+        over_u:
+          type: integer
+          format: int64
+          minimum: 0
+        ptr_u:
+          type: integer
+          format: int64
+          example: 9223372036854775808
+          minimum: 0
+          nullable: true
         ratio:
           type: number
           format: double
           example: 2.5
+        signed_u:
+          type: integer
+          format: int64
+          minimum: 0
     ErrorResponse:
       type: object
       properties:

@@ -457,6 +457,8 @@ nested Go module, is not.
 - `uint64` is documented as `format: int64` with `minimum: 0`, so values of
   2^63 and above exceed its declared format. No signed format holds the whole
   range, and leaving the format off would make generated clients narrower.
+  A `uint`/`uint64` `example:` from 2^63 up to 2^64-1 is still kept under that
+  format; a larger one is dropped.
 - A `,string`-tagged field whose type is a named pointer type
   (`type PI *int64`) keeps the unquoted schema of the scalar it points to,
   which matches the classic `encoding/json` (Go 1.26 and earlier) but not Go

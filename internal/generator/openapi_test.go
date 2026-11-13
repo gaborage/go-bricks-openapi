@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -3834,11 +3835,25 @@ func TestBuildOperationSynthesizesMissingPathParams(t *testing.T) {
 // schema type an `example:` tag can land on. "want == nil" means the value is
 // DROPPED — no example key is emitted at all.
 func TestCoerceExample(t *testing.T) {
+	// two63 is 2^63, exactly representable as a float64; the unsigned rows
+	// probe the integers right beside it, which float64 cannot tell apart.
+	const two63 = float64(1 << 63)
+	i64Bounds := func(minimum, maximum *float64, exMin, exMax bool) *OpenAPIProperty {
+		p := &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: minimum, Maximum: maximum}
+		if exMin {
+			p.ExclusiveMinimum = boolPtr(true)
+		}
+		if exMax {
+			p.ExclusiveMaximum = boolPtr(true)
+		}
+		return p
+	}
 	tests := []struct {
-		name string
-		raw  string
-		prop *OpenAPIProperty
-		want any
+		name     string
+		raw      string
+		prop     *OpenAPIProperty
+		unsigned bool
+		want     any
 	}{
 		{name: "integer int32 in range", raw: "3", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt32}, want: int64(3)},
 		{name: "integer no format", raw: "3", prop: &OpenAPIProperty{Type: typeInteger}, want: int64(3)},
@@ -3847,6 +3862,21 @@ func TestCoerceExample(t *testing.T) {
 		{name: "integer int32 out of range", raw: "3000000000", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt32}, want: nil},
 		{name: "integer int64 in range", raw: "3000000000", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64}, want: int64(3000000000)},
 		{name: "integer overflows int64", raw: "9223372036854775808", prop: &OpenAPIProperty{Type: typeInteger}, want: nil},
+		{name: "signed int64 min=0 above MaxInt64 dropped", raw: "9223372036854775808", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(0)}, want: nil},
+		{name: "unsigned keeps 2^63", unsigned: true, raw: "9223372036854775808", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(0)}, want: uint64(9223372036854775808)},
+		{name: "unsigned keeps MaxUint64", unsigned: true, raw: "18446744073709551615", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(0)}, want: uint64(18446744073709551615)},
+		{name: "unsigned keeps value below MaxInt64", unsigned: true, raw: "42", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(0)}, want: uint64(42)},
+		{name: "unsigned drops MaxUint64 plus one", unsigned: true, raw: "18446744073709551616", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(0)}, want: nil},
+		{name: "unsigned drops negative", unsigned: true, raw: "-1", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(0)}, want: nil},
+		{name: "unsigned drops non-numeric", unsigned: true, raw: "abc", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64}, want: nil},
+		{name: "unsigned drops above maximum", unsigned: true, raw: "9223372036854775808", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Maximum: float64Ptr(100)}, want: nil},
+		{name: "unsigned keeps example equal to inclusive maximum 2^63", unsigned: true, raw: "9223372036854775808", prop: i64Bounds(nil, float64Ptr(two63), false, false), want: uint64(9223372036854775808)},
+		{name: "unsigned drops 2^63+1 above inclusive maximum 2^63", unsigned: true, raw: "9223372036854775809", prop: i64Bounds(nil, float64Ptr(two63), false, false), want: nil},
+		{name: "unsigned drops example equal to exclusive minimum 2^63", unsigned: true, raw: "9223372036854775808", prop: i64Bounds(float64Ptr(two63), nil, true, false), want: nil},
+		{name: "unsigned drops 2^63+1 over exclusive minimum 2^63 (kin rounds it equal)", unsigned: true, raw: "9223372036854775809", prop: i64Bounds(float64Ptr(two63), nil, true, false), want: nil},
+		{name: "unsigned drops example equal to exclusive maximum 2^63", unsigned: true, raw: "9223372036854775808", prop: i64Bounds(nil, float64Ptr(two63), false, true), want: nil},
+		{name: "unsigned drops below inclusive minimum", unsigned: true, raw: "5", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(10)}, want: nil},
+		{name: "unsigned drops above int32 format", unsigned: true, raw: "3000000000", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt32}, want: nil},
 		{name: "number basic float", raw: "2.5", prop: &OpenAPIProperty{Type: typeNumber}, want: float64(2.5)},
 		{name: "number rejects NaN", raw: "NaN", prop: &OpenAPIProperty{Type: typeNumber}, want: nil},
 		{name: "number rejects Inf", raw: "Inf", prop: &OpenAPIProperty{Type: typeNumber}, want: nil},
@@ -3889,10 +3919,72 @@ func TestCoerceExample(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := coerceExample(tt.raw, tt.prop)
+			got := coerceExample(tt.raw, tt.prop, tt.unsigned)
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestUnsignedExampleAgreesWithKin pins the unsigned example rule to the
+// validator that judges the emitted document: kin-openapi checks an example
+// against minimum/maximum in float64, so an example the generator KEEPS must be
+// one kin accepts, or --validate rejects the whole spec. The converse need not
+// hold: the exact comparison also drops 2^63+1 over a maximum of 2^63, which
+// kin (rounding) would accept.
+func TestUnsignedExampleAgreesWithKin(t *testing.T) {
+	const two63 = float64(1 << 63)
+	bound := func(v float64) *float64 { return &v }
+	tests := []struct {
+		name string
+		raw  string
+		prop *OpenAPIProperty
+	}{
+		{"equals inclusive maximum", "9223372036854775808", &OpenAPIProperty{Maximum: bound(two63)}},
+		{"over inclusive maximum", "9223372036854775809", &OpenAPIProperty{Maximum: bound(two63)}},
+		{"equals exclusive minimum", "9223372036854775808", &OpenAPIProperty{Minimum: bound(two63), ExclusiveMinimum: boolPtr(true)}},
+		{"over exclusive minimum", "9223372036854775809", &OpenAPIProperty{Minimum: bound(two63), ExclusiveMinimum: boolPtr(true)}},
+		{"equals exclusive maximum", "9223372036854775808", &OpenAPIProperty{Maximum: bound(two63), ExclusiveMaximum: boolPtr(true)}},
+		{"under exclusive maximum", "9223372036854775807", &OpenAPIProperty{Maximum: bound(two63), ExclusiveMaximum: boolPtr(true)}},
+		{"max uint64 with zero floor", "18446744073709551615", &OpenAPIProperty{Minimum: bound(0)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.prop.Type, tt.prop.Format = typeInteger, formatInt64
+			kept := coerceExample(tt.raw, tt.prop, true) != nil
+			if kept {
+				assert.True(t, kinAcceptsExample(t, tt.raw, tt.prop), "kept example %s must be one kin-openapi accepts", tt.raw)
+			}
+		})
+	}
+}
+
+// kinAcceptsExample loads a minimal document whose one integer schema carries
+// prop's bounds and the raw example, and reports whether kin-openapi validates
+// it (examples included).
+func kinAcceptsExample(t *testing.T, raw string, prop *OpenAPIProperty) bool {
+	t.Helper()
+	schema := map[string]any{"type": typeInteger, "format": formatInt64, "example": json.Number(raw)}
+	for key, bound := range map[string]*float64{"minimum": prop.Minimum, "maximum": prop.Maximum} {
+		if bound != nil {
+			schema[key] = json.Number(strconv.FormatFloat(*bound, 'f', -1, 64))
+		}
+	}
+	if prop.ExclusiveMinimum != nil {
+		schema["exclusiveMinimum"] = true
+	}
+	if prop.ExclusiveMaximum != nil {
+		schema["exclusiveMaximum"] = true
+	}
+	data, err := json.Marshal(map[string]any{
+		"openapi":    "3.0.3",
+		"info":       map[string]any{"title": "t", "version": "1"},
+		"paths":      map[string]any{},
+		"components": map[string]any{"schemas": map[string]any{"S": schema}},
+	})
+	require.NoError(t, err)
+	loaded, err := openapi3.NewLoader().LoadFromData(data)
+	require.NoError(t, err)
+	return loaded.Validate(t.Context()) == nil
 }
 
 // TestIsBase64TextContract pins the byte-format example rule to the two
@@ -3999,13 +4091,13 @@ func TestFieldInfoToPropertyByteFormatExample(t *testing.T) {
 func TestApplyExample(t *testing.T) {
 	t.Run("ref sibling is left untouched", func(t *testing.T) {
 		prop := &OpenAPIProperty{Ref: "#/components/schemas/X"}
-		applyExample(prop, "anything")
+		applyExample(prop, "anything", false)
 		assert.Nil(t, prop.Example, "example must never sit beside $ref")
 	})
 
 	t.Run("empty raw is a no-op", func(t *testing.T) {
 		prop := &OpenAPIProperty{Type: typeString}
-		applyExample(prop, "")
+		applyExample(prop, "", false)
 		assert.Nil(t, prop.Example)
 	})
 }

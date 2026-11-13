@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"math/big"
 	"net/http"
 	"regexp"
 	"sort"
@@ -1592,8 +1593,16 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 // properties with it (objectProperties).
 func fieldProperty(field *models.FieldInfo) *OpenAPIProperty {
 	prop := bareFieldProperty(field)
-	applyExample(prop, quotedScalarExample(field))
+	applyExample(prop, quotedScalarExample(field), isUnsignedLeaf(stripPointers(field.ResolvedShape())))
 	return prop
+}
+
+// isUnsignedLeaf reports whether s is a builtin unsigned integer that the
+// schema emits as format int64: uint and uint64, the two widths whose values
+// can exceed math.MaxInt64 (#104). The schema alone cannot say so — a signed
+// int64 with validate:"min=0" emits the same minimum: 0, format: int64.
+func isUnsignedLeaf(s models.TypeShape) bool {
+	return s.Kind == models.ShapePrimitive && (s.Name == goTypeUint || s.Name == goTypeUint64)
 }
 
 // quotedScalarExample returns the example text for applyExample: the field's
@@ -1614,7 +1623,7 @@ func quotedScalarExample(field *models.FieldInfo) string {
 		return field.Example
 	}
 	applyValidationConstraints(scalar, field)
-	v := coerceExample(field.Example, scalar)
+	v := coerceExample(field.Example, scalar, isUnsignedLeaf(stripPointers(field.ResolvedShape())))
 	if v == nil {
 		return ""
 	}
@@ -1975,7 +1984,7 @@ func stampNarrowIntRange(prop *OpenAPIProperty, name string) {
 // A value that cannot be represented in the declared type is DROPPED rather than
 // emitted: a missing example costs the reader one hint, an ill-typed one makes
 // the whole document invalid.
-func applyExample(prop *OpenAPIProperty, raw string) {
+func applyExample(prop *OpenAPIProperty, raw string, unsigned bool) {
 	if prop == nil || raw == "" {
 		return
 	}
@@ -1983,21 +1992,22 @@ func applyExample(prop *OpenAPIProperty, raw string) {
 	if prop.Ref != "" {
 		return
 	}
-	if v := coerceExample(raw, prop); v != nil {
+	if v := coerceExample(raw, prop, unsigned); v != nil {
 		prop.Example = v
 	}
 }
 
 // coerceExample converts the raw tag text to a value valid for prop's type, or
-// returns nil when no valid representation exists.
-func coerceExample(raw string, prop *OpenAPIProperty) any {
+// returns nil when no valid representation exists. unsigned marks a uint/uint64
+// field, whose integer example is parsed unsigned (see coerceIntegerExample).
+func coerceExample(raw string, prop *OpenAPIProperty, unsigned bool) any {
 	switch prop.Type {
 	case typeString, "":
 		// "" is the untyped schema emitted for any/interface{} — a string is
 		// valid there because there is no type to violate.
 		return coerceStringExample(raw, prop)
 	case typeInteger:
-		return coerceIntegerExample(raw, prop)
+		return coerceIntegerExample(raw, prop, unsigned)
 	case typeNumber:
 		return coerceNumberExample(raw, prop)
 	case typeBoolean:
@@ -2099,8 +2109,15 @@ func isBase64Text(raw string) bool {
 }
 
 // coerceIntegerExample parses raw as an integer and rejects it unless it also
-// fits the declared format and any minimum/maximum already applied.
-func coerceIntegerExample(raw string, prop *OpenAPIProperty) any {
+// fits the declared format and any minimum/maximum already applied. An unsigned
+// field parses with ParseUint, so a value from 2^63 up to MaxUint64 is kept as
+// a uint64 (kin-openapi accepts it under format int64); ParseUint's range, not
+// kin's, decides what is dropped. The int32 format check never needs the
+// unsigned path's value to be signed: such a value is far above its range.
+func coerceIntegerExample(raw string, prop *OpenAPIProperty, unsigned bool) any {
+	if unsigned {
+		return coerceUnsignedExample(raw, prop)
+	}
 	i, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
 		return nil
@@ -2112,6 +2129,45 @@ func coerceIntegerExample(raw string, prop *OpenAPIProperty) any {
 		return nil
 	}
 	return i
+}
+
+// coerceUnsignedExample is coerceIntegerExample for a uint/uint64 field.
+func coerceUnsignedExample(raw string, prop *OpenAPIProperty) any {
+	u, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return nil
+	}
+	if prop.Format == formatInt32 && u > math.MaxInt32 {
+		return nil
+	}
+	// Both checks are needed. kin-openapi compares in float64, so the example
+	// must pass that comparison (an exclusive minimum of 2^63 rejects 2^63+1,
+	// which rounds equal) or the document fails validation; the exact one
+	// additionally refuses 2^63+1 over a maximum of 2^63, which float64 admits.
+	if !exampleInBounds(float64(u), prop) || !unsignedInBounds(u, prop) {
+		return nil
+	}
+	return u
+}
+
+// unsignedInBounds is exampleInBounds for a uint64: float64(u) rounds above
+// 2^53, so it would keep 2^63+1 under maximum 2^63. big.Float built from a
+// uint64 or a float64 is exact, so the comparison is too.
+func unsignedInBounds(u uint64, prop *OpenAPIProperty) bool {
+	n := new(big.Float).SetUint64(u)
+	if prop.Minimum != nil {
+		c := n.Cmp(big.NewFloat(*prop.Minimum))
+		if c < 0 || (c == 0 && prop.ExclusiveMinimum != nil && *prop.ExclusiveMinimum) {
+			return false
+		}
+	}
+	if prop.Maximum != nil {
+		c := n.Cmp(big.NewFloat(*prop.Maximum))
+		if c > 0 || (c == 0 && prop.ExclusiveMaximum != nil && *prop.ExclusiveMaximum) {
+			return false
+		}
+	}
+	return true
 }
 
 // coerceNumberExample parses raw as a float, rejecting the non-finite values
