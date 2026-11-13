@@ -2140,7 +2140,11 @@ func coerceUnsignedExample(raw string, prop *OpenAPIProperty) any {
 	if prop.Format == formatInt32 && u > math.MaxInt32 {
 		return nil
 	}
-	if !unsignedInBounds(u, prop) {
+	// Both checks are needed. kin-openapi compares in float64, so the example
+	// must pass that comparison (an exclusive minimum of 2^63 rejects 2^63+1,
+	// which rounds equal) or the document fails validation; the exact one
+	// additionally refuses 2^63+1 over a maximum of 2^63, which float64 admits.
+	if !exampleInBounds(float64(u), prop) || !unsignedInBounds(u, prop) {
 		return nil
 	}
 	return u

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -3872,7 +3873,7 @@ func TestCoerceExample(t *testing.T) {
 		{name: "unsigned keeps example equal to inclusive maximum 2^63", unsigned: true, raw: "9223372036854775808", prop: i64Bounds(nil, float64Ptr(two63), false, false), want: uint64(9223372036854775808)},
 		{name: "unsigned drops 2^63+1 above inclusive maximum 2^63", unsigned: true, raw: "9223372036854775809", prop: i64Bounds(nil, float64Ptr(two63), false, false), want: nil},
 		{name: "unsigned drops example equal to exclusive minimum 2^63", unsigned: true, raw: "9223372036854775808", prop: i64Bounds(float64Ptr(two63), nil, true, false), want: nil},
-		{name: "unsigned keeps 2^63+1 above exclusive minimum 2^63", unsigned: true, raw: "9223372036854775809", prop: i64Bounds(float64Ptr(two63), nil, true, false), want: uint64(9223372036854775809)},
+		{name: "unsigned drops 2^63+1 over exclusive minimum 2^63 (kin rounds it equal)", unsigned: true, raw: "9223372036854775809", prop: i64Bounds(float64Ptr(two63), nil, true, false), want: nil},
 		{name: "unsigned drops example equal to exclusive maximum 2^63", unsigned: true, raw: "9223372036854775808", prop: i64Bounds(nil, float64Ptr(two63), false, true), want: nil},
 		{name: "unsigned drops below inclusive minimum", unsigned: true, raw: "5", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(10)}, want: nil},
 		{name: "unsigned drops above int32 format", unsigned: true, raw: "3000000000", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt32}, want: nil},
@@ -3922,6 +3923,68 @@ func TestCoerceExample(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestUnsignedExampleAgreesWithKin pins the unsigned example rule to the
+// validator that judges the emitted document: kin-openapi checks an example
+// against minimum/maximum in float64, so an example the generator KEEPS must be
+// one kin accepts, or --validate rejects the whole spec. The converse need not
+// hold: the exact comparison also drops 2^63+1 over a maximum of 2^63, which
+// kin (rounding) would accept.
+func TestUnsignedExampleAgreesWithKin(t *testing.T) {
+	const two63 = float64(1 << 63)
+	bound := func(v float64) *float64 { return &v }
+	tests := []struct {
+		name string
+		raw  string
+		prop *OpenAPIProperty
+	}{
+		{"equals inclusive maximum", "9223372036854775808", &OpenAPIProperty{Maximum: bound(two63)}},
+		{"over inclusive maximum", "9223372036854775809", &OpenAPIProperty{Maximum: bound(two63)}},
+		{"equals exclusive minimum", "9223372036854775808", &OpenAPIProperty{Minimum: bound(two63), ExclusiveMinimum: boolPtr(true)}},
+		{"over exclusive minimum", "9223372036854775809", &OpenAPIProperty{Minimum: bound(two63), ExclusiveMinimum: boolPtr(true)}},
+		{"equals exclusive maximum", "9223372036854775808", &OpenAPIProperty{Maximum: bound(two63), ExclusiveMaximum: boolPtr(true)}},
+		{"under exclusive maximum", "9223372036854775807", &OpenAPIProperty{Maximum: bound(two63), ExclusiveMaximum: boolPtr(true)}},
+		{"max uint64 with zero floor", "18446744073709551615", &OpenAPIProperty{Minimum: bound(0)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.prop.Type, tt.prop.Format = typeInteger, formatInt64
+			kept := coerceExample(tt.raw, tt.prop, true) != nil
+			if kept {
+				assert.True(t, kinAcceptsExample(t, tt.raw, tt.prop), "kept example %s must be one kin-openapi accepts", tt.raw)
+			}
+		})
+	}
+}
+
+// kinAcceptsExample loads a minimal document whose one integer schema carries
+// prop's bounds and the raw example, and reports whether kin-openapi validates
+// it (examples included).
+func kinAcceptsExample(t *testing.T, raw string, prop *OpenAPIProperty) bool {
+	t.Helper()
+	schema := map[string]any{"type": typeInteger, "format": formatInt64, "example": json.Number(raw)}
+	for key, bound := range map[string]*float64{"minimum": prop.Minimum, "maximum": prop.Maximum} {
+		if bound != nil {
+			schema[key] = json.Number(strconv.FormatFloat(*bound, 'f', -1, 64))
+		}
+	}
+	if prop.ExclusiveMinimum != nil {
+		schema["exclusiveMinimum"] = true
+	}
+	if prop.ExclusiveMaximum != nil {
+		schema["exclusiveMaximum"] = true
+	}
+	data, err := json.Marshal(map[string]any{
+		"openapi":    "3.0.3",
+		"info":       map[string]any{"title": "t", "version": "1"},
+		"paths":      map[string]any{},
+		"components": map[string]any{"schemas": map[string]any{"S": schema}},
+	})
+	require.NoError(t, err)
+	loaded, err := openapi3.NewLoader().LoadFromData(data)
+	require.NoError(t, err)
+	return loaded.Validate(t.Context()) == nil
 }
 
 // TestIsBase64TextContract pins the byte-format example rule to the two
