@@ -3834,6 +3834,19 @@ func TestBuildOperationSynthesizesMissingPathParams(t *testing.T) {
 // schema type an `example:` tag can land on. "want == nil" means the value is
 // DROPPED — no example key is emitted at all.
 func TestCoerceExample(t *testing.T) {
+	// two63 is 2^63, exactly representable as a float64; the unsigned rows
+	// probe the integers right beside it, which float64 cannot tell apart.
+	const two63 = float64(1 << 63)
+	i64Bounds := func(minimum, maximum *float64, exMin, exMax bool) *OpenAPIProperty {
+		p := &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: minimum, Maximum: maximum}
+		if exMin {
+			p.ExclusiveMinimum = boolPtr(true)
+		}
+		if exMax {
+			p.ExclusiveMaximum = boolPtr(true)
+		}
+		return p
+	}
 	tests := []struct {
 		name     string
 		raw      string
@@ -3856,6 +3869,12 @@ func TestCoerceExample(t *testing.T) {
 		{name: "unsigned drops negative", unsigned: true, raw: "-1", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(0)}, want: nil},
 		{name: "unsigned drops non-numeric", unsigned: true, raw: "abc", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64}, want: nil},
 		{name: "unsigned drops above maximum", unsigned: true, raw: "9223372036854775808", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Maximum: float64Ptr(100)}, want: nil},
+		{name: "unsigned keeps example equal to inclusive maximum 2^63", unsigned: true, raw: "9223372036854775808", prop: i64Bounds(nil, float64Ptr(two63), false, false), want: uint64(9223372036854775808)},
+		{name: "unsigned drops 2^63+1 above inclusive maximum 2^63", unsigned: true, raw: "9223372036854775809", prop: i64Bounds(nil, float64Ptr(two63), false, false), want: nil},
+		{name: "unsigned drops example equal to exclusive minimum 2^63", unsigned: true, raw: "9223372036854775808", prop: i64Bounds(float64Ptr(two63), nil, true, false), want: nil},
+		{name: "unsigned keeps 2^63+1 above exclusive minimum 2^63", unsigned: true, raw: "9223372036854775809", prop: i64Bounds(float64Ptr(two63), nil, true, false), want: uint64(9223372036854775809)},
+		{name: "unsigned drops example equal to exclusive maximum 2^63", unsigned: true, raw: "9223372036854775808", prop: i64Bounds(nil, float64Ptr(two63), false, true), want: nil},
+		{name: "unsigned drops below inclusive minimum", unsigned: true, raw: "5", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(10)}, want: nil},
 		{name: "unsigned drops above int32 format", unsigned: true, raw: "3000000000", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt32}, want: nil},
 		{name: "number basic float", raw: "2.5", prop: &OpenAPIProperty{Type: typeNumber}, want: float64(2.5)},
 		{name: "number rejects NaN", raw: "NaN", prop: &OpenAPIProperty{Type: typeNumber}, want: nil},

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"math/big"
 	"net/http"
 	"regexp"
 	"sort"
@@ -2139,10 +2140,30 @@ func coerceUnsignedExample(raw string, prop *OpenAPIProperty) any {
 	if prop.Format == formatInt32 && u > math.MaxInt32 {
 		return nil
 	}
-	if !exampleInBounds(float64(u), prop) {
+	if !unsignedInBounds(u, prop) {
 		return nil
 	}
 	return u
+}
+
+// unsignedInBounds is exampleInBounds for a uint64: float64(u) rounds above
+// 2^53, so it would keep 2^63+1 under maximum 2^63. big.Float built from a
+// uint64 or a float64 is exact, so the comparison is too.
+func unsignedInBounds(u uint64, prop *OpenAPIProperty) bool {
+	n := new(big.Float).SetUint64(u)
+	if prop.Minimum != nil {
+		c := n.Cmp(big.NewFloat(*prop.Minimum))
+		if c < 0 || (c == 0 && prop.ExclusiveMinimum != nil && *prop.ExclusiveMinimum) {
+			return false
+		}
+	}
+	if prop.Maximum != nil {
+		c := n.Cmp(big.NewFloat(*prop.Maximum))
+		if c > 0 || (c == 0 && prop.ExclusiveMaximum != nil && *prop.ExclusiveMaximum) {
+			return false
+		}
+	}
+	return true
 }
 
 // coerceNumberExample parses raw as a float, rejecting the non-finite values
