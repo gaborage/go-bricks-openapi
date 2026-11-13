@@ -65,6 +65,15 @@ type Route struct {
 	// added response reuses the route's error-envelope $ref and is described
 	// with the canonical HTTP status text.
 	ErrorStatuses []int
+	// SourcePath is the route's full path as go-bricks joins it, before Path's
+	// OpenAPI templating (":id" stays ":id"). NodeKey is the echo route node
+	// that Method and SourcePath land on: two routes with one NodeKey are one
+	// route, and the analyzer keeps only the first. Site is the registration's
+	// project-relative file:line:col. The analyzer's duplicate-route pass reads
+	// all three; the generator reads none.
+	SourcePath string
+	NodeKey    string
+	Site       string
 }
 
 // UnresolvedRoute is one route registration the analysis found but could not

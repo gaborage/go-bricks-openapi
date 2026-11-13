@@ -287,6 +287,10 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 		return nil, fmt.Errorf("failed to discover modules: %w", err)
 	}
 
+	// Every module's routes are known: keep the first registration of each
+	// route node, project-wide, and warn on the rest.
+	a.dropDuplicateRoutes(modules)
+
 	project.Modules = modules
 	project.Types = a.typeRegistry
 	return project, nil
@@ -693,9 +697,12 @@ func (a *ProjectAnalyzer) isModuleDepsField(field *ast.Field) bool {
 // the entire package. moduleName is stamped onto each route at build time (a
 // per-route server.WithModule option overrides it).
 func (a *ProjectAnalyzer) extractRoutesFromPackage(astFile *ast.File, filePath, structName, moduleName string) []models.Route {
+	// One route-node set for the module's whole walk: every file and every
+	// delegate walker, so a losing registration never registers its payload.
+	nodes := routeNodes{}
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
 	if err != nil || files == nil {
-		return a.collectRoutesFromFile(astFile, filePath, structName, moduleName, map[string]struct{}{frameworkPkgServer: {}})
+		return a.collectRoutesFromFile(astFile, filePath, structName, moduleName, map[string]struct{}{frameworkPkgServer: {}}, nodes)
 	}
 
 	var routes []models.Route
@@ -708,7 +715,10 @@ func (a *ProjectAnalyzer) extractRoutesFromPackage(astFile *ast.File, filePath, 
 		a.extractConstants(file)
 	}
 
-	for path, file := range files {
+	// Sorted, so the first of two registrations of one route node is the same
+	// on every run (map order would pick a different winner between files).
+	for _, path := range slices.Sorted(maps.Keys(files)) {
+		file := files[path]
 		aliases := a.extractImportAliases(file, serverImportPath)
 		if len(aliases) == 0 {
 			continue
@@ -716,14 +726,14 @@ func (a *ProjectAnalyzer) extractRoutesFromPackage(astFile *ast.File, filePath, 
 		// Each file is walked with its OWN path: the resolver skips the file
 		// whose path it is given, so pairing this AST with the Module-struct
 		// file's path would hide that file's named types from every handler here.
-		routes = append(routes, a.collectRoutesFromFile(file, path, structName, moduleName, aliases)...)
+		routes = append(routes, a.collectRoutesFromFile(file, path, structName, moduleName, aliases, nodes)...)
 	}
 
 	return routes
 }
 
 // collectRoutesFromFile gathers routes for a specific module struct from a single file
-func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, structName, moduleName string, serverAliases map[string]struct{}) []models.Route {
+func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, structName, moduleName string, serverAliases map[string]struct{}, nodes routeNodes) []models.Route {
 	var routes []models.Route
 
 	for _, decl := range astFile.Decls {
@@ -751,6 +761,7 @@ func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, str
 			moduleName:    moduleName,
 			serverAliases: serverAliases,
 			signature:     funcDecl.Type,
+			nodes:         nodes,
 		})...)
 	}
 
@@ -776,6 +787,7 @@ type walkSetup struct {
 	rootRegistrar string
 	moduleName    string
 	serverAliases map[string]struct{}
+	nodes         routeNodes // the module's route-node set; nil tracks nothing
 }
 
 // extractRoutesFromFuncBodyWithAliases walks a RegisterRoutes body (and the
@@ -793,6 +805,7 @@ func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(body *ast.BlockSt
 		serverAliases: setup.serverAliases,
 		constants:     a.constants,
 		signature:     setup.signature,
+		nodes:         setup.nodes,
 		// Seed the recursion stack with the entry method so a helper that calls
 		// back into RegisterRoutes cannot re-walk it (cycle guard for the root).
 		stack: map[string]bool{walkStackKey(setup.filePath, setup.structName, moduleMethodRegisterRoutes): true},
@@ -843,7 +856,14 @@ type routeWalker struct {
 	// collectLocalNames). A bare call to one of these names binds to the
 	// local, never a same-named package-level function.
 	localNames map[string]bool
-	routes     []models.Route
+	// nodes is the owning module's route-node set, shared with every walker
+	// of the module (see routeNodes).
+	nodes routeNodes
+	// viaSite is the file:line:col of the outermost delegate call that led
+	// to this walker ("" for a RegisterRoutes body itself), so a helper
+	// called twice yields two distinguishable registration sites.
+	viaSite string
+	routes  []models.Route
 }
 
 // walkBody collects server.METHOD route registrations from a body (with
@@ -1037,13 +1057,12 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, view bindingView) *model
 		return nil
 	}
 
-	route := &models.Route{
-		Method: strings.ToUpper(shape.method),
-		Tags:   []string{},
-		Path:   normalizePath(joinRoutePath(prefix.path, rawPath)),
-		// Module is set at build time (WithModule in the opts loop overrides it),
-		// so no later stamping pass needs a zero-value sentinel.
-		Module: w.moduleName,
+	route := w.baseRoute(call, shape.method, joinRoutePath(prefix.path, rawPath))
+	if !w.nodes.claim(route.NodeKey) {
+		// A later registration of a route node the module already claimed:
+		// dropDuplicateRoutes warns and removes it, so none of its payload
+		// types may be registered (they would be orphan components).
+		return route
 	}
 	if shape.handlerIdx() < len(call.Args) {
 		handlerName, handler := w.a.extractHandlerInfo(call.Args[shape.handlerIdx()], w.astFile, w.filePath, w.structName)
@@ -1059,6 +1078,42 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, view bindingView) *model
 	}
 	w.a.applyRouteDirectives(route, call.Pos())
 	return route
+}
+
+// baseRoute builds the route a registration call declares for method and
+// joined, the full path go-bricks joins: its OpenAPI-templated Path, the raw
+// path, route-node key and site the duplicate-route pass reads, and the
+// owning module (set at build time; a WithModule option overrides it, so no
+// later stamping pass needs a zero-value sentinel).
+func (w *routeWalker) baseRoute(call *ast.CallExpr, method, joined string) *models.Route {
+	method = strings.ToUpper(method)
+	return &models.Route{
+		Method:     method,
+		Tags:       []string{},
+		Path:       normalizePath(joined),
+		Module:     w.moduleName,
+		SourcePath: joined,
+		NodeKey:    routeNodeKey(method, joined),
+		Site:       w.site(call),
+	}
+}
+
+// site renders a registration call's position, followed by the outermost
+// delegate call that reached it when the call sits in a delegate.
+func (w *routeWalker) site(call *ast.CallExpr) string {
+	if w.viaSite == "" {
+		return w.a.nodeLoc(call)
+	}
+	return w.a.nodeLoc(call) + " via " + w.viaSite
+}
+
+// delegateSite is the viaSite a child walker for the delegate call inherits:
+// this walker's own, or call itself when this walker is the outermost.
+func (w *routeWalker) delegateSite(call *ast.CallExpr) string {
+	if w.viaSite != "" {
+		return w.viaSite
+	}
+	return w.a.nodeLoc(call)
 }
 
 // addCallPrefix resolves a <registrar>.Add(...) call to its known group prefix.
@@ -1134,12 +1189,10 @@ func (w *routeWalker) routeFromAddCall(call *ast.CallExpr, view bindingView) *mo
 		return nil
 	}
 
-	route := &models.Route{
-		Method: strings.ToUpper(m),
-		Tags:   []string{},
-		Path:   normalizePath(joinRoutePath(group.path, rawPath)),
-		Module: w.moduleName,
-	}
+	route := w.baseRoute(call, m, joinRoutePath(group.path, rawPath))
+	// Add registers no payload, so a loser needs no early return here; the
+	// claim only stops a later typed registration of the node registering one.
+	w.nodes.claim(route.NodeKey)
 	// Raw Add routes are schema-free: the framework records them with zero-valued
 	// type fields (no request/response models), so resolve only the handler name
 	// — never the request/response schema — even if a typed handler is referenced.
@@ -1276,6 +1329,8 @@ func (w *routeWalker) recurseInto(call *ast.CallExpr, target delegateContext, fi
 		constants:     constants,
 		signature:     decl.Type,
 		stack:         w.stack, // shared: cycles across delegation chains must terminate
+		nodes:         w.nodes,
+		viaSite:       w.delegateSite(call),
 	}
 	w.stack[key] = true
 	dw.walkBody(decl.Body, seed)
@@ -1327,6 +1382,8 @@ func (w *routeWalker) recurseIntoPackageFunc(funcName string, call *ast.CallExpr
 		constants:     w.constants,   // same package as the caller
 		signature:     decl.Type,
 		stack:         w.stack,
+		nodes:         w.nodes,
+		viaSite:       w.delegateSite(call),
 	}
 	w.stack[key] = true
 	dw.walkBody(decl.Body, seed)
