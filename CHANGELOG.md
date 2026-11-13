@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.7.0](https://github.com/gaborage/go-bricks-openapi/compare/v0.6.0...v0.7.0) (2026-11-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **generator:** a slice or array payload of an in-module struct whose name matches a well-known type (e.g. a local UUID) is now documented as an array of $ref items instead of string/uuid items.
+* **analyzer:** a field tagged json:"-," or json:"-,omitempty" is now documented as a property named "-" instead of being omitted, and an embed so tagged nests under "-" with a $ref to its type.
+* **analyzer:** an anonymous struct request no longer raises a warning, so generate --strict passes on it, and doctor counts it as a typed request. Its operation gains typed path, query and header parameters (path parameters change from the string fallback to their Go type) and an inline requestBody, application/jose when it carries a jose tag. In the anonymous_payload golden, POST /notes/{id} gains an int64 id, a q query parameter and an inline {body} requestBody.
+* **generator:** a route whose success status resolves to 204 is now documented as a bodiless "No Content" 204, and a payload type reachable only from such routes is no longer emitted as a component. Such a route's payload no longer raises payload warnings, so generate --strict can newly pass.
+* **analyzer:** join group prefixes and paths the way go-bricks does ([#205](https://github.com/gaborage/go-bricks-openapi/issues/205))
+* **analyzer:** template mid-segment ':' params and unescape '\:' ([#204](https://github.com/gaborage/go-bricks-openapi/issues/204))
+* **analyzer:** generated specs change their documented success status for handlers that return a Result / ResultWithMeta literal with a nil error or use a naked return after binding the first named result. Such a handler is now documented with the status go-bricks sends instead of 200, and a handler whose last nil-error return is a literal without a Status key is now documented as 200 even if an earlier return used a constructor such as server.Created.
+* **generator:** the generated ErrorResponse component no longer declares a value property on details.validationErrors items, and its details description changed. Generated client types for the error envelope lose that field.
+
+### Added
+
+* **analyzer:** state a Marshaler type's schema with //openapi:schema ([#213](https://github.com/gaborage/go-bricks-openapi/issues/213)) ([cb0ab7b](https://github.com/gaborage/go-bricks-openapi/commit/cb0ab7b718700e2af26709693116d50191c063cb))
+
+
+### Fixed
+
+* **analyzer:** document anonymous struct requests like named ones ([#212](https://github.com/gaborage/go-bricks-openapi/issues/212)) ([a15e7a4](https://github.com/gaborage/go-bricks-openapi/commit/a15e7a432104331addb764f5021be1f90695055c))
+* **analyzer:** join group prefixes and paths the way go-bricks does ([#205](https://github.com/gaborage/go-bricks-openapi/issues/205)) ([e9685a0](https://github.com/gaborage/go-bricks-openapi/commit/e9685a0e938866b2c33bb0a245fff2effc8f2722))
+* **analyzer:** keep json:"-," fields under the key "-" ([#208](https://github.com/gaborage/go-bricks-openapi/issues/208)) ([ce95bb7](https://github.com/gaborage/go-bricks-openapi/commit/ce95bb72fb0b201f9dcc5a90b4d26ee88e9228b1))
+* **analyzer:** read status of returned Result literals, naked returns ([#206](https://github.com/gaborage/go-bricks-openapi/issues/206)) ([e274b11](https://github.com/gaborage/go-bricks-openapi/commit/e274b11b0a6f94011186bbec88a17ce147a2019c)), closes [#142](https://github.com/gaborage/go-bricks-openapi/issues/142)
+* **analyzer:** template mid-segment ':' params and unescape '\:' ([#204](https://github.com/gaborage/go-bricks-openapi/issues/204)) ([5689077](https://github.com/gaborage/go-bricks-openapi/commit/5689077476c852613a1d0d8bce2ec4cdc276f21f))
+* **generator:** $ref slice payloads of project structs named well-known ([#207](https://github.com/gaborage/go-bricks-openapi/issues/207)) ([381d708](https://github.com/gaborage/go-bricks-openapi/commit/381d708c9fe330925f6269a674eb6af08cc33268))
+* **generator:** document routes resolving to 204 without a body ([#209](https://github.com/gaborage/go-bricks-openapi/issues/209)) ([61f2ab5](https://github.com/gaborage/go-bricks-openapi/commit/61f2ab5633991937e27adea3eeaa9b5334369792))
+* **generator:** drop validationErrors value from ErrorResponse ([#203](https://github.com/gaborage/go-bricks-openapi/issues/203)) ([f27830a](https://github.com/gaborage/go-bricks-openapi/commit/f27830af1129f28fdbb39f5ff1b0eb96bc7e58da)), closes [#189](https://github.com/gaborage/go-bricks-openapi/issues/189)
+* **generator:** stamp type-range bounds on narrow integer widths ([#210](https://github.com/gaborage/go-bricks-openapi/issues/210)) ([175fde0](https://github.com/gaborage/go-bricks-openapi/commit/175fde0e40401139f954f68f1d48ad37a5872b9e))
+
 ## [0.6.0](https://github.com/gaborage/go-bricks-openapi/compare/v0.5.0...v0.6.0) (2026-10-12)
 
 
