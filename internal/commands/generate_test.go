@@ -861,6 +861,22 @@ func TestToJSON(t *testing.T) {
 	}
 }
 
+// TestToJSONKeepsIntegerDigits pins that --format json writes an integer bound
+// or enum member with every digit: go-yaml decodes an !!int above MaxInt64 as
+// uint64 and one above 2^53 as int, both of which encoding/json prints exactly.
+func TestToJSONKeepsIntegerDigits(t *testing.T) {
+	yamlSpec := "maximum: 18446744073709551615\nminimum: 9007199254740993\nenum:\n  - 18446744073709551614\n  - 7\n"
+	out, err := toJSON(yamlSpec)
+	if err != nil {
+		t.Fatalf("toJSON: %v", err)
+	}
+	for _, want := range []string{`"maximum": 18446744073709551615`, `"minimum": 9007199254740993`, "18446744073709551614,"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("JSON output lacks %s:\n%s", want, out)
+		}
+	}
+}
+
 // TestEmitContentWarnings covers the empty/untyped warning detection.
 func TestEmitContentWarnings(t *testing.T) {
 	if emitContentWarnings(&models.Project{}) != 1 {

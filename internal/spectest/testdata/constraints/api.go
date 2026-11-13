@@ -20,6 +20,13 @@ type CreateReq struct {
 	Slug   string            `json:"slug" validate:"startswith=svc-"`                   // value pattern
 	Region string            `json:"region" validate:"oneof='North East' 'South West'"` // quoted enum
 	Meta   map[string]string `json:"meta" validate:"min=1,max=10"`                      // map cardinality -> minProperties/maxProperties
+	// Integer bounds and enum members are documented with every digit the tag
+	// wrote: uint64 above MaxInt64, int64 above 2^53, and a round 1000000.
+	UMax     uint64 `json:"uMax" validate:"max=18446744073709551615"`
+	UGt      uint64 `json:"uGt" validate:"gt=18446744073709551614"`
+	UEnum    uint64 `json:"uEnum" validate:"oneof=18446744073709551615 18446744073709551614 7"`
+	ISmall   int64  `json:"iSmall" validate:"max=9007199254740993"`
+	IMillion int64  `json:"iMillion" validate:"max=1000000"`
 }
 
 // Ack is the create acknowledgement.

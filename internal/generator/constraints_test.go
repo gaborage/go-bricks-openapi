@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,31 +30,31 @@ func TestConstraintSetBoundsKeepMostRestrictive(t *testing.T) {
 
 func TestConstraintSetNumericTieExclusiveWins(t *testing.T) {
 	var s constraintSet
-	s.setMinimum(numericBound{intVal: 5})                  // gte=5
-	s.setMinimum(numericBound{intVal: 5, exclusive: true}) // gt=5
-	if !s.minimum.exclusive || s.minimum.intVal != 5 {
+	s.setMinimum(numericBound{value: intNumber(5)})                  // gte=5
+	s.setMinimum(numericBound{value: intNumber(5), exclusive: true}) // gt=5
+	if !s.minimum.exclusive || s.minimum.value != intNumber(5) {
 		t.Errorf("tie must keep exclusive: %+v", *s.minimum)
 	}
 	// A strictly larger inclusive floor beats a smaller exclusive one and drops
 	// its exclusivity (exclusivity travels with the winning value).
-	s.setMinimum(numericBound{intVal: 7})
-	if s.minimum.exclusive || s.minimum.intVal != 7 {
+	s.setMinimum(numericBound{value: intNumber(7)})
+	if s.minimum.exclusive || s.minimum.value != intNumber(7) {
 		t.Errorf("larger inclusive floor must win outright: %+v", *s.minimum)
 	}
 }
 
 func TestConstraintSetNumericInt64Precision(t *testing.T) {
 	var s constraintSet
-	s.setMinimum(numericBound{intVal: 9007199254740993}) // 2^53 + 1
-	s.setMinimum(numericBound{intVal: 9007199254740992}) // 2^53
-	if s.minimum.intVal != 9007199254740993 {
-		t.Errorf("int64 bounds must compare as int64, got %d", s.minimum.intVal)
+	s.setMinimum(numericBound{value: intNumber(9007199254740993)}) // 2^53 + 1
+	s.setMinimum(numericBound{value: intNumber(9007199254740992)}) // 2^53
+	if s.minimum.value != intNumber(9007199254740993) {
+		t.Errorf("int64 bounds must compare exactly, got %+v", s.minimum.value)
 	}
 	var f constraintSet
-	f.setMaximum(numericBound{floatVal: 2.5, isFloat: true})
-	f.setMaximum(numericBound{intVal: 3})
-	if !f.maximum.isFloat || f.maximum.floatVal != 2.5 {
-		t.Errorf("mixed compare must fall back to float64 and keep the winner's type: %+v", *f.maximum)
+	f.setMaximum(numericBound{value: floatNumber(2.5)})
+	f.setMaximum(numericBound{value: intNumber(3)})
+	if f.maximum.value != floatNumber(2.5) {
+		t.Errorf("mixed compare must keep the winner's kind: %+v", *f.maximum)
 	}
 }
 
@@ -71,15 +72,15 @@ func TestConstraintSetLastSetWinsForFormatPatternEnum(t *testing.T) {
 }
 
 func TestConstraintSetApplyToWritesOnlySetFields(t *testing.T) {
-	prop := &OpenAPIProperty{Minimum: floatPtr(0)} // the uint pre-stamp
+	prop := &OpenAPIProperty{Minimum: num(0)} // the uint pre-stamp
 	var empty constraintSet
 	empty.applyTo(prop)
-	if prop.Minimum == nil || *prop.Minimum != 0 {
+	if prop.Minimum == nil || prop.Minimum.Float64() != 0 {
 		t.Error("empty set must not clear the uint minimum:0 pre-stamp")
 	}
-	s := constraintSet{minimum: &numericBound{intVal: 5, exclusive: true}, minLength: intPtr(3), enum: []any{"a"}}
+	s := constraintSet{minimum: &numericBound{value: intNumber(5), exclusive: true}, minLength: intPtr(3), enum: []any{"a"}}
 	s.applyTo(prop)
-	if *prop.Minimum != 5 || prop.ExclusiveMinimum == nil || !*prop.ExclusiveMinimum || *prop.MinLength != 3 || len(prop.Enum) != 1 {
+	if prop.Minimum.Float64() != 5 || prop.ExclusiveMinimum == nil || !*prop.ExclusiveMinimum || *prop.MinLength != 3 || len(prop.Enum) != 1 {
 		t.Errorf("applyTo did not write set fields: %+v", prop)
 	}
 	if prop.ExclusiveMaximum != nil || prop.Maximum != nil {
@@ -157,63 +158,63 @@ func TestConstraintsFor(t *testing.T) {
 			name:        "integer minimum",
 			shape:       prim("int"),
 			constraints: map[string]string{"min": "18"},
-			want:        OpenAPIProperty{Minimum: floatPtr(18)},
+			want:        OpenAPIProperty{Minimum: num(18)},
 			description: "should map min to minimum for integers",
 		},
 		{
 			name:        "integer maximum",
 			shape:       prim("int"),
 			constraints: map[string]string{"max": "120"},
-			want:        OpenAPIProperty{Maximum: floatPtr(120)},
+			want:        OpenAPIProperty{Maximum: num(120)},
 			description: "should map max to maximum for integers",
 		},
 		{
 			name:        "int64 minimum",
 			shape:       prim("int64"),
 			constraints: map[string]string{"min": "1000"},
-			want:        OpenAPIProperty{Minimum: floatPtr(1000)},
+			want:        OpenAPIProperty{Minimum: num(1000)},
 			description: "should handle int64 type",
 		},
 		{
 			name:        "float minimum",
 			shape:       prim("float64"),
 			constraints: map[string]string{"min": "0.5"},
-			want:        OpenAPIProperty{Minimum: floatPtr(0.5)},
+			want:        OpenAPIProperty{Minimum: num(0.5)},
 			description: "should map min to minimum for floats",
 		},
 		{
 			name:        "float maximum",
 			shape:       prim("float64"),
 			constraints: map[string]string{"max": "99.9"},
-			want:        OpenAPIProperty{Maximum: floatPtr(99.9)},
+			want:        OpenAPIProperty{Maximum: num(99.9)},
 			description: "should map max to maximum for floats",
 		},
 		{
 			name:        "greater than (exclusive minimum)",
 			shape:       prim("int"),
 			constraints: map[string]string{"gt": "0"},
-			want:        OpenAPIProperty{Minimum: floatPtr(0), ExclusiveMinimum: boolPtr(true)},
+			want:        OpenAPIProperty{Minimum: num(0), ExclusiveMinimum: boolPtr(true)},
 			description: "should map gt to exclusive minimum",
 		},
 		{
 			name:        "greater than or equal",
 			shape:       prim("int"),
 			constraints: map[string]string{"gte": "1"},
-			want:        OpenAPIProperty{Minimum: floatPtr(1)},
+			want:        OpenAPIProperty{Minimum: num(1)},
 			description: "should map gte to minimum",
 		},
 		{
 			name:        "less than (exclusive maximum)",
 			shape:       prim("int"),
 			constraints: map[string]string{"lt": "100"},
-			want:        OpenAPIProperty{Maximum: floatPtr(100), ExclusiveMaximum: boolPtr(true)},
+			want:        OpenAPIProperty{Maximum: num(100), ExclusiveMaximum: boolPtr(true)},
 			description: "should map lt to exclusive maximum",
 		},
 		{
 			name:        "less than or equal",
 			shape:       prim("int"),
 			constraints: map[string]string{"lte": "99"},
-			want:        OpenAPIProperty{Maximum: floatPtr(99)},
+			want:        OpenAPIProperty{Maximum: num(99)},
 			description: "should map lte to maximum",
 		},
 		{
@@ -281,7 +282,7 @@ func TestConstraintsFor(t *testing.T) {
 				"min":      "1",
 				"max":      "1000",
 			},
-			want:        OpenAPIProperty{Minimum: floatPtr(1), Maximum: floatPtr(1000)},
+			want:        OpenAPIProperty{Minimum: num(1), Maximum: num(1000)},
 			description: "should map multiple integer constraints",
 		},
 		{
@@ -302,19 +303,19 @@ func TestConstraintsFor(t *testing.T) {
 		{
 			name: "kind-only integer min/max", shape: kindOnlyLeaf(typeInteger),
 			constraints: map[string]string{"min": "100", "max": "1000"},
-			want:        OpenAPIProperty{Minimum: floatPtr(100), Maximum: floatPtr(1000)},
+			want:        OpenAPIProperty{Minimum: num(100), Maximum: num(1000)},
 			description: "a kind-only integer leaf maps min/max to numeric bounds",
 		},
 		{
 			name: "kind-only integer gte", shape: kindOnlyLeaf(typeInteger),
 			constraints: map[string]string{"gte": "1"},
-			want:        OpenAPIProperty{Minimum: floatPtr(1)},
+			want:        OpenAPIProperty{Minimum: num(1)},
 			description: "a kind-only integer leaf maps gte to minimum",
 		},
 		{
 			name: "kind-only integer gt", shape: kindOnlyLeaf(typeInteger),
 			constraints: map[string]string{"gt": "0"},
-			want:        OpenAPIProperty{Minimum: floatPtr(0), ExclusiveMinimum: boolPtr(true)},
+			want:        OpenAPIProperty{Minimum: num(0), ExclusiveMinimum: boolPtr(true)},
 			description: "gt on a kind-only integer leaf emits minimum + exclusiveMinimum",
 		},
 		{
@@ -515,13 +516,13 @@ func TestConstraintsFor(t *testing.T) {
 		{
 			name: "numeric min+gte -> larger minimum", shape: prim("int"),
 			constraints: map[string]string{"min": "1", "gte": "10"},
-			want:        OpenAPIProperty{Minimum: floatPtr(10)},
+			want:        OpenAPIProperty{Minimum: num(10)},
 			description: "validator enforces both; effective minimum is the larger (10)",
 		},
 		{
 			name: "numeric max+lt -> smaller exclusive maximum", shape: prim("int"),
 			constraints: map[string]string{"max": "100", "lt": "50"},
-			want:        OpenAPIProperty{Maximum: floatPtr(50), ExclusiveMaximum: boolPtr(true)},
+			want:        OpenAPIProperty{Maximum: num(50), ExclusiveMaximum: boolPtr(true)},
 			description: "effective maximum is the smaller (50); lt is exclusive",
 		},
 		{
@@ -539,13 +540,13 @@ func TestConstraintsFor(t *testing.T) {
 		{
 			name: "numeric gt+gte equal magnitudes -> inclusive binds", shape: prim("int"),
 			constraints: map[string]string{"gt": "5", "gte": "10"},
-			want:        OpenAPIProperty{Minimum: floatPtr(10)},
+			want:        OpenAPIProperty{Minimum: num(10)},
 			description: "gte=10 (>gt=5) binds; inclusive 10 wins, no exclusiveMinimum",
 		},
 		{
 			name: "numeric gte+gt equal values -> exclusive wins", shape: prim("int"),
 			constraints: map[string]string{"gte": "10", "gt": "10"},
-			want:        OpenAPIProperty{Minimum: floatPtr(10), ExclusiveMinimum: boolPtr(true)},
+			want:        OpenAPIProperty{Minimum: num(10), ExclusiveMinimum: boolPtr(true)},
 			description: "equal value, exclusive (gt) is more restrictive than inclusive (gte)",
 		},
 		{
@@ -560,13 +561,54 @@ func TestConstraintsFor(t *testing.T) {
 			// INCLUSIVE floor wins outright and its exclusivity is dropped. A
 			// float64-based compare would round both to the same float64 value,
 			// treat them as a TIE, and wrongly OR in the exclusive flag from gt.
-			// The emitted Minimum itself can't distinguish the two internal values
-			// (both round to the same float64), so this row asserts on the
-			// ExclusiveMinimum flag's absence, not on the numeric value.
+			// The emitted Minimum is exact too, so it names 2^53+1 itself.
 			name: "int64 minimum overlap above 2^53 keeps the exact larger bound", shape: prim("int64"),
 			constraints: map[string]string{"gt": "9007199254740992", "gte": "9007199254740993"},
-			want:        OpenAPIProperty{Minimum: floatPtr(9007199254740992)},
+			want:        OpenAPIProperty{Minimum: numberPtr(intNumber(9007199254740993))},
 			description: "distinct int64 bounds above 2^53 compare as int64, not float64",
+		},
+		// --- exact integer bounds and enum members (issue 200) ---
+		{
+			name: "uint64 max=MaxUint64 is exact", shape: prim("uint64"),
+			constraints: map[string]string{"max": "18446744073709551615"},
+			want:        OpenAPIProperty{Maximum: numberPtr(uintNumber(math.MaxUint64))},
+			description: "a uint64 bound above MaxInt64 keeps every digit",
+		},
+		{
+			name: "uint64 max=MaxUint64 and lte=MaxUint64-1 keep the smaller", shape: prim("uint64"),
+			constraints: map[string]string{"max": "18446744073709551615", "lte": "18446744073709551614"},
+			want:        OpenAPIProperty{Maximum: numberPtr(uintNumber(math.MaxUint64 - 1))},
+			description: "two uint64 bounds that round to the same float64 still order exactly",
+		},
+		{
+			name: "uint64 equal max and lt OR exclusivity", shape: prim("uint64"),
+			constraints: map[string]string{"max": "18446744073709551615", "lt": "18446744073709551615"},
+			want:        OpenAPIProperty{Maximum: numberPtr(uintNumber(math.MaxUint64)), ExclusiveMaximum: boolPtr(true)},
+			description: "an equal-value inclusive/exclusive pair stays a tie",
+		},
+		{
+			name: "uint64 gt=MaxUint64-1 is exact", shape: prim("uint64"),
+			constraints: map[string]string{"gt": "18446744073709551614"},
+			want:        OpenAPIProperty{Minimum: numberPtr(uintNumber(math.MaxUint64 - 1)), ExclusiveMinimum: boolPtr(true)},
+			description: "the exclusive floor admits MaxUint64, not nothing",
+		},
+		{
+			name: "int64 bound beats a larger uint64 one", shape: prim("int64"),
+			constraints: map[string]string{"max": "9223372036854775808", "lte": "9223372036854775807"},
+			want:        OpenAPIProperty{Maximum: numberPtr(intNumber(math.MaxInt64))},
+			description: "int64 and uint64 compare exactly across kinds",
+		},
+		{
+			name: "float bound beats a larger integer one", shape: prim("float64"),
+			constraints: map[string]string{"max": "3", "lte": "2.5"},
+			want:        OpenAPIProperty{Maximum: numberPtr(floatNumber(2.5))},
+			description: "a mixed compare keeps the winner's kind",
+		},
+		{
+			name: "uint64 oneof keeps distinct members exact", shape: prim("uint64"),
+			constraints: map[string]string{"oneof": "18446744073709551615 18446744073709551614 7"},
+			want:        OpenAPIProperty{Enum: []any{uint64(18446744073709551615), uint64(18446744073709551614), int64(7)}},
+			description: "members above MaxInt64 do not collapse to 2^64",
 		},
 		// --- parse-failure rows: an unparsable value drops the rule silently ---
 		{
@@ -677,14 +719,14 @@ func TestConstraintsForDeterministicOverlap(t *testing.T) {
 			shape:       prim("int"),
 			constraints: map[string]string{"min": "1", "gte": "10"},
 			// both enforced; effective minimum is the larger bound, 10.
-			want: OpenAPIProperty{Minimum: floatPtr(10)},
+			want: OpenAPIProperty{Minimum: num(10)},
 		},
 		{
 			name:        "max and lt both map to maximum",
 			shape:       prim("int"),
 			constraints: map[string]string{"max": "100", "lt": "50"},
 			// both enforced; effective maximum is the smaller bound, 50 (from lt, exclusive).
-			want: OpenAPIProperty{Maximum: floatPtr(50), ExclusiveMaximum: boolPtr(true)},
+			want: OpenAPIProperty{Maximum: num(50), ExclusiveMaximum: boolPtr(true)},
 		},
 		{
 			name:        "min and len both map to minLength on string",
@@ -755,6 +797,31 @@ func TestParseNumeric(t *testing.T) {
 			description: "should parse negative float",
 		},
 		{
+			value:       "9223372036854775807",
+			expected:    int64(9223372036854775807),
+			description: "MaxInt64 stays int64",
+		},
+		{
+			value:       "9223372036854775808",
+			expected:    uint64(9223372036854775808),
+			description: "MaxInt64+1 parses as uint64, not a rounded float64",
+		},
+		{
+			value:       "18446744073709551615",
+			expected:    uint64(18446744073709551615),
+			description: "MaxUint64 parses as uint64",
+		},
+		{
+			value:       "18446744073709551616",
+			expected:    float64(18446744073709551616),
+			description: "above MaxUint64 falls back to float64",
+		},
+		{
+			value:       "1e6",
+			expected:    float64(1000000),
+			description: "exponent syntax stays float64",
+		},
+		{
 			value:       "invalid",
 			shouldError: true,
 			description: "should error on invalid input",
@@ -779,6 +846,63 @@ func TestParseNumeric(t *testing.T) {
 					tt.description, tt.expected, tt.expected, result, result)
 			}
 		})
+	}
+}
+
+// TestNumberCmp pins exact ordering across the three kinds, including pairs
+// float64 cannot tell apart, and the NaN fallback.
+func TestNumberCmp(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		a, b Number
+		want int
+	}{
+		{"int vs int above 2^53", intNumber(1<<53 + 1), intNumber(1 << 53), 1},
+		{"uint vs uint above 2^63", uintNumber(math.MaxUint64 - 1), uintNumber(math.MaxUint64), -1},
+		{"int vs uint", intNumber(math.MaxInt64), uintNumber(math.MaxInt64 + 1), -1},
+		{"negative int vs uint", intNumber(-1), uintNumber(math.MaxUint64), -1},
+		{"uint vs float 2^64", uintNumber(math.MaxUint64), floatNumber(1 << 64), -1},
+		{"float vs int equal", floatNumber(3), intNumber(3), 0},
+		{"float fraction vs int", floatNumber(2.5), intNumber(3), -1},
+		{"NaN sorts below a number", floatNumber(math.NaN()), intNumber(0), -1},
+		{"number above NaN", intNumber(0), floatNumber(math.NaN()), 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, c.a.Cmp(c.b))
+		})
+	}
+}
+
+// TestNumberCanonicalKinds pins that one value has one representation, so ==
+// on a Number agrees with Cmp, and that numberFromParsed maps each kind.
+func TestNumberCanonicalKinds(t *testing.T) {
+	assert.Equal(t, intNumber(42), uintNumber(42), "a uint64 in the int64 range is stored as int64")
+	assert.Equal(t, numberUint, uintNumber(math.MaxUint64).kind)
+	assert.Equal(t, intNumber(-3), numberFromParsed(int64(-3)))
+	assert.Equal(t, uintNumber(math.MaxUint64), numberFromParsed(uint64(math.MaxUint64)))
+	assert.Equal(t, floatNumber(0.5), numberFromParsed(0.5))
+	assert.InDelta(t, 1.8446744073709552e19, uintNumber(math.MaxUint64).Float64(), 0)
+	assert.InDelta(t, -3.0, intNumber(-3).Float64(), 0)
+	assert.InDelta(t, 0.5, floatNumber(0.5).Float64(), 0)
+}
+
+// TestNumberMarshalYAML pins the emitted text: integers with every digit, in
+// YAML and through the --format json path's decode, and floats as before.
+func TestNumberMarshalYAML(t *testing.T) {
+	for _, c := range []struct {
+		n    Number
+		want string
+	}{
+		{uintNumber(math.MaxUint64), "18446744073709551615"},
+		{intNumber(9007199254740993), "9007199254740993"},
+		{intNumber(1000000), "1000000"},
+		{intNumber(-128), "-128"},
+		{intNumber(0), "0"},
+		{floatNumber(0.5), "0.5"},
+		{floatNumber(1000000), "1e+06"},
+	} {
+		prop := OpenAPIProperty{Maximum: numberPtr(c.n)}
+		assert.Equal(t, "maximum: "+c.want+"\n", mustMarshalYAML(t, prop))
 	}
 }
 

@@ -20,7 +20,7 @@ func resolvedPayloadOf(r models.TypeShape) *models.TypeInfo {
 // nullable, a ref leaf a bare $ref.
 func TestResponsePayloadSchemaResolution(t *testing.T) {
 	int64Prop := &OpenAPIProperty{Type: typeInteger, Format: formatInt64}
-	byteItem := &OpenAPIProperty{Type: typeInteger, Format: formatInt32, Minimum: floatPtr(0), Maximum: floatPtr(255)}
+	byteItem := &OpenAPIProperty{Type: typeInteger, Format: formatInt32, Minimum: num(0), Maximum: num(255)}
 	cases := []struct {
 		name string
 		r    models.TypeShape

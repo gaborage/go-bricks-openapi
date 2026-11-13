@@ -130,8 +130,8 @@ func TestWellKnownNetAndFileModeAreTyped(t *testing.T) {
 	data := func(path string) map[string]any {
 		return digMap(t, spec.Paths, path, "get", "responses", "200", "content", "application/json", "schema", "properties", "data")
 	}
-	// go-yaml decodes uint32's maximum, 4.294967295e+09, as a float64 (#107).
-	mode := map[string]any{"type": "integer", "format": "int64", "minimum": 0, "maximum": float64(math.MaxUint32)}
+	// uint32's maximum is written as the integer 4294967295, which go-yaml decodes as int (#107).
+	mode := map[string]any{"type": "integer", "format": "int64", "minimum": 0, "maximum": math.MaxUint32}
 	str := map[string]any{"type": "string"}
 	assert.Equal(t, mode, data("/mode"), "a payload root is never nullable")
 	assert.Equal(t, mode, data("/perm"))
