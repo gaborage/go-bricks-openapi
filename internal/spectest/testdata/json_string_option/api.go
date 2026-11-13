@@ -35,6 +35,22 @@ type Prio uint8
 // so it keeps its unquoted, nullable integer schema.
 type PI *int64
 
+// PA is an alias of a pointer type: both encoding/json engines quote it, as
+// they quote *int64 written in the field, so it is a nullable string. So are
+// PAA, an alias of PA, and PC, an alias of a pointer to the named Cents.
+type PA = *int64
+
+// PAA is an alias of the alias PA.
+type PAA = PA
+
+// PC is an alias of a pointer to a named integer.
+type PC = *Cents
+
+// PA2 is an alias of the named pointer type PI: the chain meets a defined
+// type before a pointer literal, so it is PI's toolchain-dependent case and
+// keeps its unquoted, nullable integer schema.
+type PA2 = PI
+
 // Level is written and read as text through its own methods, which win over
 // the option: it stays a string either way.
 type Level int
@@ -76,12 +92,17 @@ type Account struct {
 	Amount   json.Number    `json:"amount,string"`
 	Priority uint8          `json:"priority,string"`
 	Prio     Prio           `json:"prio,string"`
+	Alias    PA             `json:"alias,string"`
+	AliasAl  PAA            `json:"aliasAl,string"`
+	AliasC   PC             `json:"aliasC,string"`
 
 	// Unchanged: the option is ignored, or would double-encode a string.
 	Name   string  `json:"name,string" validate:"min=1"`
 	Tags   []int64 `json:"tags,string" validate:"min=1"`
 	Deep   **int64 `json:"deep,string"`
 	Ref    PI      `json:"ref,string"`
+	RefAl  PA2     `json:"refAl,string"`
+	PtrAl  *PA     `json:"ptrAl,string"`
 	Level  Level   `json:"level,string"`
 	Status Status  `json:"status,string"`
 	Plain  int64   `json:"plain" validate:"min=1"`

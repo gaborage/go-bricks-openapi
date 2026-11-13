@@ -105,6 +105,15 @@ components:
         active:
           type: string
           example: "true"
+        alias:
+          type: string
+          nullable: true
+        aliasAl:
+          type: string
+          nullable: true
+        aliasC:
+          type: string
+          nullable: true
         amount:
           type: string
         balance:
@@ -137,10 +146,18 @@ components:
           type: string
         priority:
           type: string
+        ptrAl:
+          type: integer
+          format: int64
+          nullable: true
         rate:
           type: string
           example: "2.5"
         ref:
+          type: integer
+          format: int64
+          nullable: true
+        refAl:
           type: integer
           format: int64
           nullable: true

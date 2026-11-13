@@ -305,14 +305,16 @@ func isMarshalerLeaf(s models.TypeShape) bool {
 // A named pointer type (type PI *int64) is left unquoted: the classic engine
 // (Go 1.26, the go.mod floor) ignores the option on it, Go 1.27's default
 // engine quotes it, and the schema cannot follow the toolchain. An alias of a
-// pointer type (type PA = *int64) has the same Shape and Resolution, so it is
-// left unquoted too, although both engines quote it.
+// pointer type (type PA = *int64, type PC = *Cents, or an alias of such an
+// alias) is quoted by both engines: the analyzer marks it PointerAlias, and it
+// counts as a pointer written in the field's own declaration. An alias of a
+// named pointer type (type PA2 = PI) is not marked and stays unquoted.
 //
 // This is the one place the generator reads the syntactic Shape where a
 // Resolution exists (ADR 0002 has every consumer read the Resolution): the
 // Resolution of *int64 and of type PI *int64 is the same pointer, and only
-// the Shape tells a pointer written in the field's own declaration from one
-// reached through a named type.
+// the Shape (with PointerAlias) tells a pointer written in the field's own
+// declaration from one reached through a named type.
 func isQuotedScalar(field *models.FieldInfo, prop *OpenAPIProperty) bool {
 	if !field.JSONString || field.ParamType != "" || isMarshalerLeaf(field.ResolvedShape()) {
 		return false
@@ -324,7 +326,8 @@ func isQuotedScalar(field *models.FieldInfo, prop *OpenAPIProperty) bool {
 	if r.Kind != models.ShapePointer {
 		return true
 	}
-	return field.Shape.Kind == models.ShapePointer && r.Elem != nil && r.Elem.Kind != models.ShapePointer
+	ownPointer := field.Shape.Kind == models.ShapePointer || field.PointerAlias
+	return ownPointer && r.Elem != nil && r.Elem.Kind != models.ShapePointer
 }
 
 // sortedKeys returns the keys of m in lexicographic order so callers can iterate
