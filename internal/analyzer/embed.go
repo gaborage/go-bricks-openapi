@@ -160,17 +160,18 @@ func (ec embedClassifier) declaresMarshaler(file *ast.File, path, name string) b
 }
 
 // genericRecvName returns the generic type a method receiver names (T[P] or
-// *T[P], any number of type parameters), or "" for any other receiver.
+// *T[P], any number of type parameters, parenthesized or not: (T[P]),
+// *(T[P]), (*T[P])), or "" for any other receiver.
 func genericRecvName(recv *ast.FieldList) string {
 	if recv == nil || len(recv.List) == 0 {
 		return ""
 	}
-	t := recv.List[0].Type
+	t := ast.Unparen(recv.List[0].Type)
 	if star, ok := t.(*ast.StarExpr); ok {
 		t = star.X
 	}
 	var base ast.Expr
-	switch g := t.(type) {
+	switch g := ast.Unparen(t).(type) {
 	case *ast.IndexExpr:
 		base = g.X
 	case *ast.IndexListExpr:

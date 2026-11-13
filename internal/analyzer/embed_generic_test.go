@@ -86,6 +86,17 @@ func (mbad[T]) MarshalJSON() string { return "" }
 
 type mjA = mj[int]
 type mjD mj[int]
+type pv[T any] []T
+
+func (v (pv[T])) MarshalJSON() ([]byte, error) { return nil, nil }
+
+type pp[T any] []T
+
+func (v *(pp[T])) MarshalJSON() ([]byte, error) { return nil, nil }
+
+type pq[T any] []T
+
+func (v (*pq[T])) MarshalJSON() ([]byte, error) { return nil, nil }
 `
 
 // analyzeGenericBaseRows analyzes a project whose Rows type holds one field
@@ -242,6 +253,9 @@ func TestGenericEmbedOwnMarshalerWarns(t *testing.T) {
 		{"OMjA", "mjA", nil},
 		{"OMjD", "mjD", nil},
 		{"OMbad", "mbad[int]", nil},
+		{"OPv", "pv[int]", nil},
+		{"OPp", "pp[int]", nil},
+		{"OPq", "pq[int]", nil},
 	}
 	a := analyzeGenericBaseRows(t, rows)
 	for _, r := range rows {
@@ -255,11 +269,14 @@ func TestGenericEmbedOwnMarshalerWarns(t *testing.T) {
 		"has type Mj[int]: Mj[int] is a generic instantiation",
 		"has type b.QM[int]: b.QM[int] is a generic instantiation",
 		"has type mjA: mj[int] is a generic instantiation",
+		"has type pv[int]: pv[int] is a generic instantiation", // parenthesized receivers
+		"has type pp[int]: pp[int] is a generic instantiation",
+		"has type pq[int]: pq[int] is a generic instantiation",
 	} {
 		assert.Len(t, matching(warnings, want), 1, "%q in %v", want, warnings)
 	}
-	assert.Len(t, warnings, 6, "%v", warnings)
-	assert.Len(t, a.Warnings(t.Context()), 6, "no other warning")
+	assert.Len(t, warnings, 9, "%v", warnings)
+	assert.Len(t, a.Warnings(t.Context()), 9, "no other warning")
 }
 
 // TestGenericEmbedKeepsDepthCut pins that generic carries its chain's depth:
