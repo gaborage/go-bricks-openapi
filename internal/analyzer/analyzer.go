@@ -3791,11 +3791,20 @@ func (a *ProjectAnalyzer) registerTypeAt(name, pkg string, astFile *ast.File, fi
 	// Extract the struct in the file that DECLARES it, so its qualified field
 	// types and embeds resolve against that file's imports, not the
 	// referencing file's.
+	// A struct copy whose build-tagged siblings reach another struct is no
+	// component: registerViaTypeSpecAt's chain refuses the name too.
 	structType, declFile, declPath, ok := a.structDeclSite(astFile, filePath, name)
-	if !ok {
+	if !ok || a.localCopiesDisagree(astFile, filePath, name) {
 		return a.registerViaTypeSpecAt(name, pkg, astFile, filePath, depth)
 	}
 	return a.registerStructAt(name, pkg, structType, declFile, declPath, depth)
+}
+
+// localCopiesDisagree is structCopiesDisagree for name's declarations in
+// astFile's package.
+func (a *ProjectAnalyzer) localCopiesDisagree(astFile *ast.File, filePath, name string) bool {
+	_, disagree := a.structCopiesDisagree(a.localTypeDecls(name, astFile, filePath), 0)
+	return disagree
 }
 
 // registerViaTypeSpecAt resolves a named non-struct declaration (alias `type X =
@@ -3804,8 +3813,8 @@ func (a *ProjectAnalyzer) registerTypeAt(name, pkg string, astFile *ast.File, fi
 // fields ONCE under the original name X — the component name routes/fields
 // reference. Returns nil for anything that does not bottom out at a struct
 // (named slices/maps, func types, unresolvable chains), leaving the caller's
-// fallback semantics intact. resolveTypeSpecChain's own depth arg (seeded at 0)
-// bounds the ALIAS chain only; the registration depth threads on into
+// fallback semantics intact. resolveTypeSpecChain bounds the ALIAS chain only
+// (followChain's depth); the registration depth threads on into
 // registerStructAt to bound the struct-FIELD recursion that runs once the chain
 // bottoms out at a struct.
 func (a *ProjectAnalyzer) registerViaTypeSpecAt(name, pkg string, astFile *ast.File, filePath string, depth int) *models.TypeInfo {
@@ -3813,7 +3822,7 @@ func (a *ProjectAnalyzer) registerViaTypeSpecAt(name, pkg string, astFile *ast.F
 	if !found {
 		return nil
 	}
-	st, resolvedPkg, file, path, ok := a.resolveTypeSpecChain(astFile, filePath, name, 0)
+	st, resolvedPkg, file, path, ok := a.resolveTypeSpecChain(astFile, filePath, name)
 	if !ok {
 		return nil
 	}
@@ -3850,37 +3859,153 @@ func isSameNamedReExport(spec *ast.TypeSpec) bool {
 // another local named type (recurse in the same package); and `type X = q.T`
 // (resolve the qualified struct in its own package). Returns ok=false when the
 // chain bottoms out at a non-struct (slice/map/interface/func) or cannot be
-// resolved. A parenthesized right-hand side (type X (Y)) is followed as
-// written without them. depth bounds pathological chains (same cap as
-// maxNamedResolutionDepth).
-func (a *ProjectAnalyzer) resolveTypeSpecChain(astFile *ast.File, filePath, name string, depth int) (st *ast.StructType, pkg string, file *ast.File, path string, ok bool) {
+// resolved, or when a name on it has build-tagged declarations that each
+// reach a struct, but not the same one (structCopiesDisagree). A
+// parenthesized right-hand side (type X (Y)) is followed as written without
+// them. followChain's depth, seeded at 0, bounds pathological chains (same
+// cap as maxNamedResolutionDepth).
+func (a *ProjectAnalyzer) resolveTypeSpecChain(astFile *ast.File, filePath, name string) (st *ast.StructType, pkg string, file *ast.File, path string, ok bool) {
+	e, ok := a.followChain(astFile, filePath, name, 0, false)
+	return e.st, e.pkg, e.file, e.path, ok
+}
+
+// chainEnd is the struct a chain of named types reaches: its declaration, the
+// name it is declared under, and the package/file context declaring it.
+type chainEnd struct {
+	st   *ast.StructType
+	name string
+	pkg  string
+	file *ast.File
+	path string
+}
+
+// followChain is resolveTypeSpecChain, returning the chainEnd it reaches.
+// deep also follows a qualified name that is no struct literal through its
+// own package's declarations (followQualified); structCopiesDisagree compares
+// copies that way, while resolution keeps documenting such a chain through
+// the qualified type's own resolution.
+func (a *ProjectAnalyzer) followChain(astFile *ast.File, filePath, name string, depth int, deep bool) (chainEnd, bool) {
 	if depth > 8 {
-		return nil, "", nil, "", false
+		return chainEnd{}, false
+	}
+	// Build-tagged copies that each reach a struct are decided by the structs
+	// they reach (followSpec, deep), so file order cannot: copies reaching two
+	// stop the chain, copies reaching one are that one, even when the first
+	// copy reaches it through another package's alias (type QU lx.U, with
+	// type U = dw.T, beside type QU dw.T).
+	if ends := a.copyEnds(a.localTypeDecls(name, astFile, filePath), depth); ends != nil {
+		if _, disagree := structEndsCause(ends); disagree {
+			return chainEnd{}, false
+		}
+		return ends[0], true
 	}
 	// Base case: a struct literally named `name` in this package, returned
 	// with the file that declares it.
 	if s, declFile, declPath, found := a.structDeclSite(astFile, filePath, name); found {
-		return s, declFile.Name.Name, declFile, declPath, true
+		return chainEnd{st: s, name: name, pkg: declFile.Name.Name, file: declFile, path: declPath}, true
 	}
 	ts, tsFile, tsPath, found := a.resolveLocalTypeSpec(astFile, filePath, name)
 	if !found {
-		return nil, "", nil, "", false // stdlib/third-party — caller's fallback applies
+		return chainEnd{}, false // stdlib/third-party — caller's fallback applies
 	}
+	return a.followSpec(ts, tsFile, tsPath, depth, deep)
+}
+
+// followSpec follows one declaration, ts in file, to the struct it reaches:
+// its own struct literal, a local named type (followChain, in the same
+// package), or a qualified name, resolved through file's imports in its own
+// package (followQualified). Anything else reaches no struct.
+func (a *ProjectAnalyzer) followSpec(ts *ast.TypeSpec, file *ast.File, path string, depth int, deep bool) (chainEnd, bool) {
 	switch rhs := ast.Unparen(ts.Type).(type) {
+	case *ast.StructType:
+		return chainEnd{st: rhs, name: ts.Name.Name, pkg: file.Name.Name, file: file, path: path}, true
 	case *ast.Ident:
 		// type X = Y / type X Y — follow Y in the same package (may itself be an
 		// alias, a defined type, or the terminal struct).
-		return a.resolveTypeSpecChain(tsFile, tsPath, rhs.Name, depth+1)
+		return a.followChain(file, path, rhs.Name, depth+1, deep)
 	case *ast.SelectorExpr:
 		// type X = q.T — resolve the qualified struct in its own package.
-		if pkgIdent, ok := rhs.X.(*ast.Ident); ok {
-			if q, ok := a.resolveQualifiedStruct(pkgIdent.Name+"."+rhs.Sel.Name, tsFile); ok {
-				return q.st, q.pkg, q.file, q.filePath, true
-			}
+		pkgIdent, ok := rhs.X.(*ast.Ident)
+		if !ok {
+			return chainEnd{}, false
 		}
-		return nil, "", nil, "", false
+		return a.followQualified(pkgIdent.Name+"."+rhs.Sel.Name, file, depth+1, deep)
 	default:
-		return nil, "", nil, "", false // slice/map/interface/func — not a struct shape
+		return chainEnd{}, false // slice/map/interface/func — not a struct shape
+	}
+}
+
+// followQualified follows q.T, as written in file, to the struct it reaches:
+// a struct literal of its package (qualifiedStructAt), or, when deep, the
+// struct its own declarations reach (followChain in its package: type T =
+// dw2.S, type T dw2.S). Copies are compared deep, so one reaching dw.T
+// beside one reaching lx.T = dw2.S disagree in either file order.
+func (a *ProjectAnalyzer) followQualified(qualified string, file *ast.File, depth int, deep bool) (chainEnd, bool) {
+	if q, ok := a.qualifiedStructAt(qualified, file, depth); ok {
+		return chainEnd{st: q.st, name: q.typeName, pkg: q.pkg, file: q.file, path: q.filePath}, true
+	}
+	if !deep {
+		return chainEnd{}, false
+	}
+	site, name, ok := a.inModuleTypeSite(qualified, file)
+	if !ok {
+		return chainEnd{}, false
+	}
+	return a.followChain(site.file, site.path, name, depth, true)
+}
+
+// structCopiesDisagree reports whether decls, every declaration of one name,
+// are build-tagged copies that each reach a struct (followSpec, deep, through
+// each copy's own file's imports) but not the same struct declaration: the same
+// declaring directory and the same struct name. cause is declsClashCause
+// when they reach one struct name in different directories (type W dw.Item
+// beside type W lx.Item), else declsShapeCause (type W dw.Item beside type W
+// dw.Other). A lone declaration, or copies of which one reaches no struct
+// (type M dw.Item beside type M []dw.Item), is no disagreement here: the
+// first match decides, as before. Same-package struct copies (type W
+// struct{...} in each file) reach one directory and one name, so they agree.
+func (a *ProjectAnalyzer) structCopiesDisagree(decls []typeDecl, depth int) (cause string, disagree bool) {
+	ends := a.copyEnds(decls, depth)
+	if ends == nil {
+		return "", false
+	}
+	return structEndsCause(ends)
+}
+
+// copyEnds returns the struct each of decls, every declaration of one name,
+// reaches (followSpec, deep), in order, or nil when there is only one
+// declaration or a copy reaches no struct.
+func (a *ProjectAnalyzer) copyEnds(decls []typeDecl, depth int) []chainEnd {
+	if len(decls) < 2 {
+		return nil
+	}
+	ends := make([]chainEnd, 0, len(decls))
+	for _, d := range decls {
+		e, ok := a.followSpec(d.spec, d.file, d.path, depth, true)
+		if !ok {
+			return nil
+		}
+		ends = append(ends, e)
+	}
+	return ends
+}
+
+// structEndsCause reports whether ends, the structs a type's copies reach,
+// are not all one declaration, and why (structCopiesDisagree).
+func structEndsCause(ends []chainEnd) (cause string, disagree bool) {
+	first := ends[0]
+	sameName, sameDecl := true, true
+	for _, e := range ends[1:] {
+		sameName = sameName && e.name == first.name
+		sameDecl = sameDecl && e.name == first.name && filepath.Dir(e.path) == filepath.Dir(first.path)
+	}
+	switch {
+	case sameDecl:
+		return "", false
+	case sameName:
+		return declsClashCause, true
+	default:
+		return declsShapeCause, true
 	}
 }
 
@@ -3974,10 +4099,18 @@ type qualifiedStruct struct {
 // It parses the in-module target package (with a per-dir cache) and finds the
 // named struct among the files of its package (packageClause, inPackage).
 // Returns ok=false for stdlib/third-party imports, unknown aliases, a directory
-// with no importable file, or names that are not a struct in the target package.
+// with no importable file, names that are not a struct in the target package,
+// or a struct whose build-tagged siblings in that package reach another
+// struct (structCopiesDisagree: type Loc struct{...} beside type Loc dw.Item).
 func (a *ProjectAnalyzer) resolveQualifiedStruct(qualified string, astFile *ast.File) (qualifiedStruct, bool) {
+	return a.qualifiedStructAt(qualified, astFile, 0)
+}
+
+// qualifiedStructAt is resolveQualifiedStruct at chain depth depth, which
+// bounds a cycle of build-tagged copies across packages as followChain's does.
+func (a *ProjectAnalyzer) qualifiedStructAt(qualified string, astFile *ast.File, depth int) (qualifiedStruct, bool) {
 	dot := strings.LastIndex(qualified, ".")
-	if dot < 0 {
+	if depth > 8 || dot < 0 {
 		return qualifiedStruct{}, false
 	}
 	pkgAlias, typeName := qualified[:dot], qualified[dot+1:]
@@ -4007,6 +4140,9 @@ func (a *ProjectAnalyzer) resolveQualifiedStruct(qualified string, astFile *ast.
 			continue
 		}
 		if st := a.findStructInFile(file, typeName); st != nil {
+			if _, disagree := a.structCopiesDisagree(a.localTypeDecls(typeName, file, path), depth); disagree {
+				return qualifiedStruct{}, false
+			}
 			return qualifiedStruct{typeName: typeName, pkg: file.Name.Name, st: st, file: file, filePath: path}, true
 		}
 	}

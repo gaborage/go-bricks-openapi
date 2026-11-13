@@ -305,7 +305,7 @@ func TestParenDeclarationSites(t *testing.T) {
 	assert.NotNil(t, a.findStructInFile(f, "PS"), "a parenthesized struct literal is a struct declaration")
 	assert.Nil(t, a.findStructInFile(f, "PB"))
 	reachesStruct := func(name string) bool {
-		st, pkg, file, declPath, ok := a.resolveTypeSpecChain(f, path, name, 0)
+		st, pkg, file, declPath, ok := a.resolveTypeSpecChain(f, path, name)
 		return ok && st != nil && pkg == "mod" && file == f && declPath == path
 	}
 	for _, name := range []string{"PB", "PBA", "PS"} {

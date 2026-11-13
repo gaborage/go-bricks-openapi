@@ -943,7 +943,7 @@ func TestResolveDeclsWithNoCommonShape(t *testing.T) {
 	c := newResolveCtx(file, path, false)
 	got := a.resolveLocal(models.TypeShape{Kind: models.ShapeNamed, Name: "W"}, c, identityMode)
 	assert.Equal(t, "W", renderShape(got))
-	assert.Equal(t, fieldFallback{kind: fallbackDeclsDisagree, typeName: "W"}, c.st.first)
+	assert.Equal(t, fieldFallback{kind: fallbackDeclsDisagree, typeName: "W", detail: declsShapeCause}, c.st.first)
 
 	_, ok := mergeShapes(wrap(models.ShapeSlice, prim(goTypeInt64)), wrap(models.ShapeSlice, prim(goTypeString)))
 	assert.False(t, ok, "elements of one container kind that do not merge")

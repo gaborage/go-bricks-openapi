@@ -513,7 +513,8 @@ nested Go module, is not.
   inline, as a field of its type is (every pointer shed, so never
   `nullable`), so a named type over one raises
   neither the named non-struct warning nor the no-schema-component one
-  (unless its build-tagged declarations disagree), and a request-less
+  (when its build-tagged declarations disagree, it raises their build-tagged
+  warning instead, as any payload rooted at such a type does), and a request-less
   handler returning one is recognised as the route's handler, so its
   success status and inferred error statuses are documented. A jose tag
   inside an anonymous struct payload is ignored, as before (#176): the
@@ -652,9 +653,22 @@ nested Go module, is not.
   otherwise the one in the first file by name. The same applies wherever such
   a type appears: slice items, map values and nested containers. Copies with
   no scalar to fall back on and no common container shape (`type W []string`
-  in one, `type W []int` in another), or that reach two structs of one name in
-  different packages (`type W dw.Items` in one, `type W lx.Items` in another),
-  are documented as an untyped object, with a warning.
+  in one, `type W []int` in another), that reach two structs of one name in
+  different packages (`type W dw.Items` in one, `type W lx.Items` in another,
+  or `type W dw.Item` beside `type W lx.Item`), or that each reach a struct
+  but not the same one (`type W dw.Item` beside `type W dw.Other`), are
+  documented as an untyped object, with a warning naming which of those two
+  causes applies, and register no component. Each such copy is followed to
+  its struct through its own file's imports and any aliases or defined types
+  on the way, in other packages too, so file order decides nothing. That holds
+  wherever the type is used, whichever package of the module declares it,
+  and through a named type declared over it too: a payload rooted at it is
+  untyped with the payload form of that warning, and a request of a type
+  whose copies each reach a struct gets no `requestBody` and the request form
+  (a request whose copies are non-structs keeps the non-struct warning).
+  Copies that reach the same struct (`type W dw.Item` beside
+  `type W = dw.Item`, or beside `type W lx.Item` where `lx` declares
+  `type Item = dw.Item`) keep its component, silently.
 
 ## Development
 

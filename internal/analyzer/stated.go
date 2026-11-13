@@ -253,7 +253,7 @@ func methodsRefusal(name string, m marshalerMethods, s models.StatedSchema) stri
 // (methodSetOf), any other type through the methods declared on it
 // (marshalerSet).
 func (a *ProjectAnalyzer) typeMarshalerMethods(name string, c resolveCtx) marshalerMethods {
-	if _, _, _, _, ok := a.resolveTypeSpecChain(c.file, c.path, name, 0); ok {
+	if _, _, _, _, ok := a.resolveTypeSpecChain(c.file, c.path, name); ok {
 		m, _ := a.methodSetOf(name, c, true, nil).marshaler(c.display(name))
 		return m
 	}

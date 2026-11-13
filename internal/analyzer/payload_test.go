@@ -638,7 +638,9 @@ func TestWarnPayloadEveryKind(t *testing.T) {
 		{fieldFallback{kind: fallbackDepthCap, typeName: "X"}, fmt.Sprintf(depthCapPayloadWarning, written, maxNamedResolutionDepth, "X")},
 		{fieldFallback{kind: fallbackUnresolvable, typeName: rowDecimal}, fmt.Sprintf(unresolvablePayloadWarning, rowDecimal)},
 		{fieldFallback{kind: fallbackDefinedOverQualified, typeName: "X", detail: "q.T"}, fmt.Sprintf(definedOverQualifiedPayloadWarning, written, "X", "q.T")},
-		{fieldFallback{kind: fallbackDeclsDisagree, typeName: "X"}, fmt.Sprintf(declsDisagreePayloadWarning, written, "X")},
+		{fieldFallback{kind: fallbackDeclsDisagree, typeName: "X"}, fmt.Sprintf(declsDisagreePayloadWarning, written, "X", declsShapeCause)},
+		{fieldFallback{kind: fallbackDeclsDisagree, typeName: "X", detail: declsClashCause},
+			fmt.Sprintf(declsDisagreePayloadWarning, written, "X", declsClashCause)},
 		{fieldFallback{kind: fallbackUntypedBuiltin, typeName: goTypeComplex128, detail: goTypeComplex128},
 			fmt.Sprintf(untypedBuiltinPayloadWarning, written, goTypeComplex128)},
 		{fieldFallback{kind: fallbackMarshalerPromoted, typeName: "X", detail: rowMarshalTxt, via: "Y"},
@@ -677,7 +679,7 @@ func TestPayloadDepthCapAndDeclsDisagree(t *testing.T) {
 	require.NotNil(t, routeByPath(t, routes, "/p0").Response)
 	assert.ElementsMatch(t, []string{
 		fmt.Sprintf(depthCapPayloadWarning, "[]D0", maxNamedResolutionDepth, "D9"),
-		fmt.Sprintf(declsDisagreePayloadWarning, "[]W", "W"),
+		fmt.Sprintf(declsDisagreePayloadWarning, "[]W", "W", declsShapeCause),
 	}, payloadWarnings(a))
 }
 

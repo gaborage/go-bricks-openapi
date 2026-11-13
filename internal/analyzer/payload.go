@@ -24,8 +24,10 @@ const (
 		"schema ({}) as if it were recursive"
 	definedOverQualifiedPayloadWarning = "response type %s: %s is a defined type over %s, which resolves to no schema " +
 		"(a defined type drops its target's methods, and a type from outside the module is not resolved) — emitting an untyped object"
-	declsDisagreePayloadWarning = "response type %s: %s's build-tagged declarations disagree on shape (no common " +
-		"container or scalar kind; build constraints are not evaluated) — emitting an untyped object"
+	declsDisagreePayloadWarning = "response type %s: %s's build-tagged declarations disagree on shape (%s; build " +
+		"constraints are not evaluated) — emitting an untyped object"
+	declsDisagreeRequestWarning = "request type %s: %s's build-tagged declarations disagree on shape (%s; build " +
+		"constraints are not evaluated) — no requestBody emitted"
 	untypedBuiltinPayloadWarning = "response type %s holds the builtin %s, a Go type with no JSON schema " +
 		"— emitting an untyped object"
 	uintptrPayloadWarning = "response type %s holds a uintptr, a machine address with no meaningful API contract " +
@@ -44,7 +46,8 @@ const (
 // resolvePayload resolves a payload that did not register as a project struct
 // in the file it was written in, and reports whether it handled it: stamped a
 // Resolution, or warned about the Instantiation its resolution stopped at
-// (screenGenericPayload). Any other payload whose root resolves to nothing,
+// (screenGenericPayload) or the type whose build-tagged declarations disagree
+// (screenDeclsDisagreePayload). Any other payload whose root resolves to nothing,
 // or whose resolution has an unmodelled leaf, is left untouched for
 // screenUnresolvedPayload. A resolved payload names no component (its Name
 // and Fields are cleared) unless its base is a well-known type, which keeps
@@ -62,7 +65,7 @@ func (a *ProjectAnalyzer) resolvePayload(ti *models.TypeInfo, written string, as
 	c.st.inline = true
 	r := a.resolveShape(*ti.Shape, c)
 	if !payloadResolves(&r) {
-		return a.screenGenericPayload(ti, written, c.st.first)
+		return a.screenGenericPayload(ti, written, c.st.first) || a.screenDeclsDisagreePayload(ti, written, c.st.first)
 	}
 	ti.Resolution = &r
 	if !a.isWellKnownBase(payloadBaseShape(*ti.Shape), astFile) {
@@ -72,6 +75,22 @@ func (a *ProjectAnalyzer) resolvePayload(ti *models.TypeInfo, written string, as
 	warned := a.warnPayload(written, &r, c.st.first)
 	a.warnInlineFields(&r)
 	a.registerPayloadRefs(&r, c.st.refSites, pkgFile{file: astFile, path: filePath}, written, warned)
+	return true
+}
+
+// screenDeclsDisagreePayload screens a payload whose resolution did not
+// resolve: when the first fallback it noted (fb) is a type whose build-tagged
+// declarations disagree (Result[Rows], with type Rows []A beside type Rows
+// []B), it raises the payload form of their warning, as a payload holding the
+// type under a container does, clears the name, so screenUnresolvedPayload
+// stays silent, and reports true.
+func (a *ProjectAnalyzer) screenDeclsDisagreePayload(ti *models.TypeInfo, written string, fb fieldFallback) bool {
+	if fb.kind != fallbackDeclsDisagree {
+		return false
+	}
+	a.addWarningf(declsDisagreePayloadWarning, written, fb.typeName, declsCause(fb))
+	ti.Name = ""
+	ti.Fields = nil
 	return true
 }
 
@@ -126,7 +145,7 @@ func (a *ProjectAnalyzer) warnPayload(written string, r *models.TypeShape, fb fi
 	case fallbackDefinedOverQualified:
 		a.addWarningf(definedOverQualifiedPayloadWarning, written, fb.typeName, fb.detail)
 	case fallbackDeclsDisagree:
-		a.addWarningf(declsDisagreePayloadWarning, written, fb.typeName)
+		a.addWarningf(declsDisagreePayloadWarning, written, fb.typeName, declsCause(fb))
 	case fallbackMarshalerPromoted:
 		a.addWarningf(marshalerPromotedPayloadWarning, written, fb.typeName, fb.detail, fb.via)
 	default:
@@ -252,7 +271,7 @@ func (a *ProjectAnalyzer) payloadStructSite(ti *models.TypeInfo, astFile *ast.Fi
 		q, ok := a.resolveQualifiedStruct(ti.Package+"."+ti.Name, astFile)
 		return structSite{st: q.st, pkg: q.pkg, file: q.file, path: q.filePath}, ok
 	}
-	st, pkg, file, path, ok := a.resolveTypeSpecChain(astFile, filePath, ti.Name, 0)
+	st, pkg, file, path, ok := a.resolveTypeSpecChain(astFile, filePath, ti.Name)
 	return structSite{st: st, pkg: pkg, file: file, path: path}, ok
 }
 
