@@ -57,13 +57,12 @@ func (a *ProjectAnalyzer) warnNonStructRequest(h *handlerAnalysis, astFile *ast.
 // Page[Address] with MarshalJSON) is seen through to it. Only a pointer
 // written in expr is shed: a named pointer type over one (type PP *Page[A],
 // type PtrBox[T any] *Box[T]) is a non-struct request like type PA *Address
-// (F26). ok is false when the root is anything else (LP, a named slice of
-// one, included) or the Instantiation's generic type is declared as a
-// non-struct type. A nil expr decodes as ShapeUnknown, so it is not one.
+// (F26). Parentheses around and under that pointer are shed too (pointee).
+// ok is false when the root is anything else (LP, a named slice of one,
+// included) or the Instantiation's generic type is declared as a non-struct
+// type. A nil expr decodes as ShapeUnknown, so it is not one.
 func (a *ProjectAnalyzer) requestInstantiation(expr ast.Expr, astFile *ast.File, filePath string) (inst string, ok bool) {
-	if star, isStar := expr.(*ast.StarExpr); isStar {
-		expr = star.X
-	}
+	expr = pointee(expr)
 	c := newResolveCtx(astFile, filePath, false)
 	r := a.resolveUnderlying(types.ExprString(expr), expr, c)
 	fb := c.st.first
@@ -137,7 +136,7 @@ func (a *ProjectAnalyzer) payloadInstantiation(results *ast.FieldList, serverAli
 		return ""
 	}
 	payload := a.payloadExpr(results.List[0].Type, serverAliases)
-	if star, ok := payload.(*ast.StarExpr); ok && a.isResultWrapper(unwrapGenericType(singlePointer(star).X), serverAliases) {
+	if star, ok := ast.Unparen(payload).(*ast.StarExpr); ok && a.isResultWrapper(unwrapGenericType(ast.Unparen(singlePointer(star).X)), serverAliases) {
 		return ""
 	}
 	s := a.typeShape(payload)

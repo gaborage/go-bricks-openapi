@@ -439,10 +439,10 @@ func (a *ProjectAnalyzer) computeMethodSet(name string, c resolveCtx, keep bool,
 }
 
 // rhsMethodSet returns the method set a declaration's right-hand side
-// contributes: what a struct literal promotes, or the set of the named type
-// it names (keep false for a defined type's target).
+// contributes, parentheses shed: what a struct literal promotes, or the set
+// of the named type it names (keep false for a defined type's target).
 func (a *ProjectAnalyzer) rhsMethodSet(rhs ast.Expr, c resolveCtx, keep bool, open []string) methodSet {
-	switch t := rhs.(type) {
+	switch t := ast.Unparen(rhs).(type) {
 	case *ast.StructType:
 		return a.promotedMethods(t, c, open)
 	case *ast.Ident:
