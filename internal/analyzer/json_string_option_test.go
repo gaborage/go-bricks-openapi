@@ -60,17 +60,21 @@ func TestParseFieldTagsCopiesJSONStringOption(t *testing.T) {
 // itself), a second pointer level (*PA), build-tagged declarations that
 // disagree on being such an alias, a type from outside the module, a cyclic
 // chain (invalid Go, but it parses) and a field without ",string" are false.
+// Parentheses at any step are transparent: (*int64), (PA) and a field typed
+// (PA) are such chains, and (PI) is not.
 func TestPointerAliasBit(t *testing.T) {
 	variant := func(constraint, decl string) string {
 		return "//go:build " + constraint + "\n\npackage mod\n\n" + decl + "\n"
 	}
 	decls := "type Cents int64\ntype PA = *int64\ntype PI *int64\ntype PA2 = PI\ntype PAA = PA\ntype PC = *Cents\ntype PQ = b.PA\n" +
-		"type CA = CB\ntype CB = CA\n"
+		"type CA = CB\ntype CB = CA\ntype PP = (*int64)\ntype PPA = (PA)\ntype PPS = *(int64)\ntype PPI = (PI)\n"
 	rows := "\tAlias PA `json:\"alias,string\"`\n\tAliasAl PAA `json:\"aliasAl,string\"`\n\tAliasC PC `json:\"aliasC,string\"`\n" +
 		"\tQual b.PA `json:\"qual,string\"`\n\tQualAl PQ `json:\"qualAl,string\"`\n\tQualDef b.PI `json:\"qualDef,string\"`\n" +
 		"\tDefined PI `json:\"defined,string\"`\n\tAliasDef PA2 `json:\"aliasDef,string\"`\n\tPtrAlias *PA `json:\"ptrAlias,string\"`\n" +
 		"\tTagged PT `json:\"tagged,string\"`\n\tTaggedU PU `json:\"taggedU,string\"`\n\tPlain PA `json:\"plain\"`\n\tPtr *int64 `json:\"ptr,string\"`\n\tNum int64 `json:\"num,string\"`\n" +
-		"\tDur time.Duration `json:\"dur,string\"`\n\tCycle CA `json:\"cycle,string\"`\n"
+		"\tDur time.Duration `json:\"dur,string\"`\n\tCycle CA `json:\"cycle,string\"`\n" +
+		"\tParen PP `json:\"paren,string\"`\n\tParenAl PPA `json:\"parenAl,string\"`\n\tParenStar PPS `json:\"parenStar,string\"`\n" +
+		"\tParenField (PA) `json:\"parenField,string\"`\n\tParenDef PPI `json:\"parenDef,string\"`\n"
 	a := analyzeDirectiveProject(t, map[string]string{
 		"go.mod":                            resolveGoMod,
 		filepath.Join("b", "b.go"):          "package b\n\ntype PI *int64\ntype PA = *int64\n",
@@ -91,6 +95,7 @@ func TestPointerAliasBit(t *testing.T) {
 		"QualDef": false, "Defined": false, "AliasDef": false, "PtrAlias": false,
 		"Tagged": false, "Plain": false, "Ptr": false, "Num": false,
 		"TaggedU": false, "Dur": false, "Cycle": false,
+		"Paren": true, "ParenAl": true, "ParenStar": true, "ParenField": true, "ParenDef": false,
 	}
 	assert.Equal(t, want, got)
 }

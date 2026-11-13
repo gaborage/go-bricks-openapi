@@ -114,6 +114,9 @@ components:
         aliasC:
           type: string
           nullable: true
+        aliasP:
+          type: string
+          nullable: true
         amount:
           type: string
         balance:

@@ -4551,7 +4551,9 @@ func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field, astFile 
 // through aliases only, each step in its declaring package, so a defined type
 // on the way (type PA2 = PI, with type PI *int64) makes it false. Every
 // declaration of a name must agree: build-tagged ones that disagree are false.
-// depth caps a cyclic chain, which is invalid Go but still parses.
+// Parentheses are transparent at every step: type PA = (*int64) and
+// type PB = (PA) are such chains. depth caps a cyclic chain, which is invalid
+// Go but still parses.
 func (a *ProjectAnalyzer) aliasesPointer(expr ast.Expr, file *ast.File, path string, depth int) bool {
 	if depth > maxNamedResolutionDepth {
 		return false
@@ -4564,7 +4566,7 @@ func (a *ProjectAnalyzer) aliasesPointer(expr ast.Expr, file *ast.File, path str
 		if !d.spec.Assign.IsValid() {
 			return false
 		}
-		if _, isPointer := d.spec.Type.(*ast.StarExpr); !isPointer && !a.aliasesPointer(d.spec.Type, d.file, d.path, depth+1) {
+		if _, isPointer := ast.Unparen(d.spec.Type).(*ast.StarExpr); !isPointer && !a.aliasesPointer(d.spec.Type, d.file, d.path, depth+1) {
 			return false
 		}
 	}
@@ -4572,11 +4574,11 @@ func (a *ProjectAnalyzer) aliasesPointer(expr ast.Expr, file *ast.File, path str
 }
 
 // aliasCandidateDecls returns the declarations of the named type expr writes
-// in file: a local name's in its package, an in-module q.T's in q's package
-// (inModuleTypeSite). Any other expression, and a name with no declaration in
-// the module, yields none.
+// in file, inside any parentheses: a local name's in its package, an in-module
+// q.T's in q's package (inModuleTypeSite). Any other expression, and a name
+// with no declaration in the module, yields none.
 func (a *ProjectAnalyzer) aliasCandidateDecls(expr ast.Expr, file *ast.File, path string) []typeDecl {
-	switch t := expr.(type) {
+	switch t := ast.Unparen(expr).(type) {
 	case *ast.Ident:
 		return a.localTypeDecls(t.Name, file, path)
 	case *ast.SelectorExpr:

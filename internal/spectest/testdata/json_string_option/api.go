@@ -46,6 +46,10 @@ type PAA = PA
 // PC is an alias of a pointer to a named integer.
 type PC = *Cents
 
+// PP is a parenthesized alias of a pointer type: the parentheses change
+// nothing, so it is quoted like PA.
+type PP = (*int64)
+
 // PA2 is an alias of the named pointer type PI: the chain meets a defined
 // type before a pointer literal, so it is PI's toolchain-dependent case and
 // keeps its unquoted, nullable integer schema.
@@ -95,6 +99,7 @@ type Account struct {
 	Alias    PA             `json:"alias,string"`
 	AliasAl  PAA            `json:"aliasAl,string"`
 	AliasC   PC             `json:"aliasC,string"`
+	AliasP   PP             `json:"aliasP,string"`
 
 	// Unchanged: the option is ignored, or would double-encode a string.
 	Name   string  `json:"name,string" validate:"min=1"`
