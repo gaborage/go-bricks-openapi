@@ -3,7 +3,9 @@
 // writes it; alias and defined types over a struct promote its fields; an
 // unexported embed, a predeclared type and a well-known Marshaler one add
 // nothing, but a defined type over json.RawMessage is a property; an unreadable
-// type and a generic instantiation add nothing and warn. A json name nests an
+// type and a generic instantiation of a struct add nothing and warn, while an
+// unexported instantiation of a generic non-struct type, through an alias or
+// defined type or not, adds nothing silently. A json name nests an
 // unexported struct embed, but not an unexported non-struct one.
 package embeddednonstruct
 
@@ -66,6 +68,46 @@ type NS = sql.NullString
 // Page is a generic struct: an embedded instantiation is not expanded.
 type Page[T any] struct {
 	Items []T `json:"items"`
+}
+
+// list is a generic non-struct type. ll, ol and lsd are an unexported alias,
+// in-module qualified alias and defined type over instantiations of generic
+// non-struct types: encoding/json skips them, json name or not, as it skips
+// a direct list[int]. LL and b.List[int] are exported: each is one property,
+// untyped until generic instantiations are expanded.
+type list[T any] []T
+
+type ll = list[int]
+
+type ol = b.List[int]
+
+type lsd list[int]
+
+// LL is an exported alias of list[int].
+type LL = list[int]
+
+// GenTagged embeds the unexported generic non-struct types under json names.
+type GenTagged struct {
+	ll   `json:"ll"`
+	ol   `json:"ol"`
+	lsd  `json:"lsd"`
+	Keep int `json:"keep"`
+}
+
+// GenUntagged embeds them untagged.
+type GenUntagged struct {
+	ll
+	ol
+	lsd
+	list[int]
+	Keep int `json:"keep"`
+}
+
+// GenExported embeds exported generic non-struct types.
+type GenExported struct {
+	LL
+	b.List[int]
+	Keep int `json:"keep"`
 }
 
 // Scalars embeds named non-struct types, local and qualified, by value and
@@ -143,13 +185,16 @@ type Collided struct {
 
 // Rows holds one field per row struct.
 type Rows struct {
-	Scalars  Scalars   `json:"scalars"`
-	Promoted Promoted  `json:"promoted"`
-	PromB    PromotedB `json:"promB"`
-	Dropped  Dropped   `json:"dropped"`
-	Named    Named     `json:"named"`
-	Shadowed Shadowed  `json:"shadowed"`
-	Collided Collided  `json:"collided"`
+	Scalars  Scalars     `json:"scalars"`
+	Promoted Promoted    `json:"promoted"`
+	PromB    PromotedB   `json:"promB"`
+	Dropped  Dropped     `json:"dropped"`
+	Named    Named       `json:"named"`
+	Shadowed Shadowed    `json:"shadowed"`
+	Collided Collided    `json:"collided"`
+	GenT     GenTagged   `json:"genT"`
+	GenU     GenUntagged `json:"genU"`
+	GenE     GenExported `json:"genE"`
 }
 
 // MinFilter carries a min query parameter one level down.

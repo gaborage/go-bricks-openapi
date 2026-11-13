@@ -4443,8 +4443,9 @@ func (a *ProjectAnalyzer) namedFields(field *ast.Field, astFile *ast.File, fileP
 //     (flattened) into the parent, one level deeper; an exported non-struct
 //     type is one shallow property keyed by its type name; a well-known
 //     Marshaler type is skipped unless it is an exported path, query or
-//     header parameter; a generic or unreadable type is dropped with a
-//     warning.
+//     header parameter; a generic instantiation that may be a struct, keeps
+//     a non-struct Marshaler's methods, or is not read, and an unreadable
+//     type, are dropped with a warning.
 //
 // Embedded pointers (*Base) are unwrapped. A struct reached through local or
 // in-module aliases and defined types is promoted from the package declaring
@@ -4512,7 +4513,7 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 		if tags.paramType != "" && token.IsExported(embeddedFieldName(field.Type)) {
 			return []rankedField{a.embedProperty(field, astFile, filePath, depth)}, false
 		}
-	case embedGeneric, embedUnresolvable:
+	case embedGeneric, embedGenericMarshaler, embedUnresolvable:
 		a.warnDroppedEmbed(field, target)
 	default:
 		// embedOpaqueStruct: a struct with no exported field promotes nothing.

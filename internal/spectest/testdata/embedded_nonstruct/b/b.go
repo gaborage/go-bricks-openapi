@@ -14,3 +14,6 @@ type Base struct {
 
 // Base2 is an alias of Base declared in b: it promotes Base's fields too.
 type Base2 = Base
+
+// List is a generic non-struct type.
+type List[T any] []T
