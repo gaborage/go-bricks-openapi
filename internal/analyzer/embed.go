@@ -109,8 +109,8 @@ func (t embedTarget) nonStruct() bool {
 func (ec embedClassifier) generic(file *ast.File, path string, t ast.Expr, depth int, defined bool) embedTarget {
 	warned := embedTarget{class: embedGeneric, stop: types.ExprString(t)}
 	ts, tsFile, tsPath, found := ec.genericDecl(file, path, t)
-	if !found {
-		return warned
+	if !found || !defined && ec.declaresMarshaler(tsFile, tsPath, ts.Name.Name) {
+		return warned // not read, or a marshal method the embedding struct promotes
 	}
 	var named embedTarget
 	defined = defined || !ts.Assign.IsValid()
@@ -136,6 +136,50 @@ func (ec embedClassifier) generic(file *ast.File, path string, t ast.Expr, depth
 	default:
 		return warned // a struct, a well-known Marshaler struct, or a type not read
 	}
+}
+
+// declaresMarshaler reports whether the generic type name, declared in
+// file's package, declares one of the seven marshal methods with its exact
+// signature, on the value or the pointer receiver (genericRecvName): the
+// method set does not see through an instantiation, but encoding/json calls
+// a method an embed of it promotes. A defined type on the way drops them, so
+// callers ask only when there is none.
+func (ec embedClassifier) declaresMarshaler(file *ast.File, path, name string) bool {
+	for _, pf := range ec.a.samePackageFiles(file, path) {
+		for _, decl := range pf.file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || genericRecvName(fd.Recv) != name {
+				continue
+			}
+			if sig, known := marshalerSignatures[fd.Name.Name]; known && matchMarshalerSignature(fd, sig, ec.a.fileImports(pf.file)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// genericRecvName returns the generic type a method receiver names (T[P] or
+// *T[P], any number of type parameters), or "" for any other receiver.
+func genericRecvName(recv *ast.FieldList) string {
+	if recv == nil || len(recv.List) == 0 {
+		return ""
+	}
+	t := recv.List[0].Type
+	if star, ok := t.(*ast.StarExpr); ok {
+		t = star.X
+	}
+	var base ast.Expr
+	switch g := t.(type) {
+	case *ast.IndexExpr:
+		base = g.X
+	case *ast.IndexListExpr:
+		base = g.X
+	}
+	if id, ok := base.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
 }
 
 // genericDecl finds the declaration of generic instantiation t's generic

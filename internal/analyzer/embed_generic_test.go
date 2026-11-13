@@ -22,6 +22,9 @@ type Base struct {
 	ID int ` + "`json:\"id\"`" + `
 }
 type Ptr[T any] = *Base
+type QM[T any] []T
+
+func (QM[T]) MarshalJSON() ([]byte, error) { return nil, nil }
 
 type List[T any] []T
 type Box[T any] struct {
@@ -61,6 +64,28 @@ type plain struct {
 	P int ` + "`json:\"p\"`" + `
 }
 type ptrOf[T any] = *plain
+type mj[T any] []T
+
+func (mj[T]) MarshalJSON() ([]byte, error) { return nil, nil }
+
+type mp[T any] []T
+
+func (*mp[T]) MarshalJSON() ([]byte, error) { return nil, nil }
+
+type mt[K comparable, V any] map[K]V
+
+func (mt[K, V]) MarshalText() ([]byte, error) { return nil, nil }
+
+type Mj[T any] []T
+
+func (Mj[T]) MarshalJSON() ([]byte, error) { return nil, nil }
+
+type mbad[T any] []T
+
+func (mbad[T]) MarshalJSON() string { return "" }
+
+type mjA = mj[int]
+type mjD mj[int]
 `
 
 // analyzeGenericBaseRows analyzes a project whose Rows type holds one field
@@ -197,6 +222,44 @@ func TestGenericEmbedMarshalerAndPointerWarn(t *testing.T) {
 	assert.Len(t, fieldWarnings(a, "raw"), 2, "%v", a.warnings)
 	assert.Len(t, fieldWarnings(a, "hiddenP"), 2, "%v", a.warnings)
 	assert.Len(t, fieldWarnings(a, "rawOf"), 2, "%v", a.warnings)
+}
+
+// TestGenericEmbedOwnMarshalerWarns pins that an instantiation of a generic
+// non-struct type declaring one of the marshal methods (on the value or the
+// pointer receiver, local or in-module) is warned, exported embed or not and
+// through an alias (mjA): the promoted method makes the embedding struct a
+// Marshaler, which method-set reading does not see through an
+// instantiation. A defined type on the way (mjD) drops the methods, and a
+// method whose signature is not the interface's (mbad) is no marshal method:
+// both are skipped silently when unexported.
+func TestGenericEmbedOwnMarshalerWarns(t *testing.T) {
+	rows := []embedRow{
+		{"OMj", "mj[int]", nil},
+		{"OMp", "mp[int]", nil},
+		{"OMt", "mt[string, int]", nil},
+		{"OMjExp", "Mj[int]", nil},
+		{"OQM", "b.QM[int]", nil},
+		{"OMjA", "mjA", nil},
+		{"OMjD", "mjD", nil},
+		{"OMbad", "mbad[int]", nil},
+	}
+	a := analyzeGenericBaseRows(t, rows)
+	for _, r := range rows {
+		assert.Equal(t, map[string]string{"y": goTypeInt}, renders(t, a.typeRegistry[r.typ]), r.typ)
+	}
+	warnings := embedWarnings(a)
+	for _, want := range []string{
+		"has type mj[int]: mj[int] is a generic instantiation, which is not expanded",
+		"has type mp[int]: mp[int] is a generic instantiation",
+		"has type mt[string, int]: mt[string, int] is a generic instantiation",
+		"has type Mj[int]: Mj[int] is a generic instantiation",
+		"has type b.QM[int]: b.QM[int] is a generic instantiation",
+		"has type mjA: mj[int] is a generic instantiation",
+	} {
+		assert.Len(t, matching(warnings, want), 1, "%q in %v", want, warnings)
+	}
+	assert.Len(t, warnings, 6, "%v", warnings)
+	assert.Len(t, a.Warnings(t.Context()), 6, "no other warning")
 }
 
 // TestGenericEmbedKeepsDepthCut pins that generic carries its chain's depth:
