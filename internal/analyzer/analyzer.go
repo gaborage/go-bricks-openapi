@@ -2446,9 +2446,10 @@ func (a *ProjectAnalyzer) validateGoFilePath(filePath string) error {
 }
 
 // typeInfoFromExpr converts an AST type expression to TypeInfo
-// Handles identifiers, pointers, and qualified type names
+// Handles identifiers, pointers, and qualified type names, parenthesized or
+// not: (T) is T and (*T) is *T.
 func (a *ProjectAnalyzer) typeInfoFromExpr(expr ast.Expr, packageName string, serverAliases map[string]struct{}) *models.TypeInfo {
-	switch t := expr.(type) {
+	switch t := ast.Unparen(expr).(type) {
 	case *ast.Ident:
 		return a.handleIdentType(t, packageName)
 	case *ast.StarExpr:
@@ -2490,8 +2491,11 @@ func (a *ProjectAnalyzer) handleResultWrapper(x, index ast.Expr, packageName str
 // A jose-tagged anonymous struct at the root resolves to nil
 // (joseLiteralPayload). A written root of any pointer depth (**T, ***T)
 // resolves exactly as *T does (#120): its pointee is tested, and named,
-// through singlePointer, while its Shape keeps every level.
+// through singlePointer, while its Shape keeps every level. Parentheses are
+// shed at the root and under every pointer level: Result[(T)] is Result[T],
+// *(*T) is **T.
 func (a *ProjectAnalyzer) payloadTypeInfo(expr ast.Expr, packageName string, serverAliases map[string]struct{}) *models.TypeInfo {
+	expr = ast.Unparen(expr) // Result[(T)] is Result[T]
 	if joseLiteralPayload(expr) {
 		return nil
 	}
@@ -2501,7 +2505,7 @@ func (a *ProjectAnalyzer) payloadTypeInfo(expr ast.Expr, packageName string, ser
 	case *ast.MapType, *ast.StructType:
 		return a.compositePayloadTypeInfo(e, packageName)
 	case *ast.StarExpr:
-		if isCompositePointee(singlePointer(e).X) { // *[]T, **[N]T, *map[K]V, *interface{}, *struct{…}
+		if isCompositePointee(ast.Unparen(singlePointer(e).X)) { // *[]T, **[N]T, *map[K]V, *interface{}, *struct{…}
 			return a.compositePayloadTypeInfo(e, packageName)
 		}
 	}
@@ -2509,26 +2513,28 @@ func (a *ProjectAnalyzer) payloadTypeInfo(expr ast.Expr, packageName string, ser
 }
 
 // joseLiteralPayload reports whether a payload's root, every written pointer
-// shed, is an anonymous struct with a jose tag (hasJOSETag). Such a payload
-// is not documented yet (issue 176): payloadTypeInfo resolves it to no
+// and parenthesis shed, is an anonymous struct with a jose tag (hasJOSETag).
+// Such a payload is not documented yet (issue 176): payloadTypeInfo resolves it to no
 // TypeInfo, as before anonymous struct payloads were documented, so its
 // route keeps the untyped fallback under application/json, and nothing
 // under it registers or warns.
 func joseLiteralPayload(expr ast.Expr) bool {
+	expr = ast.Unparen(expr)
 	if star, ok := expr.(*ast.StarExpr); ok {
-		expr = singlePointer(star).X
+		expr = ast.Unparen(singlePointer(star).X)
 	}
 	lit, ok := expr.(*ast.StructType)
 	return ok && hasJOSETag(lit)
 }
 
-// singlePointer peels a written pointer chain (**T, ***T) down to its last
-// level (*T); a single pointer is returned as-is. The payload path names a
+// singlePointer peels a written pointer chain (**T, ***T, *(*T)) down to its
+// last level (*T); a single pointer is returned as-is. The last level's
+// operand may still be parenthesized (*(T)). The payload path names a
 // multi-pointer root by it, because typeInfoFromExpr (handleStarExprType,
 // shared with request extraction) names only T and *T.
 func singlePointer(e *ast.StarExpr) *ast.StarExpr {
 	for {
-		inner, ok := e.X.(*ast.StarExpr)
+		inner, ok := ast.Unparen(e.X).(*ast.StarExpr)
 		if !ok {
 			return e
 		}
@@ -2608,7 +2614,7 @@ func (a *ProjectAnalyzer) scalarPayloadTypeInfo(
 	index ast.Expr, packageName string, serverAliases map[string]struct{},
 ) *models.TypeInfo {
 	shape := a.typeShape(index)
-	if _, ok := index.(*ast.InterfaceType); ok {
+	if _, ok := ast.Unparen(index).(*ast.InterfaceType); ok {
 		return &models.TypeInfo{Package: packageName, Shape: &shape}
 	}
 	peeled := index
@@ -2724,8 +2730,9 @@ func (a *ProjectAnalyzer) handleIdentType(t *ast.Ident, packageName string) *mod
 // isFrameworkType (which takes pkg.Name), and a pointer is never a Result wrapper
 // or NoContentResult marker (those are value types handled elsewhere).
 func (a *ProjectAnalyzer) handleStarExprType(t *ast.StarExpr, packageName string) *models.TypeInfo {
+	x := ast.Unparen(t.X) // *(T) is *T
 	// Handle simple pointer: *TypeName
-	if ident, ok := t.X.(*ast.Ident); ok {
+	if ident, ok := x.(*ast.Ident); ok {
 		if a.isFrameworkType(ident.Name, "") {
 			return nil
 		}
@@ -2736,7 +2743,7 @@ func (a *ProjectAnalyzer) handleStarExprType(t *ast.StarExpr, packageName string
 	}
 
 	// Handle qualified pointer: *pkg.TypeName
-	if selExpr, ok := t.X.(*ast.SelectorExpr); ok {
+	if selExpr, ok := x.(*ast.SelectorExpr); ok {
 		if pkg, ok := selExpr.X.(*ast.Ident); ok {
 			if a.isFrameworkType(selExpr.Sel.Name, pkg.Name) {
 				return nil
@@ -2810,25 +2817,32 @@ func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName 
 	return nil, "", nil
 }
 
-// isInstantiation reports whether expr, one pointer level shed, is a generic
-// type written with its type arguments (G[A], G[A, B], q.G[A]). No framework
-// parameter is generic, so as a handler parameter it is the request.
+// isInstantiation reports whether expr, parentheses and one pointer level
+// shed (pointee), is a generic type written with its type arguments (G[A],
+// G[A, B], q.G[A]). No framework parameter is generic, so as a handler
+// parameter it is the request.
 func isInstantiation(expr ast.Expr) bool {
-	if star, ok := expr.(*ast.StarExpr); ok {
-		expr = star.X
-	}
+	expr = pointee(expr)
 	return unwrapGenericType(expr) != expr
 }
 
-// isNonStructTypeLiteral reports whether expr, one pointer level shed, is a
-// type literal that can never be a struct: a slice or array, a map, an
-// interface, a func or a chan. None of these is a framework type, so as a
-// handler parameter it is the request.
-func isNonStructTypeLiteral(expr ast.Expr) bool {
-	if star, ok := expr.(*ast.StarExpr); ok {
+// pointee returns expr with its parentheses and one written pointer level
+// shed, parentheses under that pointer included: Box[A] for (*Box[A]) and
+// *(Box[A]). A parenthesized type is the same type, so every check on a
+// request's written type looks through them.
+func pointee(expr ast.Expr) ast.Expr {
+	if star, ok := ast.Unparen(expr).(*ast.StarExpr); ok {
 		expr = star.X
 	}
-	switch expr.(type) {
+	return ast.Unparen(expr)
+}
+
+// isNonStructTypeLiteral reports whether expr, parentheses and one pointer
+// level shed (pointee), is a type literal that can never be a struct: a
+// slice or array, a map, an interface, a func or a chan. None of these is a
+// framework type, so as a handler parameter it is the request.
+func isNonStructTypeLiteral(expr ast.Expr) bool {
+	switch pointee(expr).(type) {
 	case *ast.ArrayType, *ast.MapType, *ast.InterfaceType, *ast.FuncType, *ast.ChanType:
 		return true
 	}
@@ -2846,10 +2860,7 @@ func isAnonymousStruct(expr ast.Expr) bool {
 // anonymousStruct returns the struct literal expr is, parentheses and one
 // pointer level shed (struct{…}, *struct{…}), or nil.
 func anonymousStruct(expr ast.Expr) *ast.StructType {
-	if star, ok := ast.Unparen(expr).(*ast.StarExpr); ok {
-		expr = star.X
-	}
-	lit, _ := ast.Unparen(expr).(*ast.StructType)
+	lit, _ := pointee(expr).(*ast.StructType)
 	return lit
 }
 
@@ -2898,10 +2909,10 @@ func (a *ProjectAnalyzer) extractResponseType(
 }
 
 // payloadExpr returns the payload type of a handler's first result: the type
-// argument of a result wrapper (server.Result[T], ResultWithMeta[T]), else
-// the result itself.
+// argument of a result wrapper (server.Result[T], ResultWithMeta[T]), the
+// wrapper parenthesized or not, else the result itself as written.
 func (a *ProjectAnalyzer) payloadExpr(first ast.Expr, serverAliases map[string]struct{}) ast.Expr {
-	if idx, ok := first.(*ast.IndexExpr); ok && a.isResultWrapper(idx.X, serverAliases) {
+	if idx, ok := ast.Unparen(first).(*ast.IndexExpr); ok && a.isResultWrapper(idx.X, serverAliases) {
 		return idx.Index
 	}
 	return first
@@ -3345,10 +3356,11 @@ func (a *ProjectAnalyzer) statusFromResultLiteral(lit *ast.CompositeLit, serverA
 	return defaultSuccessStatus
 }
 
-// isNoContentResultType reports whether x is server.NoContentResult, honouring
-// the local alias(es) the server package is imported under.
+// isNoContentResultType reports whether x is server.NoContentResult,
+// parenthesized or not, honouring the local alias(es) the server package is
+// imported under.
 func (a *ProjectAnalyzer) isNoContentResultType(x ast.Expr, serverAliases map[string]struct{}) bool {
-	sel, ok := x.(*ast.SelectorExpr)
+	sel, ok := ast.Unparen(x).(*ast.SelectorExpr)
 	if !ok {
 		return false
 	}
@@ -3702,11 +3714,11 @@ func (a *ProjectAnalyzer) registerViaTypeSpecAt(name, pkg string, astFile *ast.F
 }
 
 // isSameNamedReExport reports whether spec is an alias of a qualified type of
-// its own name (type User = d.User), the re-export idiom. A Go alias is the
+// its own name (type User = d.User, or = (d.User)), the re-export idiom. A Go alias is the
 // type it names, so such an alias shares that type's component; an alias
 // under another name (type UA = d.User) keeps its own.
 func isSameNamedReExport(spec *ast.TypeSpec) bool {
-	sel, ok := spec.Type.(*ast.SelectorExpr)
+	sel, ok := ast.Unparen(spec.Type).(*ast.SelectorExpr)
 	return ok && spec.Assign.IsValid() && sel.Sel.Name == spec.Name.Name
 }
 
@@ -3716,7 +3728,9 @@ func isSameNamedReExport(spec *ast.TypeSpec) bool {
 // another local named type (recurse in the same package); and `type X = q.T`
 // (resolve the qualified struct in its own package). Returns ok=false when the
 // chain bottoms out at a non-struct (slice/map/interface/func) or cannot be
-// resolved. depth bounds pathological chains (same cap as maxNamedResolutionDepth).
+// resolved. A parenthesized right-hand side (type X (Y)) is followed as
+// written without them. depth bounds pathological chains (same cap as
+// maxNamedResolutionDepth).
 func (a *ProjectAnalyzer) resolveTypeSpecChain(astFile *ast.File, filePath, name string, depth int) (st *ast.StructType, pkg string, file *ast.File, path string, ok bool) {
 	if depth > 8 {
 		return nil, "", nil, "", false
@@ -3730,7 +3744,7 @@ func (a *ProjectAnalyzer) resolveTypeSpecChain(astFile *ast.File, filePath, name
 	if !found {
 		return nil, "", nil, "", false // stdlib/third-party — caller's fallback applies
 	}
-	switch rhs := ts.Type.(type) {
+	switch rhs := ast.Unparen(ts.Type).(type) {
 	case *ast.Ident:
 		// type X = Y / type X Y — follow Y in the same package (may itself be an
 		// alias, a defined type, or the terminal struct).
@@ -4274,7 +4288,8 @@ func (a *ProjectAnalyzer) structDeclSite(astFile *ast.File, filePath, name strin
 }
 
 // findStructInFile searches a single AST file for a struct type definition,
-// returning the struct type or nil if not found.
+// parenthesized or not (type PS (struct{…})), returning the struct type or
+// nil if not found.
 func (a *ProjectAnalyzer) findStructInFile(astFile *ast.File, typeName string) *ast.StructType {
 	for _, decl := range astFile.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
@@ -4288,7 +4303,7 @@ func (a *ProjectAnalyzer) findStructInFile(astFile *ast.File, typeName string) *
 				continue
 			}
 
-			structType, ok := typeSpec.Type.(*ast.StructType)
+			structType, ok := ast.Unparen(typeSpec.Type).(*ast.StructType)
 			if !ok {
 				continue
 			}
@@ -4601,13 +4616,16 @@ func isSequence(kind models.ShapeKind) bool {
 }
 
 // typeShape decodes an AST type expression into its structural Shape. Total:
-// unmodeled nodes (chan, func) decode as ShapeUnknown. A fixed-size array
+// unmodeled nodes (chan, func) decode as ShapeUnknown. Parentheses are shed
+// wherever they are written: (T) decodes as T, *(T) as *T. A fixed-size array
 // decodes as ShapeArray, distinct from a slice (see sequenceKind); its length
 // is not recorded. A generic instantiation decodes as ShapeInstantiation
 // (instantiationShape). An anonymous struct decodes as ShapeStruct carrying
 // its literal and nothing else: its fields are resolved later (resolveStruct).
 func (a *ProjectAnalyzer) typeShape(expr ast.Expr) models.TypeShape {
 	switch t := expr.(type) {
+	case *ast.ParenExpr:
+		return a.typeShape(t.X) // (T) is T, at any depth
 	case *ast.Ident:
 		if isBuiltinShapeName(t.Name) {
 			return models.TypeShape{Kind: models.ShapePrimitive, Name: t.Name}

@@ -166,8 +166,8 @@ func (ec embedClassifier) local(file *ast.File, path, name string, depth int, de
 	case *ast.SelectorExpr:
 		return ec.qualified(tsFile, ec.a.typeShape(rhs).Name, depth+1, defined)
 	case *ast.StructType:
-		// Only a parenthesized literal, type PS (struct{ ... }), gets here:
-		// resolveTypeSpecChain found any other.
+		// Defensive: resolveTypeSpecChain finds every struct literal,
+		// parenthesized (type PS (struct{ ... })) or not, before this switch.
 		return embedTarget{class: embedStruct, site: structSite{st: rhs, pkg: tsFile.Name.Name, file: tsFile, path: tsPath}}
 	case *ast.IndexExpr, *ast.IndexListExpr:
 		return embedTarget{class: embedGeneric, stop: types.ExprString(rhs)}

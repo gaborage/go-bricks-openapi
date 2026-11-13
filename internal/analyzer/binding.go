@@ -121,8 +121,8 @@ func (a *ProjectAnalyzer) warnUnbindableSite(site structSite) {
 // struct declared at site, as buildBindingPlan reads it: an exported field
 // with a param, query or header tag (the analyzer's source, the last of the
 // three present). Its type is resolved as a parameter is, in site's file,
-// with its parentheses stripped. An embedded struct, or a pointer to one, is
-// left to issue 147.
+// its parentheses shed by typeShape: reflect sees (int) as int and *(string)
+// as *string. An embedded struct, or a pointer to one, is left to issue 147.
 func (a *ProjectAnalyzer) warnUnbindableParam(field *ast.Field, site structSite) {
 	name := paramFieldName(field)
 	if name == "" || field.Tag == nil {
@@ -133,7 +133,7 @@ func (a *ProjectAnalyzer) warnUnbindableParam(field *ast.Field, site structSite)
 		return
 	}
 	c := newResolveCtx(site.file, site.path, true)
-	r := a.resolveShape(a.typeShape(unparenType(field.Type)), c)
+	r := a.resolveShape(a.typeShape(field.Type), c)
 	if field.Names == nil && embedsStruct(&r, c.st.first) {
 		return
 	}
@@ -178,25 +178,6 @@ func paramFieldName(field *ast.Field) string {
 		}
 	}
 	return ""
-}
-
-// unparenType strips the parentheses from a parameter's type, at its top
-// and under its pointers, slices and arrays: reflect sees (int) as int and
-// *(string) as *string, while the Shape decoder leaves a parenthesized type
-// unknown. The field's own expression is not changed.
-func unparenType(expr ast.Expr) ast.Expr {
-	switch t := ast.Unparen(expr).(type) {
-	case *ast.StarExpr:
-		c := *t
-		c.X = unparenType(t.X)
-		return &c
-	case *ast.ArrayType:
-		c := *t
-		c.Elt = unparenType(t.Elt)
-		return &c
-	default:
-		return t
-	}
 }
 
 // embedsStruct reports whether an embedded field's resolved type r is a
