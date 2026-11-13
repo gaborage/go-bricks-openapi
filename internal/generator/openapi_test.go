@@ -3835,10 +3835,11 @@ func TestBuildOperationSynthesizesMissingPathParams(t *testing.T) {
 // DROPPED — no example key is emitted at all.
 func TestCoerceExample(t *testing.T) {
 	tests := []struct {
-		name string
-		raw  string
-		prop *OpenAPIProperty
-		want any
+		name     string
+		raw      string
+		prop     *OpenAPIProperty
+		unsigned bool
+		want     any
 	}{
 		{name: "integer int32 in range", raw: "3", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt32}, want: int64(3)},
 		{name: "integer no format", raw: "3", prop: &OpenAPIProperty{Type: typeInteger}, want: int64(3)},
@@ -3847,6 +3848,15 @@ func TestCoerceExample(t *testing.T) {
 		{name: "integer int32 out of range", raw: "3000000000", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt32}, want: nil},
 		{name: "integer int64 in range", raw: "3000000000", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64}, want: int64(3000000000)},
 		{name: "integer overflows int64", raw: "9223372036854775808", prop: &OpenAPIProperty{Type: typeInteger}, want: nil},
+		{name: "signed int64 min=0 above MaxInt64 dropped", raw: "9223372036854775808", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(0)}, want: nil},
+		{name: "unsigned keeps 2^63", unsigned: true, raw: "9223372036854775808", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(0)}, want: uint64(9223372036854775808)},
+		{name: "unsigned keeps MaxUint64", unsigned: true, raw: "18446744073709551615", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(0)}, want: uint64(18446744073709551615)},
+		{name: "unsigned keeps value below MaxInt64", unsigned: true, raw: "42", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(0)}, want: uint64(42)},
+		{name: "unsigned drops MaxUint64 plus one", unsigned: true, raw: "18446744073709551616", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(0)}, want: nil},
+		{name: "unsigned drops negative", unsigned: true, raw: "-1", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(0)}, want: nil},
+		{name: "unsigned drops non-numeric", unsigned: true, raw: "abc", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64}, want: nil},
+		{name: "unsigned drops above maximum", unsigned: true, raw: "9223372036854775808", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Maximum: float64Ptr(100)}, want: nil},
+		{name: "unsigned drops above int32 format", unsigned: true, raw: "3000000000", prop: &OpenAPIProperty{Type: typeInteger, Format: formatInt32}, want: nil},
 		{name: "number basic float", raw: "2.5", prop: &OpenAPIProperty{Type: typeNumber}, want: float64(2.5)},
 		{name: "number rejects NaN", raw: "NaN", prop: &OpenAPIProperty{Type: typeNumber}, want: nil},
 		{name: "number rejects Inf", raw: "Inf", prop: &OpenAPIProperty{Type: typeNumber}, want: nil},
@@ -3889,7 +3899,7 @@ func TestCoerceExample(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := coerceExample(tt.raw, tt.prop)
+			got := coerceExample(tt.raw, tt.prop, tt.unsigned)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -3999,13 +4009,13 @@ func TestFieldInfoToPropertyByteFormatExample(t *testing.T) {
 func TestApplyExample(t *testing.T) {
 	t.Run("ref sibling is left untouched", func(t *testing.T) {
 		prop := &OpenAPIProperty{Ref: "#/components/schemas/X"}
-		applyExample(prop, "anything")
+		applyExample(prop, "anything", false)
 		assert.Nil(t, prop.Example, "example must never sit beside $ref")
 	})
 
 	t.Run("empty raw is a no-op", func(t *testing.T) {
 		prop := &OpenAPIProperty{Type: typeString}
-		applyExample(prop, "")
+		applyExample(prop, "", false)
 		assert.Nil(t, prop.Example)
 	})
 }

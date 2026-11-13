@@ -23,7 +23,13 @@ func (m *Module) Shutdown() error                 { return nil }
 // integer — kept, and emitted on both the parameter and its schema.
 type ListItemsReq struct {
 	Limit int `query:"limit" example:"25"`
+	// Cursor is an unsigned query parameter above MaxInt64: kept on both the
+	// parameter and its schema (#104).
+	Cursor uint64 `query:"cursor" example:"18446744073709551615"`
 }
+
+// Counter is a local named unsigned type: it resolves to uint64.
+type Counter uint64
 
 // CreateItemReq covers, field by field: a plain integer example (Count), an
 // int64 example large enough to overflow int32 (Big), a float example
@@ -45,6 +51,15 @@ type CreateItemReq struct {
 	Narrow int32    `json:"narrow" example:"3000000000"`
 	Kids   []string `json:"kids" example:"nope"`
 	Amount float64  `json:"amount" validate:"gt=10" example:"10"`
+
+	// Unsigned examples above math.MaxInt64 (#104). MaxU, NamedU and PtrU are
+	// kept as uint64 values; OverU exceeds MaxUint64 and SignedU is a signed
+	// int64 (min=0 emits the same schema as uint64), so both are dropped.
+	MaxU    uint64  `json:"max_u" example:"18446744073709551615"`
+	NamedU  Counter `json:"named_u" example:"9223372036854775808"`
+	PtrU    *uint   `json:"ptr_u" example:"9223372036854775808"`
+	OverU   uint64  `json:"over_u" example:"18446744073709551616"`
+	SignedU int64   `json:"signed_u" validate:"min=0" example:"9223372036854775808"`
 }
 
 // Item is returned by both routes.
