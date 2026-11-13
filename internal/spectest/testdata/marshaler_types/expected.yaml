@@ -183,6 +183,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /ids/{id}:
+    get:
+      operationId: marshalertypesIds
+      summary: GET /ids/{id}
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /items/{id}:
     get:
       operationId: marshalertypesItems
@@ -782,6 +824,8 @@ components:
         shadow: {}
         stamped: {}
         statusV: {}
+        stdTwo:
+          $ref: '#/components/schemas/StdTwo'
         tag:
           type: string
         taggedEmb:
@@ -791,6 +835,8 @@ components:
         textJ: {}
         toText: {}
         twin: {}
+        uuidLevel:
+          $ref: '#/components/schemas/UUIDLevel'
         withCode:
           type: string
         withID:
@@ -834,6 +880,19 @@ components:
           type: string
         Level:
           type: string
+    StdTwo:
+      type: object
+      properties:
+        IP:
+          type: string
+    UUIDLevel:
+      type: object
+      properties:
+        Level:
+          type: string
+        UUID:
+          type: string
+          format: uuid
   securitySchemes:
     TenantID:
       type: apiKey

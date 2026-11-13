@@ -3,6 +3,8 @@ package marshalertypes
 import (
 	"encoding/json"
 	"encoding/json/jsontext"
+	"net"
+	"net/netip"
 	"time"
 
 	"github.com/google/uuid"
@@ -340,4 +342,26 @@ type ListReq struct {
 	Defaults
 	Page int    `query:"page"`
 	ID   string `param:"id"`
+}
+
+// StdTwo's embedded net.IP and netip.Addr cancel each other's text
+// methods, so it is no Marshaler: encoding/json writes net.IP as an IP
+// field, and netip.Addr, a struct with no exported field, adds nothing.
+type StdTwo struct {
+	net.IP
+	netip.Addr
+}
+
+// UUIDLevel's embedded uuid.UUID and Level cancel each other's text
+// methods: encoding/json writes both as fields keyed by their type names.
+type UUIDLevel struct {
+	uuid.UUID
+	Level
+}
+
+// IDReq promotes uuid.UUID's text pair, so it is read through it: only its
+// path parameter is documented, and no body.
+type IDReq struct {
+	uuid.UUID
+	ID string `param:"id"`
 }

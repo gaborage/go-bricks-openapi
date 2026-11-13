@@ -86,6 +86,8 @@ type Fields struct {
 	WithCode  WithCode                `json:"withCode"`
 	Tag       domain.Tag              `json:"tag"`
 	Raw       Raw                     `json:"raw"`
+	StdTwo    StdTwo                  `json:"stdTwo"`
+	UUIDLevel UUIDLevel               `json:"uuidLevel"`
 }
 
 // RegisterRoutes registers one route per payload row.
@@ -105,6 +107,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.POST(hr, r, "/jose", m.jose)
 	server.POST(hr, r, "/cmd", m.cmd)
 	server.GET(hr, r, "/items/:id", m.items)
+	server.GET(hr, r, "/ids/:id", m.ids)
 }
 
 func (m *Module) getFields(ctx server.HandlerContext) (server.Result[Fields], server.IAPIError) {
@@ -178,6 +181,11 @@ func (m *Module) cmd(req CmdBody, ctx server.HandlerContext) (server.Result[Leve
 }
 
 func (m *Module) items(req ListReq, ctx server.HandlerContext) (server.Result[Level], server.IAPIError) {
+	var v server.Result[Level]
+	return v, nil
+}
+
+func (m *Module) ids(req IDReq, ctx server.HandlerContext) (server.Result[Level], server.IAPIError) {
 	var v server.Result[Level]
 	return v, nil
 }
