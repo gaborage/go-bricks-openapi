@@ -527,9 +527,13 @@ nested Go module, is not.
   generic request parameter (`Box[User]`), whatever its payload, or a
   request-less handler whose payload holds a generic
   instantiation, is now recognised as the route's handler, so its success
-  status and inferred error statuses are documented. A pointer to a result
-  wrapper (`*server.Result[T]`) is not unwrapped: its payload stays untyped
-  with no warning of its own, whatever `T` is.
+  status and inferred error statuses are documented. A handler returning a
+  pointer to a result wrapper (`*server.Result[T]`,
+  `*server.ResultWithMeta[T]`) is documented like the value form, which
+  go-bricks serves identically: payload, success status (read through
+  `&res` or `&server.Result[T]{…}`) and warnings alike. Behind two or more
+  pointers (`**server.Result[T]`) the wrapper is not unwrapped: its payload
+  stays untyped and raises the generic payload warning.
 - A handler whose request type is not a struct — a builtin (`string`,
   `*int64`), `any` or `interface{}`, a well-known or third-party type
   (`json.RawMessage`, `decimal.Decimal`), an undeclared name, a slice, map or
