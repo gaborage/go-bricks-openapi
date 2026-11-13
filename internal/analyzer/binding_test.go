@@ -163,6 +163,8 @@ var bindRows = []bindRow{
 	{"PStrs", "[]*string", queryTag("pStrs"), reasonSliceElem},
 	{"Raw", "json.RawMessage", queryTag("raw"), reasonSliceElem},
 	{"IP", "net.IP", queryTag("ip"), reasonSliceElem},
+	{"HW", "net.HardwareAddr", queryTag("hw"), reasonSliceElem},
+	{"Mask", "net.IPMask", headerTag("X-Mask"), reasonSliceElem},
 	{"Times", "[]time.Time", queryTag("times"), reasonSliceElem},
 	// A pointer to a slice.
 	{"PStrSlice", "*[]string", queryTag("pStrSlice"), reasonPointerSlice},

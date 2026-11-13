@@ -82,7 +82,8 @@ const bigInt = "big.Int"
 // only for a name in models.WellKnownTypeNames, and a name with no row gets
 // no verdict. The kind-backed names (time.Duration, time.Month,
 // time.Weekday, os.FileMode, fs.FileMode) need no row: they resolve to their
-// builtin first (knownUnderlyingBuiltins).
+// builtin first (knownUnderlyingBuiltins). net.HardwareAddr and net.IPMask
+// need none either: they resolve to a []byte shape (knownByteSlices).
 var wellKnownBinderKinds = map[string]binderKind{
 	models.WellKnownTimeTime:      kindTime,
 	models.WellKnownJSONNumber:    kindString,

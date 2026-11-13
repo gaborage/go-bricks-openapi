@@ -414,8 +414,9 @@ nested Go module, is not.
   promoted, and an exported non-struct type is one property keyed by its
   type name, a well-known one with no marshal methods included: an
   embedded kind-backed type from outside the module (`time.Duration`,
-  `time.Month`, `time.Weekday`, `os.FileMode`, `fs.FileMode`) is typed by
-  its kind (`FileMode` is an unsigned integer). An embed of a type from
+  `time.Month`, `time.Weekday`, `os.FileMode`, `fs.FileMode`,
+  `net.HardwareAddr`, `net.IPMask`) is typed by its kind (`FileMode` is an
+  unsigned integer; the two net types are base64 `[]byte`). An embed of a type from
   outside the module other than those and the well-known Marshaler types
   above (`sql.NullString`, `sync.Mutex`, `fmt.Stringer`), of a name with no
   declaration, or of a generic instantiation that may be a struct
@@ -485,7 +486,7 @@ nested Go module, is not.
   type `T`: builtins, the well-known types (`time.Time`, `time.Duration`,
   `time.Month`, `time.Weekday`, `uuid.UUID`, `json.RawMessage`,
   `json.Number`, `os.FileMode`, `fs.FileMode`, `net.IP`, `netip.Addr`,
-  `netip.Prefix`, `netip.AddrPort`), named non-struct types (local, or from another package of
+  `netip.Prefix`, `netip.AddrPort`, `net.HardwareAddr`, `net.IPMask`), named non-struct types (local, or from another package of
   the module), maps, nested slices and pointers to containers included. The
   root is never `nullable`. As `encoding/json` writes them, `[]byte` alone is a
   base64 string, while `[N]byte` (payload or field) and `[]*byte` are integer

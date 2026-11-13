@@ -41,10 +41,13 @@ type IPA = net.IP
 
 type MyIP net.IP
 
+type MyMAC net.HardwareAddr
+
 type Host struct {
 	IP   net.IP      ` + "`json:\"ip\" validate:\"required,ip\"`" + `
 	Mode os.FileMode ` + "`json:\"mode\" validate:\"max=511\"`" + `
 	Mine MyIP        ` + "`json:\"mine\"`" + `
+	HW   net.HardwareAddr ` + "`json:\"hw\"`" + `
 }
 
 type HostReq struct {
@@ -63,6 +66,9 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.GET(hr, r, "/port", m.port, server.WithTags("svc"))
 	server.GET(hr, r, "/ipa", m.ipa, server.WithTags("svc"))
 	server.GET(hr, r, "/mine", m.mine, server.WithTags("svc"))
+	server.GET(hr, r, "/hw", m.hw, server.WithTags("svc"))
+	server.GET(hr, r, "/masks", m.masks, server.WithTags("svc"))
+	server.GET(hr, r, "/mymac", m.myMAC, server.WithTags("svc"))
 }
 
 func (m *Module) host(req HostReq, ctx server.HandlerContext) (server.Result[Host], server.IAPIError) {
@@ -104,6 +110,17 @@ func (m *Module) ipa(ctx server.HandlerContext) (server.Result[IPA], server.IAPI
 func (m *Module) mine(ctx server.HandlerContext) (server.Result[MyIP], server.IAPIError) {
 	return server.Result[MyIP]{}, nil
 }
+func (m *Module) hw(ctx server.HandlerContext) (server.Result[net.HardwareAddr], server.IAPIError) {
+	return server.Result[net.HardwareAddr]{}, nil
+}
+
+func (m *Module) masks(ctx server.HandlerContext) (server.Result[[]net.IPMask], server.IAPIError) {
+	return server.Result[[]net.IPMask]{}, nil
+}
+
+func (m *Module) myMAC(ctx server.HandlerContext) (server.Result[MyMAC], server.IAPIError) {
+	return server.Result[MyMAC]{}, nil
+}
 `
 
 // TestWellKnownNetAndFileModeAreTyped pins issue 139 at the CLI: FileMode
@@ -140,12 +157,17 @@ func TestWellKnownNetAndFileModeAreTyped(t *testing.T) {
 		assert.Equal(t, str, data(path), path)
 	}
 	assert.Equal(t, map[string]any{"type": "array", "items": str}, data("/prefixes"))
-	assert.Equal(t, map[string]any{"type": "string", "format": "byte"}, data("/mine"))
+	byteStr := map[string]any{"type": "string", "format": "byte"}
+	assert.Equal(t, byteStr, data("/mine"))
+	assert.Equal(t, byteStr, data("/hw"), "net.HardwareAddr is base64 bytes, as []byte")
+	assert.Equal(t, map[string]any{"type": "array", "items": byteStr}, data("/masks"))
+	assert.Equal(t, byteStr, data("/mymac"))
 
 	host := digMap(t, spec.Components, "schemas", "Host", "properties")
 	assert.Equal(t, str, host["ip"])
 	assert.Equal(t, map[string]any{"type": "integer", "format": "int64", "minimum": 0, "maximum": 511}, host["mode"])
 	assert.Equal(t, map[string]any{"type": "string", "format": "byte"}, host["mine"])
+	assert.Equal(t, map[string]any{"type": "string", "format": "byte"}, host["hw"])
 
 	params, ok := digMap(t, spec.Paths, "/host", "get")["parameters"].([]any)
 	require.True(t, ok, "the /host operation has parameters")
@@ -163,6 +185,6 @@ func TestWellKnownNetAndFileModeAreTyped(t *testing.T) {
 		runErr = runDoctor(t.Context(), &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion})
 	})
 	require.NoError(t, runErr, doctorOut)
-	assert.Contains(t, doctorOut, "Typed routes: 10/10")
+	assert.Contains(t, doctorOut, "Typed routes: 13/13")
 	assert.NotContains(t, doctorOut, "Routes without type information")
 }
