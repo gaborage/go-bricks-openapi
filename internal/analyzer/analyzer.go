@@ -4513,7 +4513,7 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 		if tags.paramType != "" && token.IsExported(embeddedFieldName(field.Type)) {
 			return []rankedField{a.embedProperty(field, astFile, filePath, depth)}, false
 		}
-	case embedGeneric, embedGenericMarshaler, embedUnresolvable:
+	case embedGeneric, embedUnresolvable:
 		a.warnDroppedEmbed(field, target)
 	default:
 		// embedOpaqueStruct: a struct with no exported field promotes nothing.

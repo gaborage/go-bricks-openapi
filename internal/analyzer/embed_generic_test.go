@@ -18,6 +18,10 @@ const genericBaseB = `package b
 import "encoding/json"
 
 type RawOf[T any] = json.RawMessage
+type Base struct {
+	ID int ` + "`json:\"id\"`" + `
+}
+type Ptr[T any] = *Base
 
 type List[T any] []T
 type Box[T any] struct {
@@ -51,6 +55,12 @@ type Seq[T any] []T
 type sq = Seq[int]
 type ltAl[T any] = time.Time
 type ltD ltAl[int]
+type raw = b.RawOf[int]
+type hiddenP = b.Ptr[int]
+type plain struct {
+	P int ` + "`json:\"p\"`" + `
+}
+type ptrOf[T any] = *plain
 `
 
 // analyzeGenericBaseRows analyzes a project whose Rows type holds one field
@@ -85,8 +95,8 @@ func analyzeGenericBaseRows(t *testing.T, rows []embedRow) *ProjectAnalyzer {
 // warning, and so does an exported instantiation of a generic alias of a
 // non-struct Marshaler (RawOf[int], RA, b.RawOf[int]): its promoted methods
 // make the embedding struct a Marshaler, which method-set reading does not
-// see through an instantiation, while an unexported one (rawOf[int]) is
-// skipped.
+// see through an instantiation (TestGenericEmbedMarshalerAndPointerWarn
+// pins the unexported ones).
 func TestEmbeddedGenericNonStructBase(t *testing.T) {
 	rows := []embedRow{
 		{"GLl", "ll", nil},
@@ -109,7 +119,6 @@ func TestEmbeddedGenericNonStructBase(t *testing.T) {
 		{"GSq", "sq", nil},
 		{"GLtD", "ltD", nil},
 		{"GSeq", "Seq[int]", map[string]string{"Seq": "inst:Seq[int]"}},
-		{"GRawOfLower", "rawOf[int]", nil},
 		{"GRawOfExp", "RawOf[int]", nil},
 		{"GRA", "RA", nil},
 		{"GQRawOf", "b.RawOf[int]", nil},
@@ -141,6 +150,53 @@ func TestEmbeddedGenericNonStructBase(t *testing.T) {
 	assert.Len(t, fieldWarnings(a, "Seq"), 1, "%v", all)
 	assert.Len(t, fieldWarnings(a, "LL"), 1, "%v", all)
 	assert.Len(t, fieldWarnings(a, "List"), 1, "%v", all)
+}
+
+// TestGenericEmbedMarshalerAndPointerWarn pins that an unexported embed is
+// skipped only when its type is known not to be a struct and to promote no
+// marshal method. An instantiation of a generic alias of json.RawMessage
+// reached with no defined type on the way (rawOf[int], raw = b.RawOf[int])
+// keeps MarshalJSON, which makes the embedding struct a Marshaler that
+// method-set reading does not see through an instantiation: it is warned
+// untagged and nests under a json name, while a defined type on the way
+// (rawChain) drops the methods and is skipped. A generic alias of a pointer
+// (ptrOf[int], hiddenP = b.Ptr[int]) may point at a struct, which
+// encoding/json promotes, or keeps under a json name, however its embed is
+// named: it is warned untagged and nests under a json name too.
+func TestGenericEmbedMarshalerAndPointerWarn(t *testing.T) {
+	rows := []embedRow{
+		{"MRawOfLower", "rawOf[int]", nil},
+		{"MRawOfTagged", "rawOf[int] `json:\"r\"`", map[string]string{"r": "inst:rawOf[int]"}},
+		{"MRaw", "raw", nil},
+		{"MRawTagged", "raw `json:\"r\"`", map[string]string{"r": "inst:b.RawOf[int]"}},
+		{"MRawChain", "rawChain", nil},
+		{"MPtrOf", "ptrOf[int]", nil},
+		{"MHiddenP", "hiddenP", nil},
+		{"MHiddenPTagged", "hiddenP `json:\"base\"`", map[string]string{"base": "inst:b.Ptr[int]"}},
+	}
+	a := analyzeGenericBaseRows(t, rows)
+	for _, r := range rows {
+		want := map[string]string{"y": goTypeInt}
+		for k, v := range r.want {
+			want[k] = v
+		}
+		assert.Equal(t, want, renders(t, a.typeRegistry[r.typ]), r.typ)
+	}
+	warnings := embedWarnings(a)
+	for _, want := range []string{
+		"has type rawOf[int]: rawOf[int] is a generic instantiation, which is not expanded",
+		"has type raw: b.RawOf[int] is a generic instantiation",
+		"has type ptrOf[int]: ptrOf[int] is a generic instantiation",
+		"has type hiddenP: b.Ptr[int] is a generic instantiation",
+	} {
+		assert.Len(t, matching(warnings, want), 1, "%q in %v", want, warnings)
+	}
+	assert.Len(t, warnings, 4, "%v", warnings)
+	// Each tagged row adds its nested field's own warning beside the
+	// untagged row's embed warning.
+	assert.Len(t, fieldWarnings(a, "raw"), 2, "%v", a.warnings)
+	assert.Len(t, fieldWarnings(a, "hiddenP"), 2, "%v", a.warnings)
+	assert.Len(t, fieldWarnings(a, "rawOf"), 2, "%v", a.warnings)
 }
 
 // TestGenericEmbedKeepsDepthCut pins that generic carries its chain's depth:

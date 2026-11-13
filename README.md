@@ -420,7 +420,11 @@ nested Go module, is not.
   `type lsd list[int]` or `type ol = b.List[int]`) is skipped silently,
   json name or not, as `encoding/json` skips it; an exported one
   (`type LL = list[int]`, `b.List[int]`) is one untyped-object property
-  with the unresolved-generic warning, until #114. Exclude the embed with `json:"-"` to silence the warning. A
+  with the unresolved-generic warning, until #114. An instantiation of a
+  generic alias of a pointer (`type ptr[T any] = *Base`) or of a
+  well-known Marshaler type reached through aliases only
+  (`type raw[T any] = json.RawMessage`, whose methods make the embedding
+  struct a Marshaler) is dropped with a warning whatever its name. Exclude the embed with `json:"-"` to silence the warning. A
   well-known Marshaler embed adds no property even when a sibling embed at
   its depth cancels its methods, although `encoding/json` then writes it
   as one field keyed by its type name. Two fields of one key at the

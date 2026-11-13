@@ -30,14 +30,13 @@ const (
 type embedClass int
 
 const (
-	embedSkip             embedClass = iota // an unexported non-struct: dropped silently, json name or not, as encoding/json skips it
-	embedMarshaler                          // a well-known Marshaler type keeping its methods: dropped silently unless a parameter
-	embedStruct                             // a struct: its fields are promoted
-	embedOpaqueStruct                       // a defined type over time.Time or a netip struct, with no exported field: nothing is promoted
-	embedNonStruct                          // a non-struct type: one property
-	embedGeneric                            // a generic instantiation: dropped with a warning
-	embedGenericMarshaler                   // a generic instantiation of an alias of a non-struct Marshaler: embedGeneric, but not a struct
-	embedUnresolvable                       // a type no declaration is read for: dropped with a warning
+	embedSkip         embedClass = iota // an unexported non-struct: dropped silently, json name or not, as encoding/json skips it
+	embedMarshaler                      // a well-known Marshaler type keeping its methods: dropped silently unless a parameter
+	embedStruct                         // a struct: its fields are promoted
+	embedOpaqueStruct                   // a defined type over time.Time or a netip struct, with no exported field: nothing is promoted
+	embedNonStruct                      // a non-struct type: one property
+	embedGeneric                        // a generic instantiation: dropped with a warning
+	embedUnresolvable                   // a type no declaration is read for: dropped with a warning
 )
 
 // embedTarget is an embed's classification: the struct to promote
@@ -88,10 +87,10 @@ func (a *ProjectAnalyzer) classifyEmbed(field *ast.Field, astFile *ast.File, fil
 }
 
 // nonStruct reports whether t's type is known not to be a struct: a
-// non-struct type, a well-known Marshaler type other than the structs
-// (wellKnownStructs), or a generic instantiation of one.
+// non-struct type, or a well-known Marshaler type other than the structs
+// (wellKnownStructs).
 func (t embedTarget) nonStruct() bool {
-	return t.class == embedNonStruct || t.class == embedMarshaler && !wellKnownStructs[t.stop] || t.class == embedGenericMarshaler
+	return t.class == embedNonStruct || t.class == embedMarshaler && !wellKnownStructs[t.stop]
 }
 
 // generic classifies a generic instantiation t written in file, embedded
@@ -99,13 +98,14 @@ func (t embedTarget) nonStruct() bool {
 // list[int]); depth and defined are local's. It is not expanded, but its
 // generic type is read, local or in-module (genericDecl): a non-struct one,
 // a type literal (type list[T any] []T) or a named non-struct type followed
-// as local follows it (type id[T any] int64, type qc[T any] b.Cents) or an
-// alias of a non-struct well-known Marshaler (type raw[T any] =
-// json.RawMessage), is a non-struct, so classifyEmbed skips an unexported
-// embed of it as encoding/json does (an exported one of the alias is
-// warned, embedGenericMarshaler), and one over time.Time or a netip
-// struct is opaque; any other is warned, since encoding/json promotes the
-// fields of one that is a struct.
+// as local follows it (type id[T any] int64, type qc[T any] b.Cents), or a
+// defined type over a non-struct well-known Marshaler, which drops its
+// methods, is a non-struct, so classifyEmbed skips an unexported embed of
+// it as encoding/json does, and one over time.Time or a netip struct is
+// opaque; any other is warned: encoding/json promotes the fields of a
+// struct, follows a pointer (type ptr[T any] = *Base) to one, and writes
+// the whole embedding struct through the methods of a well-known Marshaler
+// reached only through aliases (type raw[T any] = json.RawMessage).
 func (ec embedClassifier) generic(file *ast.File, path string, t ast.Expr, depth int, defined bool) embedTarget {
 	warned := embedTarget{class: embedGeneric, stop: types.ExprString(t)}
 	ts, tsFile, tsPath, found := ec.genericDecl(file, path, t)
@@ -119,18 +119,18 @@ func (ec embedClassifier) generic(file *ast.File, path string, t ast.Expr, depth
 		named = ec.local(tsFile, tsPath, rhs.Name, depth+1, defined)
 	case *ast.SelectorExpr:
 		named = ec.qualified(tsFile, ec.a.typeShape(rhs).Name, depth+1, defined)
-	case *ast.StructType, *ast.IndexExpr, *ast.IndexListExpr:
-		return warned // a struct, or a generic type this does not expand
+	case *ast.StructType, *ast.IndexExpr, *ast.IndexListExpr, *ast.StarExpr:
+		return warned // a struct, a generic type this does not expand, or a pointer that may be to a struct
 	default:
 		return embedTarget{class: embedNonStruct} // slice, array, map, interface, func, chan
 	}
 	switch {
-	case named.class == embedMarshaler && named.nonStruct():
-		// A non-struct Marshaler keeping its methods (type raw[T any] =
-		// json.RawMessage): the embedding struct is a Marshaler, which
-		// method-set reading does not see through an instantiation, so an
-		// exported embed is warned; an unexported one is skipped.
-		return embedTarget{class: embedGenericMarshaler, stop: warned.stop}
+	case named.class == embedMarshaler:
+		// A Marshaler keeping its methods (type raw[T any] =
+		// json.RawMessage) makes the embedding struct a Marshaler, exported
+		// embed or not, which method-set reading does not see through an
+		// instantiation.
+		return warned
 	case named.nonStruct(), named.class == embedOpaqueStruct:
 		return named
 	default:
@@ -284,7 +284,7 @@ func (a *ProjectAnalyzer) warnDroppedEmbed(field *ast.Field, t embedTarget) {
 		return
 	}
 	head := []any{embeddedFieldName(field.Type), loc, types.ExprString(field.Type), t.stop}
-	if t.class == embedGeneric || t.class == embedGenericMarshaler {
+	if t.class == embedGeneric {
 		a.addWarningf(genericEmbedWarning, head...)
 		return
 	}
