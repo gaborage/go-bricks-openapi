@@ -4505,6 +4505,7 @@ var wellKnownPackages = map[string]string{
 	"io/fs":                     "fs",
 	"net":                       "net",
 	"net/netip":                 "netip",
+	"math/big":                  "big",
 	"encoding/json":             "json",
 	"github.com/google/uuid":    uuidPackageName,
 	"github.com/gofrs/uuid":     uuidPackageName,

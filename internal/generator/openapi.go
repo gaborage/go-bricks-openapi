@@ -106,6 +106,10 @@ const (
 	goTypeNetipAddr     = "netip.Addr"
 	goTypeNetipPrefix   = "netip.Prefix"
 	goTypeNetipAddrPort = "netip.AddrPort"
+	// math/big's types, written through methods all on the pointer.
+	goTypeBigInt   = "big.Int"
+	goTypeBigFloat = "big.Float"
+	goTypeBigRat   = "big.Rat"
 )
 
 // Response/parameter description text reused across operations.
@@ -1750,10 +1754,13 @@ func isSequence(s models.TypeShape) bool {
 	return s.Kind == models.ShapeSlice || s.Kind == models.ShapeArray
 }
 
-// wellKnownType holds the OpenAPI type/format for a recognized stdlib/library type.
+// wellKnownType holds the OpenAPI type/format for a recognized stdlib/library
+// type. ptrOnly marks a type encoding/json writes through methods that are
+// all on the pointer: the entry types only a pointer to it (setTypeAndFormat).
 type wellKnownType struct {
-	typ    string
-	format string
+	typ     string
+	format  string
+	ptrOnly bool
 }
 
 // wellKnownFormats maps qualified Go types to their idiomatic OpenAPI schema.
@@ -1793,30 +1800,44 @@ type wellKnownType struct {
 //     this entry. os.FileMode and fs.FileMode are not here: the analyzer
 //     resolves both to uint32 first, which keeps the uint32 type range an
 //     entry here would lose.
+//   - big.Int -> integer, big.Float and big.Rat -> string, each with no
+//     format (they hold arbitrary precision), and only behind a pointer
+//     (ptrOnly). Every marshal method of the three is on the pointer, so a
+//     *big.Int, always addressable, is written through MarshalJSON as a JSON
+//     number, and a *big.Float or *big.Rat through MarshalText as a string
+//     ("1.5", "1/3"). A value one is written through them only where it
+//     happens to be addressable, and as {} elsewhere (a map value, a payload
+//     returned by value), so the analyzer resolves a value one in a body
+//     position to a Marshaler leaf, and a value shape that still reaches here
+//     is {} (ADR 0002).
 //
 // Matching is by name, spelled with the declaring package's name. The analyzer
 // reads a field's or payload's qualifier through its file's imports and
 // writes that spelling into the Resolution (t.Time under import t "time" is
 // time.Time).
 var wellKnownFormats = map[string]wellKnownType{
-	goTypeTimeTime:      {typeString, formatDateTime},
-	goTypeTimeDuration:  {typeInteger, formatInt64},
-	goTypeUUID:          {typeString, formatUUID},
+	goTypeTimeTime:      {typ: typeString, format: formatDateTime},
+	goTypeTimeDuration:  {typ: typeInteger, format: formatInt64},
+	goTypeUUID:          {typ: typeString, format: formatUUID},
 	goTypeRawMessage:    {},
 	goTypeJSONNumber:    {typ: typeNumber},
-	goTypeTimeMonth:     {typeInteger, formatInt64},
-	goTypeTimeWeekday:   {typeInteger, formatInt64},
+	goTypeTimeMonth:     {typ: typeInteger, format: formatInt64},
+	goTypeTimeWeekday:   {typ: typeInteger, format: formatInt64},
 	goTypeNetIP:         {typ: typeString},
 	goTypeNetipAddr:     {typ: typeString},
 	goTypeNetipPrefix:   {typ: typeString},
 	goTypeNetipAddrPort: {typ: typeString},
+	goTypeBigInt:        {typ: typeInteger, ptrOnly: true},
+	goTypeBigFloat:      {typ: typeString, ptrOnly: true},
+	goTypeBigRat:        {typ: typeString, ptrOnly: true},
 }
 
 // wellKnownShape resolves the well-known stdlib/library schemas by shape:
 // []byte / []uint8 (matched on the element name so a []pkg.uint8 selector
 // correctly misses), and the qualified names in wellKnownFormats (time.Time,
 // time.Duration, uuid.UUID, json.RawMessage, json.Number, time.Month,
-// time.Weekday, net.IP, netip.Addr, netip.Prefix, netip.AddrPort).
+// time.Weekday, net.IP, netip.Addr, netip.Prefix, netip.AddrPort, big.Int,
+// big.Float, big.Rat).
 //
 // encoding/json marshals a []byte as base64 text, which OpenAPI 3.0 spells
 // `format: byte`; `binary` means raw octets, which no JSON or JOSE body carries.
@@ -1825,7 +1846,7 @@ var wellKnownFormats = map[string]wellKnownType{
 func wellKnownShape(s models.TypeShape) (wellKnownType, bool) {
 	if s.Kind == models.ShapeSlice && s.Elem != nil &&
 		(s.Elem.Name == goTypeByte || s.Elem.Name == goTypeUint8) {
-		return wellKnownType{typeString, formatByte}, true
+		return wellKnownType{typ: typeString, format: formatByte}, true
 	}
 	if s.Kind == models.ShapeNamed {
 		wk, ok := wellKnownFormats[s.Name]
@@ -1836,7 +1857,8 @@ func wellKnownShape(s models.TypeShape) (wellKnownType, bool) {
 
 // setTypeAndFormat maps a field's resolved shape to OpenAPI type and format,
 // recursing through slice, array and map elements. Every pointer level is
-// shed first (stripPointers). The Resolution-only leaves type as: a ref, a
+// shed first (stripPointers); a ptrOnly well-known type (big.Int) is typed
+// only when shape is a pointer to it, and is {} otherwise. The Resolution-only leaves type as: a ref, a
 // $ref; a kind-only scalar, its kind alone (#92: no format, no type-derived
 // bounds); a text Marshaler leaf, a string (#111); a Marshaler or recursive
 // leaf, {} (any JSON value), never descending into a Marshaler's Elem; a
@@ -1848,7 +1870,9 @@ func setTypeAndFormat(prop *OpenAPIProperty, shape models.TypeShape) {
 	// Well-known types first: []byte must win over the generic []T array branch,
 	// and time.Time/uuid.UUID over the qualified-type object fallback.
 	if wk, ok := wellKnownShape(s); ok {
-		setWellKnown(prop, wk)
+		if !wk.ptrOnly || shape.Kind == models.ShapePointer {
+			setWellKnown(prop, wk)
+		}
 		return
 	}
 

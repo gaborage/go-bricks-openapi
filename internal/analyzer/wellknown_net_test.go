@@ -204,7 +204,10 @@ func TestWellKnownMarshalerEmbedDefined(t *testing.T) {
 	for name := range wellKnownMethodSets {
 		require.Equal(t, embedMarshaler, wellKnownMarshalerEmbed(name, false).class, name)
 	}
-	for _, name := range []string{models.WellKnownTimeTime, models.WellKnownNetipAddr, models.WellKnownNetipPrefix, models.WellKnownNetipAddrPort} {
+	for _, name := range []string{
+		models.WellKnownTimeTime, models.WellKnownNetipAddr, models.WellKnownNetipPrefix, models.WellKnownNetipAddrPort,
+		models.WellKnownBigInt, models.WellKnownBigFloat, models.WellKnownBigRat,
+	} {
 		assert.Equal(t, embedOpaqueStruct, wellKnownMarshalerEmbed(name, true).class, name)
 	}
 	for _, name := range []string{models.WellKnownUUID, models.WellKnownRawMessage, models.WellKnownJSONNumber, models.WellKnownNetIP} {

@@ -174,7 +174,14 @@ type resolveCtx struct {
 	// Marshaler type with only decode-side methods is then a plain byte, so
 	// the slice stays base64 (#97). Pointer, array and map nodes clear it.
 	byteElem bool
-	st       *resolveState
+	// ptrElem is set while a pointer's element is resolved, and kept through
+	// a named type's declarations (an alias of a well-known type, *BI): the
+	// element is then addressable, so a well-known type whose encode-side
+	// methods are all on the pointer (math/big's Int, Float and Rat) is
+	// written through them (pointerOnlyWellKnownLeaf). Slice, array and map
+	// nodes clear it.
+	ptrElem bool
+	st      *resolveState
 }
 
 // pkgFile is one parsed file of a package and its path.
@@ -298,8 +305,10 @@ func (a *ProjectAnalyzer) resolveShape(s models.TypeShape, c resolveCtx) models.
 	switch s.Kind {
 	case models.ShapePointer, models.ShapeArray, models.ShapeMap:
 		c.byteElem = false
+		c.ptrElem = s.Kind == models.ShapePointer
 		s.Elem = a.resolveElem(s.Elem, c)
 	case models.ShapeSlice:
+		c.ptrElem = false
 		s.Elem = a.resolveSliceElem(s.Elem, c)
 	case models.ShapeNamed:
 		if strings.Contains(s.Name, ".") {
@@ -365,10 +374,10 @@ func isBytePrimitive(s *models.TypeShape) bool {
 }
 
 // resolveQualified resolves a qualified leaf (q.T): an in-module struct is a
-// ref, a kind-backed stdlib type its builtin, a well-known type a named leaf
-// spelled as the tables spell it (wellKnownName: t.Time under t "time" is
-// time.Time), an in-module named type resolves in its declaring package
-// (inModuleTypeSite), and anything else is unresolvable (it emits object).
+// ref, a well-known type is resolved by wellKnownLeaf, spelled as the tables
+// spell it (wellKnownName: t.Time under t "time" is time.Time), an in-module
+// named type resolves in its declaring package (inModuleTypeSite), and
+// anything else is unresolvable (it emits object).
 func (a *ProjectAnalyzer) resolveQualified(leaf models.TypeShape, c resolveCtx) models.TypeShape {
 	if q, ok := a.resolveQualifiedStruct(leaf.Name, c.file); ok {
 		if r, isMarshaler := a.structMarshalerLeaf(q.typeName, c.in(q.file, q.filePath), identityMode); isMarshaler {
@@ -378,19 +387,52 @@ func (a *ProjectAnalyzer) resolveQualified(leaf models.TypeShape, c resolveCtx) 
 		return models.TypeShape{Kind: models.ShapeRef, Name: leaf.Name}
 	}
 	if name, ok := a.wellKnownName(leaf.Name, c.file); ok {
-		if b, kindBacked := knownUnderlyingBuiltins[name]; kindBacked {
-			return models.TypeShape{Kind: models.ShapePrimitive, Name: b}
-		}
-		if knownByteSlices[name] {
-			return byteSliceShape()
-		}
-		return models.TypeShape{Kind: models.ShapeNamed, Name: name}
+		return wellKnownLeaf(name, c)
 	}
 	if site, name, ok := a.inModuleTypeSite(leaf.Name, c.file); ok {
 		return a.resolveLocal(models.TypeShape{Kind: models.ShapeNamed, Name: name}, c.in(site.file, site.path), identityMode)
 	}
 	c.st.note(fieldFallback{kind: fallbackUnresolvable, typeName: leaf.Name})
 	return leaf
+}
+
+// wellKnownLeaf resolves the well-known type name: a kind-backed type is its
+// builtin, a named []byte its byte slice, a type written through
+// pointer-only methods at a value position a Marshaler leaf
+// (pointerOnlyWellKnownLeaf), and any other a named leaf the generator types
+// from its table.
+func wellKnownLeaf(name string, c resolveCtx) models.TypeShape {
+	if b, kindBacked := knownUnderlyingBuiltins[name]; kindBacked {
+		return models.TypeShape{Kind: models.ShapePrimitive, Name: b}
+	}
+	if knownByteSlices[name] {
+		return byteSliceShape()
+	}
+	if r, ok := pointerOnlyWellKnownLeaf(name, c); ok {
+		return r
+	}
+	return models.TypeShape{Kind: models.ShapeNamed, Name: name}
+}
+
+// pointerOnlyWellKnownLeaf resolves a well-known type with an encode-side
+// method only on the pointer (wellKnownMethodSets: math/big's Int, Float and
+// Rat) in a body position that is no pointer's element: a noted Marshaler
+// leaf ({}), since encoding/json skips such a method on a value it cannot
+// address (a map value, a payload returned by value) and writes the
+// struct's unexported fields as {}. ok is false for any other type, for a
+// pointer's element (c.ptrElem), which is always addressable and keeps the
+// well-known leaf (ADR 0002's table-entry exception), and for a parameter,
+// which go-bricks binds by kind and the binder judges (issue 121).
+func pointerOnlyWellKnownLeaf(name string, c resolveCtx) (models.TypeShape, bool) {
+	if c.st.param || c.ptrElem {
+		return models.TypeShape{}, false
+	}
+	m, fb := wellKnownMethodSet(name, name).marshaler(name)
+	if m.ptrEncode() == "" {
+		return models.TypeShape{}, false
+	}
+	c.st.note(fb)
+	return models.TypeShape{Kind: models.ShapeMarshaler, Name: name}, true
 }
 
 // wellKnownName returns the key of the well-known tables that qualified (q.T,

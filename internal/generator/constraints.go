@@ -391,13 +391,16 @@ func isMarshalerLeaf(s models.TypeShape) bool {
 // counts as a pointer written in the field's own declaration. An alias of a
 // named pointer type (type PA2 = PI) is not marked and stays unquoted.
 //
+// A ptrOnly well-known type (*big.Int) is a struct, which the option never
+// quotes, though its schema is an integer.
+//
 // This is the one place the generator reads the syntactic Shape where a
 // Resolution exists (ADR 0002 has every consumer read the Resolution): the
 // Resolution of *int64 and of type PI *int64 is the same pointer, and only
 // the Shape (with PointerAlias) tells a pointer written in the field's own
 // declaration from one reached through a named type.
 func isQuotedScalar(field *models.FieldInfo, prop *OpenAPIProperty) bool {
-	if !field.JSONString || field.ParamType != "" || isMarshalerLeaf(field.ResolvedShape()) {
+	if !field.JSONString || field.ParamType != "" || isMarshalerLeaf(field.ResolvedShape()) || isPtrOnlyWellKnown(field.ResolvedShape()) {
 		return false
 	}
 	if prop.Type != typeBoolean && !isEffectiveNumeric(prop.Type) {
@@ -409,6 +412,14 @@ func isQuotedScalar(field *models.FieldInfo, prop *OpenAPIProperty) bool {
 	}
 	ownPointer := field.Shape.Kind == models.ShapePointer || field.PointerAlias
 	return ownPointer && r.Elem != nil && r.Elem.Kind != models.ShapePointer
+}
+
+// isPtrOnlyWellKnown reports whether s, every pointer shed, is a ptrOnly
+// well-known type (math/big's Int, Float and Rat): a struct, which the
+// ,string option never quotes, so *big.Int,string stays a JSON number.
+func isPtrOnlyWellKnown(s models.TypeShape) bool {
+	wk, ok := wellKnownShape(stripPointers(s))
+	return ok && wk.ptrOnly
 }
 
 // sortedKeys returns the keys of m in lexicographic order so callers can iterate

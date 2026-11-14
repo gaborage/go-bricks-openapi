@@ -1487,9 +1487,9 @@ func TestSetTypeAndFormatWellKnownStdlibScalarPositions(t *testing.T) {
 	}
 	str := prim(goTypeString)
 	for name, want := range map[string]wellKnownType{
-		goTypeJSONNumber:  {typeNumber, ""},
-		goTypeTimeMonth:   {typeInteger, formatInt64},
-		goTypeTimeWeekday: {typeInteger, formatInt64},
+		goTypeJSONNumber:  {typ: typeNumber},
+		goTypeTimeMonth:   {typ: typeInteger, format: formatInt64},
+		goTypeTimeWeekday: {typ: typeInteger, format: formatInt64},
 	} {
 		x := named(name)
 		for _, pos := range []struct {
