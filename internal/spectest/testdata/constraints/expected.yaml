@@ -67,6 +67,14 @@ components:
           format: int64
           minimum: 1
           maximum: 10000
+        iMillion:
+          type: integer
+          format: int64
+          maximum: 1000000
+        iSmall:
+          type: integer
+          format: int64
+          maximum: 9007199254740993
         meta:
           type: object
           additionalProperties:
@@ -95,6 +103,24 @@ components:
             format: email
           minItems: 1
           maxItems: 5
+        uEnum:
+          type: integer
+          format: int64
+          minimum: 0
+          enum:
+            - 18446744073709551615
+            - 18446744073709551614
+            - 7
+        uGt:
+          type: integer
+          format: int64
+          minimum: 18446744073709551614
+          exclusiveMinimum: true
+        uMax:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 18446744073709551615
     ErrorResponse:
       type: object
       properties:

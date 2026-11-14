@@ -2,6 +2,8 @@ package generator
 
 import (
 	"cmp"
+	"math"
+	"math/big"
 	"regexp"
 	"sort"
 	"strconv"
@@ -30,38 +32,117 @@ const (
 	boolTrueString     = "true"
 )
 
+// numberKind says which field of a Number holds its value.
+type numberKind uint8
+
+const (
+	numberInt   numberKind = iota // Number.i: every integer in the int64 range
+	numberUint                    // Number.u: an integer above MaxInt64
+	numberFloat                   // Number.f: a value written with a fraction or exponent
+)
+
+// Number is a schema numeric keyword value (minimum/maximum). An integer is
+// held exactly, as int64 or (above MaxInt64 only) uint64, and is emitted as a
+// YAML integer with every digit the tag wrote; float64 would round it above
+// 2^53 and print it in e-notation. Only a value parseNumeric read as a float
+// is a float64, and it renders exactly as it always has. The zero value is
+// the integer 0.
+type Number struct {
+	kind numberKind
+	i    int64
+	u    uint64
+	f    float64
+}
+
+func intNumber(v int64) Number { return Number{kind: numberInt, i: v} }
+
+// uintNumber stores v as an int64 when it fits, so one value has one
+// representation and == agrees with Cmp.
+func uintNumber(v uint64) Number {
+	if v <= math.MaxInt64 {
+		return intNumber(int64(v))
+	}
+	return Number{kind: numberUint, u: v}
+}
+
+func floatNumber(v float64) Number { return Number{kind: numberFloat, f: v} }
+
+// numberPtr returns a pointer to n, for the *Number schema constraint fields.
+func numberPtr(n Number) *Number { return &n }
+
+// numberFromParsed converts a parseNumeric result (int64, uint64 or float64).
+func numberFromParsed(v any) Number {
+	switch n := v.(type) {
+	case int64:
+		return intNumber(n)
+	case uint64:
+		return uintNumber(n)
+	default:
+		return floatNumber(v.(float64)) // parseNumeric yields nothing else
+	}
+}
+
+// Float64 is n as float64, rounded above 2^53: the value kin-openapi compares.
+func (n Number) Float64() float64 {
+	switch n.kind {
+	case numberUint:
+		return float64(n.u)
+	case numberFloat:
+		return n.f
+	default:
+		return float64(n.i)
+	}
+}
+
+// bigFloat is n as an exact big.Float: SetInt64/SetUint64 keep 64 bits and
+// SetFloat64 53, so no value rounds. It must not be called on NaN.
+func (n Number) bigFloat() *big.Float {
+	switch n.kind {
+	case numberUint:
+		return new(big.Float).SetUint64(n.u)
+	case numberFloat:
+		return big.NewFloat(n.f)
+	default:
+		return new(big.Float).SetInt64(n.i)
+	}
+}
+
+// Cmp orders n and o exactly, across all three kinds, and returns -1/0/1. A
+// NaN (a `max=NaN` tag) has no exact order, so it falls back to cmp.Compare
+// on float64, which sorts NaN below every number.
+func (n Number) Cmp(o Number) int {
+	if n.isNaN() || o.isNaN() {
+		return cmp.Compare(n.Float64(), o.Float64())
+	}
+	return n.bigFloat().Cmp(o.bigFloat())
+}
+
+func (n Number) isNaN() bool { return n.kind == numberFloat && math.IsNaN(n.f) }
+
+// MarshalYAML emits the native value, so go-yaml writes an integer as a plain
+// !!int (a uint64 above MaxInt64 included) and a float exactly as before.
+func (n Number) MarshalYAML() (any, error) {
+	switch n.kind {
+	case numberUint:
+		return n.u, nil
+	case numberFloat:
+		return n.f, nil
+	default:
+		return n.i, nil
+	}
+}
+
 // numericBound is one candidate or resolved numeric bound (minimum/maximum).
-// Integer-valued bounds keep int64 precision so two distinct values above 2^53
-// never collapse when compared; only a fractional bound compares as float64.
+// Its value is an exact Number, so two distinct integers never collapse when
+// compared, whatever their size, and the winner is emitted as written.
 type numericBound struct {
-	intVal    int64
-	floatVal  float64
-	isFloat   bool
+	value     Number
 	exclusive bool // the bound came from gt/lt (exclusiveMinimum/Maximum: true)
 }
 
-// boundFromParsed converts a parseNumeric result (int64 or float64) into a bound.
+// boundFromParsed converts a parseNumeric result into a bound.
 func boundFromParsed(v any, exclusive bool) numericBound {
-	if f, ok := v.(float64); ok {
-		return numericBound{floatVal: f, isFloat: true, exclusive: exclusive}
-	}
-	return numericBound{intVal: v.(int64), exclusive: exclusive} // parseNumeric only yields int64 or float64
-}
-
-func (b numericBound) float64Value() float64 {
-	if b.isFloat {
-		return b.floatVal
-	}
-	return float64(b.intVal)
-}
-
-// compareNumericBounds orders two bounds: int64 against int64 exactly, anything
-// involving a float as float64. Returns -1/0/1.
-func compareNumericBounds(a, b numericBound) int {
-	if !a.isFloat && !b.isFloat {
-		return cmp.Compare(a.intVal, b.intVal)
-	}
-	return cmp.Compare(a.float64Value(), b.float64Value())
+	return numericBound{value: numberFromParsed(v), exclusive: exclusive}
 }
 
 // constraintSet is the typed image of one validate tag in OpenAPI vocabulary
@@ -117,7 +198,7 @@ func mergeNumeric(dst **numericBound, cand numericBound, lower bool) {
 		*dst = &c
 		return
 	}
-	ord := compareNumericBounds(cand, **dst)
+	ord := cand.value.Cmp((*dst).value)
 	switch {
 	case ord == 0:
 		(*dst).exclusive = (*dst).exclusive || cand.exclusive
@@ -156,13 +237,13 @@ func (s *constraintSet) applyTo(prop *OpenAPIProperty) {
 	copyInt(&prop.MinProperties, s.minProperties)
 	copyInt(&prop.MaxProperties, s.maxProperties)
 	if s.minimum != nil {
-		prop.Minimum = floatPtr(s.minimum.float64Value())
+		prop.Minimum = numberPtr(s.minimum.value)
 		if s.minimum.exclusive {
 			prop.ExclusiveMinimum = boolPtr(true)
 		}
 	}
 	if s.maximum != nil {
-		prop.Maximum = floatPtr(s.maximum.float64Value())
+		prop.Maximum = numberPtr(s.maximum.value)
 		if s.maximum.exclusive {
 			prop.ExclusiveMaximum = boolPtr(true)
 		}
@@ -705,15 +786,19 @@ func applyPatternConstraint(s *constraintSet, key, value string) bool {
 	return true
 }
 
-// parseNumeric converts a string to a numeric value (int or float)
+// parseNumeric converts a validate value to int64 when it is an integer in the
+// signed range, to uint64 when it is an integer in (MaxInt64, MaxUint64], and
+// to float64 otherwise (a fraction, an exponent, or an integer above
+// MaxUint64). The order keeps every integer a uint64 can hold exact.
 func parseNumeric(value string) (any, error) {
-	// Try parsing as integer first
-	//nolint:S8148 // NOSONAR: Parse error intentionally falls through to float parsing
+	//nolint:S8148 // NOSONAR: Parse error intentionally falls through to the unsigned parse
 	if intVal, err := strconv.ParseInt(value, 10, 64); err == nil {
 		return intVal, nil
 	}
-
-	// Fall back to float
+	//nolint:S8148 // NOSONAR: Parse error intentionally falls through to float parsing
+	if uintVal, err := strconv.ParseUint(value, 10, 64); err == nil {
+		return uintVal, nil
+	}
 	return strconv.ParseFloat(value, 64)
 }
 

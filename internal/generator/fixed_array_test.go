@@ -12,7 +12,7 @@ import (
 // byteItemProp is what a bare byte field emits, its 0..255 range included
 // (#107): the items of a [N]byte array.
 func byteItemProp() *OpenAPIProperty {
-	return &OpenAPIProperty{Type: typeInteger, Format: formatInt32, Minimum: floatPtr(0), Maximum: floatPtr(255)}
+	return &OpenAPIProperty{Type: typeInteger, Format: formatInt32, Minimum: num(0), Maximum: num(255)}
 }
 
 // TestFixedByteArrayFieldIsIntegerArray pins #98's generator rule:
@@ -74,7 +74,7 @@ func TestFixedByteArrayTagsMatchUint16Array(t *testing.T) {
 	assert.Equal(t, got, gen.fieldInfoToProperty(withResolution(flag, arrayOf(prim(goTypeUint8)))), "[4]Flag")
 	assert.Equal(t, &OpenAPIProperty{
 		Type: typeArray, MinItems: intPtr(1), MaxItems: intPtr(4),
-		Items: &OpenAPIProperty{Type: typeInteger, Format: formatInt32, Minimum: floatPtr(0), Maximum: floatPtr(200)},
+		Items: &OpenAPIProperty{Type: typeInteger, Format: formatInt32, Minimum: num(0), Maximum: num(200)},
 	}, got)
 }
 

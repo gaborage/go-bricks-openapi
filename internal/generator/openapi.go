@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"math"
-	"math/big"
 	"net/http"
 	"regexp"
 	"sort"
@@ -207,8 +206,8 @@ type OpenAPIProperty struct {
 	MaxItems             *int                        `yaml:"maxItems,omitempty"`
 	MinProperties        *int                        `yaml:"minProperties,omitempty"` // For maps (entry-count cardinality)
 	MaxProperties        *int                        `yaml:"maxProperties,omitempty"`
-	Minimum              *float64                    `yaml:"minimum,omitempty"`
-	Maximum              *float64                    `yaml:"maximum,omitempty"`
+	Minimum              *Number                     `yaml:"minimum,omitempty"` // exact: an integer bound keeps every digit
+	Maximum              *Number                     `yaml:"maximum,omitempty"`
 	ExclusiveMinimum     *bool                       `yaml:"exclusiveMinimum,omitempty"`
 	ExclusiveMaximum     *bool                       `yaml:"exclusiveMaximum,omitempty"`
 	Pattern              string                      `yaml:"pattern,omitempty"`
@@ -1909,7 +1908,7 @@ func setBasicTypeAndFormat(prop *OpenAPIProperty, name string) {
 	case goTypeUint8, goTypeUint16, goTypeByte:
 		prop.Type = typeInteger
 		prop.Format = formatInt32
-		prop.Minimum = floatPtr(0) // unsigned: never negative
+		prop.Minimum = numberPtr(intNumber(0)) // unsigned: never negative
 	// int is 64-bit on every 64-bit target, so it is documented as int64.
 	case goTypeInt, goTypeInt64:
 		prop.Type = typeInteger
@@ -1921,7 +1920,7 @@ func setBasicTypeAndFormat(prop *OpenAPIProperty, name string) {
 	case goTypeUint, goTypeUint32, goTypeUint64:
 		prop.Type = typeInteger
 		prop.Format = formatInt64
-		prop.Minimum = floatPtr(0) // unsigned: never negative
+		prop.Minimum = numberPtr(intNumber(0)) // unsigned: never negative
 	case goTypeFloat32:
 		prop.Type = typeNumber
 		prop.Format = formatFloat
@@ -1942,11 +1941,8 @@ func setBasicTypeAndFormat(prop *OpenAPIProperty, name string) {
 	stampNarrowIntRange(prop, name)
 }
 
-// floatPtr returns a pointer to v, for the *float64 schema constraint fields.
-func floatPtr(v float64) *float64 { return &v }
-
 // intRange is a Go integer type's inclusive value range.
-type intRange struct{ min, max float64 }
+type intRange struct{ min, max int64 }
 
 // narrowIntRanges holds the integer widths whose range is narrower than the
 // format they are emitted with, so the format alone would admit values the Go
@@ -1967,8 +1963,8 @@ func stampNarrowIntRange(prop *OpenAPIProperty, name string) {
 	if !ok {
 		return
 	}
-	prop.Minimum = floatPtr(r.min)
-	prop.Maximum = floatPtr(r.max)
+	prop.Minimum = numberPtr(intNumber(r.min))
+	prop.Maximum = numberPtr(intNumber(r.max))
 }
 
 // applyExample stamps a coerced `example` onto prop, or omits it entirely.
@@ -2125,7 +2121,7 @@ func coerceIntegerExample(raw string, prop *OpenAPIProperty, unsigned bool) any 
 	if !intFitsFormat(i, prop.Format) {
 		return nil
 	}
-	if !exampleInBounds(float64(i), prop) {
+	if !integerInBounds(intNumber(i), prop) {
 		return nil
 	}
 	return i
@@ -2140,35 +2136,40 @@ func coerceUnsignedExample(raw string, prop *OpenAPIProperty) any {
 	if prop.Format == formatInt32 && u > math.MaxInt32 {
 		return nil
 	}
-	// Both checks are needed. kin-openapi compares in float64, so the example
-	// must pass that comparison (an exclusive minimum of 2^63 rejects 2^63+1,
-	// which rounds equal) or the document fails validation; the exact one
-	// additionally refuses 2^63+1 over a maximum of 2^63, which float64 admits.
-	if !exampleInBounds(float64(u), prop) || !unsignedInBounds(u, prop) {
+	if !integerInBounds(uintNumber(u), prop) {
 		return nil
 	}
 	return u
 }
 
-// unsignedInBounds is exampleInBounds for a uint64: float64(u) rounds above
-// 2^53, so it would keep 2^63+1 under maximum 2^63. big.Float built from a
-// uint64 or a float64 is exact, so the comparison is too.
-func unsignedInBounds(u uint64, prop *OpenAPIProperty) bool {
-	n := new(big.Float).SetUint64(u)
+// integerInBounds keeps an integer example only if it satisfies minimum and
+// maximum both exactly and as float64. The exact check is what go-bricks
+// enforces: float64 rounds above 2^53, so it alone would keep 2^63+1 under
+// maximum 2^63. The float64 check is what kin-openapi enforces: it alone
+// rejects MaxUint64-1 under an exclusive maximum of MaxUint64, as both round
+// to 2^64. Either check alone would let a kept example contradict the document.
+func integerInBounds(n Number, prop *OpenAPIProperty) bool {
+	return exactInBounds(n, prop) && exampleInBounds(n.Float64(), prop)
+}
+
+// exactInBounds is exampleInBounds with an exact comparison.
+func exactInBounds(n Number, prop *OpenAPIProperty) bool {
 	if prop.Minimum != nil {
-		c := n.Cmp(big.NewFloat(*prop.Minimum))
-		if c < 0 || (c == 0 && prop.ExclusiveMinimum != nil && *prop.ExclusiveMinimum) {
+		c := n.Cmp(*prop.Minimum)
+		if c < 0 || (c == 0 && isTrue(prop.ExclusiveMinimum)) {
 			return false
 		}
 	}
 	if prop.Maximum != nil {
-		c := n.Cmp(big.NewFloat(*prop.Maximum))
-		if c > 0 || (c == 0 && prop.ExclusiveMaximum != nil && *prop.ExclusiveMaximum) {
+		c := n.Cmp(*prop.Maximum)
+		if c > 0 || (c == 0 && isTrue(prop.ExclusiveMaximum)) {
 			return false
 		}
 	}
 	return true
 }
+
+func isTrue(b *bool) bool { return b != nil && *b }
 
 // coerceNumberExample parses raw as a float, rejecting the non-finite values
 // strconv accepts — yaml would write .nan/.inf, which fails at the PARSE stage.
@@ -2198,14 +2199,14 @@ func intFitsFormat(i int64, format string) bool {
 // then rejected ("number must be more than 10").
 func exampleInBounds(n float64, prop *OpenAPIProperty) bool {
 	if prop.Minimum != nil {
-		if n < *prop.Minimum ||
-			(prop.ExclusiveMinimum != nil && *prop.ExclusiveMinimum && n == *prop.Minimum) {
+		lo := prop.Minimum.Float64()
+		if n < lo || (isTrue(prop.ExclusiveMinimum) && n == lo) {
 			return false
 		}
 	}
 	if prop.Maximum != nil {
-		if n > *prop.Maximum ||
-			(prop.ExclusiveMaximum != nil && *prop.ExclusiveMaximum && n == *prop.Maximum) {
+		hi := prop.Maximum.Float64()
+		if n > hi || (isTrue(prop.ExclusiveMaximum) && n == hi) {
 			return false
 		}
 	}

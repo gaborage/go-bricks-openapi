@@ -68,7 +68,7 @@ paths:
             type: integer
             format: int64
             minimum: 0
-            maximum: 4.294967295e+09
+            maximum: 4294967295
         - name: page
           in: query
           required: false
@@ -329,14 +329,14 @@ components:
           type: integer
           format: int64
           minimum: 0
-          maximum: 4.294967295e+09
+          maximum: 4294967295
         words:
           type: object
           additionalProperties:
             type: integer
             format: int64
             minimum: 0
-            maximum: 4.294967295e+09
+            maximum: 4294967295
   securitySchemes:
     TenantID:
       type: apiKey
