@@ -82,6 +82,12 @@ func TestExtractSuccessStatusAddressOf(t *testing.T) {
 		{"non_server_literal", "\treturn &Envelope[Resp]{Status: http.StatusCreated}, nil", 0},
 		// go-bricks serves *NoContentResult as NoContentResult: a 204.
 		{"no_content_literal", "\treturn &server.NoContentResult{}, nil", 204},
+		// &res of a pointer binding is a **server.Result[T]: no provider
+		// methods, so go-bricks serves the default status, never the wrapper's.
+		{"address_of_pointer_binding", "\tres := &server.Result[Resp]{Status: http.StatusNoContent}\n\treturn &res, nil", 0},
+		{"address_of_parenthesized_pointer_binding", "\tres := (&server.Result[Resp]{Status: http.StatusCreated})\n\treturn &res, nil", 0},
+		{"address_of_pointer_var_decl", "\tvar res = &server.Result[Resp]{Status: http.StatusCreated}\n\treturn &res, nil", 0},
+		{"address_of_address_binding", "\tres := server.Result[Resp]{Status: http.StatusCreated}\n\tp := &res\n\treturn &p, nil", 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -98,6 +104,20 @@ func TestDoublePointerResultWrapperWarns(t *testing.T) {
 	route, warnings := analyzeParen(t, "ctx server.HandlerContext", "**server.Result[Named]")
 	want := "response type **server.Result[Named]: server.Result[Named] is a generic type instantiation, which is not resolved — emitting an untyped schema"
 	assert.Equal(t, []string{want}, warnings)
+	assert.Nil(t, route.Response)
+}
+
+// TestDoublePointerResultWrapperStatus pins that a **server.Result[T]
+// handler returning &res, res bound to &server.Result[T]{Status: ...}, keeps
+// the default status: go-bricks' type assertions against its result
+// providers fail on the double pointer, so it serves the default writer's
+// 200, never the literal's 204.
+func TestDoublePointerResultWrapperStatus(t *testing.T) {
+	src := strings.NewReplacer("PARAMS", "ctx server.HandlerContext", "RESULT", "**server.Result[Named]",
+		"return out, nil", "res := &server.Result[Named]{Status: 204}\n\treturn &res, nil").Replace(parenModSrc)
+	_, routes := analyzeSingleModule(t, src)
+	route := routeForPath(t, routes, "POST /items")
+	assert.Equal(t, 0, route.SuccessStatus)
 	assert.Nil(t, route.Response)
 }
 

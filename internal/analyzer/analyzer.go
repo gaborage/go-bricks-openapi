@@ -3128,7 +3128,10 @@ func (a *ProjectAnalyzer) statusFromReturn(
 // statusFromAddressOf resolves a returned &x, the success result of a handler
 // returning *server.Result[T]: &server.Result[T]{...} reads the literal under
 // the same nil-error gate as the value literal, and &res reads res's binding
-// with no gate, like a returned identifier. Any other operand yields 0.
+// with no gate, like a returned identifier. A res bound to an address
+// (res := &server.Result[T]{...}) makes &res a **server.Result[T], which
+// go-bricks serves through its default writer with the default status, so it
+// yields 0, as does any other operand.
 func (a *ProjectAnalyzer) statusFromAddressOf(
 	ret *ast.ReturnStmt,
 	u *ast.UnaryExpr,
@@ -3145,9 +3148,18 @@ func (a *ProjectAnalyzer) statusFromAddressOf(
 			return a.statusFromResultLiteral(x, serverAliases, shadows)
 		}
 	case *ast.Ident:
+		if b, ok := bindings[x.Name]; ok && b.pointer {
+			return 0
+		}
 		return boundStatus(bindings, x.Name)
 	}
 	return 0
+}
+
+// isAddressOf reports whether expr, parenthesized or not, takes an address.
+func isAddressOf(expr ast.Expr) bool {
+	u, ok := ast.Unparen(expr).(*ast.UnaryExpr)
+	return ok && u.Op == token.AND
 }
 
 // boundStatus returns the status of an unambiguous binding of name, or 0 when
@@ -3187,6 +3199,10 @@ func firstNamedResult(funcDecl *ast.FuncDecl) string {
 type resultBinding struct {
 	status    int
 	ambiguous bool
+	// pointer marks a binding to an address (res := &server.Result[T]{...}):
+	// &res is then a **server.Result[T], which has no provider methods, so
+	// go-bricks serves it with the default status, never the wrapper's.
+	pointer bool
 }
 
 // bindingCollector accumulates the identifier bindings of one handler body.
@@ -3300,7 +3316,10 @@ func (c *bindingCollector) bindResult(name string, rhs ast.Expr) {
 		existing.ambiguous = true
 		return
 	}
-	c.bindings[name] = &resultBinding{status: c.analyzer.statusFromBoundExpr(rhs, c.serverAliases, c.shadows)}
+	c.bindings[name] = &resultBinding{
+		status:  c.analyzer.statusFromBoundExpr(rhs, c.serverAliases, c.shadows),
+		pointer: isAddressOf(rhs),
+	}
 }
 
 // recordStatusWrite applies an unconditional `<ident>.Status = <expr>` write to
