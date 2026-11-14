@@ -374,11 +374,22 @@ nested Go module, is not.
   type that only decodes through such a method stays a base64 string.
   Pointer-receiver-only methods count in every position, although
   `encoding/json` skips them on non-addressable values (a map value, a
-  payload returned by value), so a type whose `MarshalText` is only on its
-  pointer (or promoted through a value embed of such a type) is `{}` with a
-  warning, not a string, even where it is addressable (`*T`). Out-of-module types are known only from a
+  payload returned by value), so a type declared in the module whose
+  `MarshalText` is only on its pointer (or promoted through a value embed of
+  such a type) is `{}` with a warning, not a string, in every position, `*T`
+  included. The one exception is the table's `math/big` types, whose
+  standard-library source fixes their wire form: every marshal method of `big.Int`, `big.Float` and
+  `big.Rat` is on the pointer, so an explicit pointer (`*big.Int`, always
+  addressable) is documented from it, `*big.Int` as `{type: integer}` and
+  `*big.Float` and `*big.Rat` as `{type: string}` (`nullable` as a field,
+  with no `format`), while a value `big.Int`, `big.Float` or `big.Rat` is
+  `{}` with the warning in every position (a field, a slice item, a map
+  value, a payload), although `encoding/json` writes it as a number or
+  string where it happens to be addressable. A defined type over one drops
+  the methods and keeps an untyped object with its warning. Out-of-module types are known only from a
   table (`time.Time`, `uuid.UUID`, `json.RawMessage`, `json.Number`, `net.IP`,
-  `netip.Addr`, `netip.Prefix`, `netip.AddrPort`), so an
+  `netip.Addr`, `netip.Prefix`, `netip.AddrPort`, `big.Int`, `big.Float`,
+  `big.Rat`), so an
   embedded `decimal.Decimal` goes undetected: its embedding struct is
   documented from its other fields, and the embed is dropped with a
   warning. Used directly, the table's text types (`uuid.UUID`, `net.IP`,
@@ -520,7 +531,8 @@ nested Go module, is not.
   type `T`: builtins, the well-known types (`time.Time`, `time.Duration`,
   `time.Month`, `time.Weekday`, `uuid.UUID`, `json.RawMessage`,
   `json.Number`, `os.FileMode`, `fs.FileMode`, `net.IP`, `netip.Addr`,
-  `netip.Prefix`, `netip.AddrPort`, `net.HardwareAddr`, `net.IPMask`), named non-struct types (local, or from another package of
+  `netip.Prefix`, `netip.AddrPort`, `net.HardwareAddr`, `net.IPMask`, and
+  `*big.Int`, `*big.Float`, `*big.Rat` behind their pointer), named non-struct types (local, or from another package of
   the module), maps, nested slices and pointers to containers included. The
   root is never `nullable`. As `encoding/json` writes them, `[]byte` alone is a
   base64 string, while `[N]byte` (payload or field) and `[]*byte` are integer

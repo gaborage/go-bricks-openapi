@@ -221,6 +221,13 @@ const (
 	WellKnownNetipAddr     = "netip.Addr"
 	WellKnownNetipPrefix   = "netip.Prefix"
 	WellKnownNetipAddrPort = "netip.AddrPort"
+	// math/big's three types: every marshal method on the pointer, so only
+	// an explicit pointer (*big.Int, a JSON number; *big.Float and *big.Rat,
+	// JSON strings) is a well-known leaf. The analyzer resolves a value one
+	// in a body position to a Marshaler leaf ({}).
+	WellKnownBigInt   = "big.Int"
+	WellKnownBigFloat = "big.Float"
+	WellKnownBigRat   = "big.Rat"
 )
 
 // WellKnownTypeNames is the set of named types the generator documents inline
@@ -244,6 +251,9 @@ var WellKnownTypeNames = map[string]bool{
 	WellKnownNetipAddr:     true,
 	WellKnownNetipPrefix:   true,
 	WellKnownNetipAddrPort: true,
+	WellKnownBigInt:        true,
+	WellKnownBigFloat:      true,
+	WellKnownBigRat:        true,
 }
 
 // UntypedBuiltinNames are the Go builtins with no JSON Schema form: the

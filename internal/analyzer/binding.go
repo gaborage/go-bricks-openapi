@@ -71,11 +71,6 @@ var kindReasons = map[binderKind]string{
 	kindFuncOrChan: reasonFuncOrChan,
 }
 
-// bigInt is math/big's Int as the Shape decoder writes it. It is not
-// well-known until issue 113 types it, so its row is not consulted yet: a
-// big.Int parameter is unresolvable and keeps that warning.
-const bigInt = "big.Int"
-
 // wellKnownBinderKinds is the binder kind of each well-known type name the
 // binder cannot see through its schema: the analyzer keeps such a name as a
 // leaf, so its declaration's kind is known only from here. It is consulted
@@ -84,6 +79,10 @@ const bigInt = "big.Int"
 // time.Weekday, os.FileMode, fs.FileMode) need no row: they resolve to their
 // builtin first (knownUnderlyingBuiltins). net.HardwareAddr and net.IPMask
 // need none either: they resolve to a []byte shape (knownByteSlices).
+// math/big's Int, Float and Rat are structs, and a row covers the pointer
+// spelling too (pointerBindReason). A parameter of one, value or pointer,
+// is resolved by kind and never a Marshaler leaf, so its one warning is the
+// binding warning.
 var wellKnownBinderKinds = map[string]binderKind{
 	models.WellKnownTimeTime:      kindTime,
 	models.WellKnownJSONNumber:    kindString,
@@ -93,7 +92,9 @@ var wellKnownBinderKinds = map[string]binderKind{
 	models.WellKnownNetipAddr:     kindStruct,
 	models.WellKnownNetipPrefix:   kindStruct,
 	models.WellKnownNetipAddrPort: kindStruct,
-	bigInt:                        kindStruct, // *big.Int too, through the pointer rule
+	models.WellKnownBigInt:        kindStruct,
+	models.WellKnownBigFloat:      kindStruct,
+	models.WellKnownBigRat:        kindStruct,
 }
 
 // warnUnbindableParams checks the parameters of the struct a request TypeInfo
