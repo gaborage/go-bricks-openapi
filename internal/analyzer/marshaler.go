@@ -427,6 +427,9 @@ func (a *ProjectAnalyzer) methodSetOf(name string, c resolveCtx, keep bool, open
 // computeMethodSet is methodSetOf's walk, with name's key already on open.
 func (a *ProjectAnalyzer) computeMethodSet(name string, c resolveCtx, keep bool, open []string) methodSet {
 	a.methodSetWalks++
+	if a.interfaceCopiesDisagree(name, c, open) {
+		return methodSet{}
+	}
 	own := methodSet{}
 	if keep {
 		own = a.declaredMethods(name, c)
@@ -435,20 +438,143 @@ func (a *ProjectAnalyzer) computeMethodSet(name string, c resolveCtx, keep bool,
 	if !ok {
 		return own
 	}
-	return own.over(a.rhsMethodSet(ts.Type, c.in(file, path), keep && ts.Assign.IsValid(), open))
+	rhs := a.rhsMethodSet(ts.Type, c.in(file, path), keep && ts.Assign.IsValid(), open)
+	if _, literal := ast.Unparen(ts.Type).(*ast.InterfaceType); literal || !ts.Assign.IsValid() {
+		rhs.ownedBy(c.display(name), c.typeKey(name))
+	}
+	return own.over(rhs)
+}
+
+// interfaceCopiesDisagree reports whether name's build-tagged declarations
+// in c's package (localTypeDecls) disagree on an interface's marshal methods
+// (#179): at least one declares an interface (specEndsAtInterface) holding one
+// of the seven methods, and another is no interface or holds a different
+// set. Every copy is read, so the answer does not depend on file order; a
+// lone declaration, or copies none of which is such an interface, never
+// disagree here (struct copies are structCopiesDisagree's). computeMethodSet
+// gives such a name an empty method set, so nothing is promoted from it, and
+// interfaceCopiesFallback notes it where it is resolved.
+func (a *ProjectAnalyzer) interfaceCopiesDisagree(name string, c resolveCtx, open []string) bool {
+	decls := a.localTypeDecls(name, c.file, c.path)
+	if len(decls) < 2 {
+		return false
+	}
+	sets, others := a.interfaceCopySets(decls, c, open)
+	if !slices.ContainsFunc(sets, func(ms methodSet) bool { m, _ := ms.marshaler(""); return m.found() }) {
+		return false
+	}
+	return others > 0 || slices.ContainsFunc(sets[1:], func(ms methodSet) bool { return !sameExactMethods(sets[0], ms) })
+}
+
+// interfaceCopySets returns the method set of each of decls that ends at an
+// interface, in order, and how many do not.
+func (a *ProjectAnalyzer) interfaceCopySets(decls []typeDecl, c resolveCtx, open []string) (sets []methodSet, others int) {
+	for _, d := range decls {
+		if !a.specEndsAtInterface(d.spec, d.file, d.path, 0) {
+			others++
+			continue
+		}
+		sets = append(sets, a.rhsMethodSet(d.spec.Type, c.in(d.file, d.path), false, open))
+	}
+	return sets, others
+}
+
+// sameExactMethods reports whether x and y hold the same method names, each
+// exact in both or in neither.
+func sameExactMethods(x, y methodSet) bool {
+	return maps.EqualFunc(x, y, func(e, f methodEntry) bool { return e.exact == f.exact })
+}
+
+// ownedBy names owner as the declaring type of every depth-0 entry of ms.
+// computeMethodSet calls it for an interface literal's name and for a defined
+// type, whose right-hand side holds an exact depth-0 entry only when it ends
+// at an interface (#179): a defined type drops a non-interface target's
+// declared methods but keeps an interface's, as the Go spec says. Those
+// methods are then its own, so its warning names it and its own Stated
+// schema applies, as a struct promoting a method takes its own directive.
+func (ms methodSet) ownedBy(owner, ownerKey string) {
+	for name, e := range ms {
+		if e.depth == 0 {
+			e.owner, e.ownerKey = owner, ownerKey
+			ms[name] = e
+		}
+	}
 }
 
 // rhsMethodSet returns the method set a declaration's right-hand side
-// contributes, parentheses shed: what a struct literal promotes, or the set
-// of the named type it names (keep false for a defined type's target).
+// contributes, parentheses shed: what a struct literal promotes, what an
+// interface literal declares (whatever keep), or the set of the named type
+// it names (keep false for a defined type's target).
 func (a *ProjectAnalyzer) rhsMethodSet(rhs ast.Expr, c resolveCtx, keep bool, open []string) methodSet {
 	switch t := ast.Unparen(rhs).(type) {
 	case *ast.StructType:
 		return a.promotedMethods(t, c, open)
+	case *ast.InterfaceType:
+		return a.interfaceMethods(t, c, open)
 	case *ast.Ident:
 		return a.methodSetOf(t.Name, c, keep, open)
 	case *ast.SelectorExpr:
 		return a.qualifiedMethodSet(a.typeShape(t).Name, c, keep, open)
+	default:
+		return methodSet{}
+	}
+}
+
+// interfaceMethods returns the method set an interface literal declares
+// (#179): each of its methods under one of the seven names, exact when its
+// signature matches (matchTypes, through c's file's imports), and the
+// methods of each interface it embeds, unioned at the interface's own depth.
+// An interface has no promotion depth, and identical methods from
+// overlapping embeds are one method, not an ambiguity (two that differ do
+// not compile). Every entry is depth 0 and in the value method set;
+// computeMethodSet names the declaring type as its owner. An embedded
+// interface from outside the module contributes nothing (accepted residual).
+func (a *ProjectAnalyzer) interfaceMethods(it *ast.InterfaceType, c resolveCtx, open []string) methodSet {
+	ms := methodSet{}
+	var imports map[string]string
+	for _, f := range it.Methods.List {
+		if len(f.Names) == 0 {
+			for name, e := range a.interfaceEmbedSet(f.Type, c, open) {
+				ms.union(name, e.exact)
+			}
+			continue
+		}
+		sig, known := marshalerSignatures[f.Names[0].Name]
+		ft, isFunc := f.Type.(*ast.FuncType)
+		if !known || !isFunc {
+			continue
+		}
+		if imports == nil {
+			imports = a.fileImports(c.file)
+		}
+		exact := matchTypes(fieldTypes(ft.Params), sig.params, imports) && matchTypes(fieldTypes(ft.Results), sig.results, imports)
+		ms.union(f.Names[0].Name, exact)
+	}
+	return ms
+}
+
+// union adds method to an interface's method set at depth 0, exact when
+// any declaration of it is.
+func (ms methodSet) union(method string, exact bool) {
+	ms[method] = methodEntry{exact: ms[method].exact || exact}
+}
+
+// interfaceEmbedSet returns the method set of an interface's embedded
+// element t: a local or in-module qualified name's, keep false (an
+// interface's methods survive it, and nothing else is embedded in an
+// interface a field can have), or an embedded interface literal's own
+// (interfaceMethods). A union or approximation element
+// (constraint-only) contributes nothing.
+func (a *ProjectAnalyzer) interfaceEmbedSet(t ast.Expr, c resolveCtx, open []string) methodSet {
+	switch e := ast.Unparen(t).(type) {
+	case *ast.Ident:
+		return a.methodSetOf(e.Name, c, false, open)
+	case *ast.SelectorExpr:
+		return a.qualifiedMethodSet(a.typeShape(e).Name, c, false, open)
+	case *ast.InterfaceType:
+		// An embedded interface literal (interface{ interface{ M() } }) is
+		// read in place, its methods at the embedding interface's depth.
+		return a.interfaceMethods(e, c, open)
 	default:
 		return methodSet{}
 	}

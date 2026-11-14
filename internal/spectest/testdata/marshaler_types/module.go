@@ -108,6 +108,42 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.POST(hr, r, "/cmd", m.cmd)
 	server.GET(hr, r, "/items/:id", m.items)
 	server.GET(hr, r, "/ids/:id", m.ids)
+	server.GET(hr, r, "/ifaces", m.ifaces)
+	server.GET(hr, r, "/njm", m.njm)
+}
+
+// NTM promotes domain.TM's text pair across packages: a string both ways.
+type NTM struct {
+	domain.TM
+	Y int `json:"y"`
+}
+
+// Ifaces holds one field per interface row.
+type Ifaces struct {
+	J    JM            `json:"j"`
+	T    domain.TM     `json:"t"`
+	JPtr *JM           `json:"jPtr"`
+	Js   []JM          `json:"js"`
+	JMap map[string]JM `json:"jMap"`
+	J2   J2            `json:"j2"`
+	JM2  JM2           `json:"jm2"`
+	Bad  BadJM         `json:"bad"`
+	NJM  NJM           `json:"njm"`
+	NJM2 NJM2          `json:"njm2"`
+	ND   ND            `json:"nd"`
+	NBad NBad          `json:"nBad"`
+	NTM  NTM           `json:"ntm"`
+	Tie  JMTie         `json:"tie"`
+}
+
+func (m *Module) ifaces(ctx server.HandlerContext) (server.Result[Ifaces], server.IAPIError) {
+	var v server.Result[Ifaces]
+	return v, nil
+}
+
+func (m *Module) njm(ctx server.HandlerContext) (server.Result[NJM], server.IAPIError) {
+	var v server.Result[NJM]
+	return v, nil
 }
 
 func (m *Module) getFields(ctx server.HandlerContext) (server.Result[Fields], server.IAPIError) {

@@ -3636,10 +3636,19 @@ func (a *ProjectAnalyzer) populateRequestType(h *handlerAnalysis, astFile *ast.F
 // registerPayloadType registers a request/response TypeInfo's named type and
 // returns its registered TypeInfo, or nil when the name is not a resolvable
 // struct. A struct Marshaler type (#111) is not registered either: it returns
-// nil, after setting typeInfo.JOSE from the struct's jose tag.
+// nil, after setting typeInfo.JOSE from the struct's jose tag. Nor is a type
+// whose build-tagged copies disagree on an interface's marshal methods
+// (interfaceCopiesFallback), even when one copy is a struct.
 func (a *ProjectAnalyzer) registerPayloadType(typeInfo *models.TypeInfo, astFile *ast.File, filePath string) *models.TypeInfo {
-	if _, _, isMarshaler := a.marshalerNamed(typeInfo, astFile, filePath); isMarshaler {
+	_, fb, isMarshaler := a.marshalerNamed(typeInfo, astFile, filePath)
+	if isMarshaler {
 		typeInfo.JOSE = a.structMarshalerJOSE(typeInfo, astFile, filePath)
+		return nil
+	}
+	if fb.kind == fallbackDeclsDisagree && fb.detail == declsInterfaceCause {
+		// Its copies (or a name on its chain) disagree on an interface's
+		// marshal methods (#179): it registers no component, and
+		// resolvePayload raises the payload form of the warning.
 		return nil
 	}
 	registered := a.registerType(typeInfo.Name, typeInfo.Package, astFile, filePath)

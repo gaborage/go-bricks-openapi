@@ -249,11 +249,12 @@ func methodsRefusal(name string, m marshalerMethods, s models.StatedSchema) stri
 
 // typeMarshalerMethods returns what name's method set, in c's package, says
 // about its JSON form, as resolveLocal reads it in identity mode: a struct
-// (or a chain ending at one) through its declared and promoted methods
-// (methodSetOf), any other type through the methods declared on it
-// (marshalerSet).
+// (or a chain ending at one) through its declared and promoted methods, an
+// interface (or a chain ending at one) through its declared and embedded
+// methods (both methodSetOf), any other type through the methods declared on
+// it (marshalerSet).
 func (a *ProjectAnalyzer) typeMarshalerMethods(name string, c resolveCtx) marshalerMethods {
-	if _, _, _, _, ok := a.resolveTypeSpecChain(c.file, c.path, name); ok {
+	if _, _, _, _, ok := a.resolveTypeSpecChain(c.file, c.path, name); ok || a.endsAtInterface(c.file, c.path, name, 0) {
 		m, _ := a.methodSetOf(name, c, true, nil).marshaler(c.display(name))
 		return m
 	}

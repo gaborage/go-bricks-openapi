@@ -225,6 +225,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /ifaces:
+    get:
+      operationId: marshalertypesIfaces
+      summary: GET /ifaces
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Ifaces'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /items/{id}:
     get:
       operationId: marshalertypesItems
@@ -522,6 +558,41 @@ paths:
                   data:
                     type: array
                     items: {}
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /njm:
+    get:
+      operationId: marshalertypesNjm
+      summary: GET /njm
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: {}
                   meta:
                     type: object
                     properties:
@@ -849,6 +920,39 @@ components:
         - level
     Filter:
       type: object
+    Ifaces:
+      type: object
+      properties:
+        bad: {}
+        j: {}
+        j2: {}
+        jMap:
+          type: object
+          additionalProperties: {}
+        jPtr: {}
+        jm2: {}
+        js:
+          type: array
+          items: {}
+        nBad:
+          $ref: '#/components/schemas/NBad'
+        nd: {}
+        njm: {}
+        njm2: {}
+        ntm:
+          type: string
+        t:
+          type: string
+        tie:
+          $ref: '#/components/schemas/JMTie'
+    JMTie:
+      type: object
+      properties:
+        JM: {}
+        JMb: {}
+        c:
+          type: integer
+          format: int64
     JOSEErrorEnvelope:
       type: object
       properties:
@@ -871,6 +975,13 @@ components:
       type: object
       properties:
         amount:
+          type: integer
+          format: int64
+    NBad:
+      type: object
+      properties:
+        BadJM: {}
+        w:
           type: integer
           format: int64
     Pair:
