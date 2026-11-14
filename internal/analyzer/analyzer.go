@@ -135,6 +135,7 @@ type ProjectAnalyzer struct {
 	uintptrWarned    map[string]struct{}                // dedupes uintptr-field warnings by "file:line:col"
 	fieldWarned      map[string]struct{}                // dedupes field fallback warnings by "file:line:col"
 	fieldWarnings    map[string]int                     // "file:line:col" -> index in warnings of that field's one warning (markFieldWarning)
+	metaPending      map[*models.TypeInfo]*metaTarget   // accepted //openapi:meta type, as stamped on its routes -> its target (registerRouteMeta)
 	quietEmbeds      bool                               // requestParamFields is reading a Marshaler request: dropped embeds do not warn, and no anonymous struct is extracted
 	fieldSites       map[*models.TypeShape]fieldSite    // field Resolution root -> where its ref leaves register
 	openLiterals     []string                           // structIdentity of each anonymous struct being extracted, outermost first (resolveStruct's cycle guard)
@@ -263,6 +264,7 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	a.chainMemo = make(map[chainMemoKey]chainMemoEntry)
 	a.directives = make(map[string]map[int]*directiveGroup)
 	a.directiveFiles = make(map[string]struct{})
+	a.metaPending = nil
 	a.statedDecls = nil
 	a.schemaVerdicts = nil
 	a.nameAssign = make(map[string]string)
@@ -293,6 +295,9 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	// Every module's routes are known: keep the first registration of each
 	// route node, project-wide, and warn on the rest.
 	a.dropDuplicateRoutes(modules)
+	// Only now, with every loser dropped, register the meta types the kept
+	// routes' //openapi:meta directives name: a loser's would be an orphan.
+	a.registerRouteMeta(modules)
 
 	project.Modules = modules
 	project.Types = a.typeRegistry
@@ -1076,6 +1081,7 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, view bindingView) *model
 		// Inferred error statuses land first; applyRouteDirectives unions the
 		// declared ones on top.
 		route.ErrorStatuses = handler.errorStatuses
+		route.ResultWrapper = handler.wrapper
 	}
 	for i := shape.optsIdx(); i < len(call.Args); i++ {
 		w.a.extractRouteMetadata(call.Args[i], route, w.serverAliases)
@@ -1646,6 +1652,8 @@ type handlerAnalysis struct {
 	responseInst  string
 	successStatus int
 	errorStatuses []int
+	// wrapper is the result wrapper the handler's first result is.
+	wrapper models.ResultWrapper
 }
 
 // found reports whether the analysis came from a matched handler declaration.
@@ -2980,14 +2988,42 @@ func (a *ProjectAnalyzer) extractResponseType(
 // written pointer is shed: **Result[T] has no methods, go-bricks encodes the
 // Result struct itself under data, and it stays the result as written.
 func (a *ProjectAnalyzer) payloadExpr(first ast.Expr, serverAliases map[string]struct{}) ast.Expr {
+	if idx := a.resultWrapperIndex(first, serverAliases); idx != nil {
+		return idx.Index
+	}
+	return first
+}
+
+// resultWrapperIndex returns a handler's first result as a result wrapper
+// instantiation (server.Result[T], ResultWithMeta[T]), parentheses and
+// exactly one written pointer shed as payloadExpr sheds them, or nil when
+// it is none.
+func (a *ProjectAnalyzer) resultWrapperIndex(first ast.Expr, serverAliases map[string]struct{}) *ast.IndexExpr {
 	wrapper := ast.Unparen(first)
 	if star, ok := wrapper.(*ast.StarExpr); ok {
 		wrapper = ast.Unparen(star.X) // *(server.Result[T]) is *server.Result[T]
 	}
 	if idx, ok := wrapper.(*ast.IndexExpr); ok && a.isResultWrapper(idx.X, serverAliases) {
-		return idx.Index
+		return idx
 	}
-	return first
+	return nil
+}
+
+// resultWrapperKind classifies a handler's declared results by the result
+// wrapper its first result is (resultWrapperIndex), honouring the local
+// aliases of the server import.
+func (a *ProjectAnalyzer) resultWrapperKind(results *ast.FieldList, serverAliases map[string]struct{}) models.ResultWrapper {
+	if results == nil || len(results.List) == 0 {
+		return models.ResultWrapperNone
+	}
+	idx := a.resultWrapperIndex(results.List[0].Type, serverAliases)
+	switch {
+	case idx == nil:
+		return models.ResultWrapperNone
+	case idx.X.(*ast.SelectorExpr).Sel.Name == resultWithMetaTypeName:
+		return models.ResultWrapperResultWithMeta
+	}
+	return models.ResultWrapperResult
 }
 
 // findHandlerInFile searches a single AST file for a handler method
@@ -3027,6 +3063,7 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 			responseType:  responseType,
 			successStatus: a.extractSuccessStatus(funcDecl, serverAliases),
 			errorStatuses: a.inferErrorStatuses(funcDecl, serverAliases),
+			wrapper:       a.resultWrapperKind(funcDecl.Type.Results, serverAliases),
 		}
 		// Defensive, like warnGenericPayload's check: today a payload holding an
 		// Instantiation never resolves to a TypeInfo.

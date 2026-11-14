@@ -27,12 +27,16 @@ import (
 //   - public          — route; zero arguments; marks the route as needing no auth.
 //   - errors 404,409  — route; a single-line, comma-separated list of extra
 //     error statuses the operation can return (400-599).
+//   - meta PageMeta   — route; one type name (Name or pkg.Name), a struct of
+//     this module documenting a ResultWithMeta route's handler-supplied meta
+//     keys beside the framework's (meta.go).
 //   - schema string decimal — type; the Stated schema of a Marshaler type the
 //     project declares (#117, ADR 0004): a type word and an optional format.
 //
 // An unrecognised name, an argument on `public`, a malformed or out-of-range
-// `errors` token and malformed `schema` arguments each raise an analyzer
-// diagnostic, which feeds `--strict`. So does a Detached directive: a
+// `errors` token, malformed `schema` arguments and a malformed `meta` argument
+// each raise an analyzer diagnostic, which feeds `--strict` (as does a `meta`
+// directive refused later, meta.go). So does a Detached directive: a
 // recognised name outside its placement (see warnDetachedDirectives), judged
 // per name, so one group can apply one name and report another.
 const (
@@ -41,6 +45,7 @@ const (
 	directiveNamePublic = "public"
 	directiveNameErrors = "errors"
 	directiveNameSchema = "schema"
+	directiveNameMeta   = "meta"
 
 	// errorStatusMin/errorStatusMax bound the status codes `errors` accepts —
 	// the HTTP client- and server-error ranges.
@@ -66,6 +71,17 @@ type directiveGroup struct {
 	// order: one is the group's Stated schema; two or more disagree, and
 	// none applies.
 	schemas []models.StatedSchema
+	// metaLines are the group's `meta` lines that passed the grammar check,
+	// in source order. They are resolved, compared and applied when a
+	// registration applies the group (applyMetaDirective), since resolution
+	// needs the registration file.
+	metaLines []metaLine
+	// metaDone is set once the group's `meta` verdict is computed, so a
+	// registration walked twice (a helper reached under two prefixes) warns
+	// once; metaApplied is that verdict: the accepted meta type, pending
+	// registration (registerRouteMeta), or nil.
+	metaDone    bool
+	metaApplied *models.TypeInfo
 	// schemaAt is the group's first `schema` line, valid or not: where a
 	// schema diagnostic points.
 	schemaAt token.Pos
@@ -268,6 +284,8 @@ func (a *ProjectAnalyzer) applyDirective(g *directiveGroup, name, args string, p
 		g.rd.errorStatuses = append(g.rd.errorStatuses, a.parseErrorStatuses(args, pos)...)
 	case directiveNameSchema:
 		a.addSchemaLine(g, args, pos)
+	case directiveNameMeta:
+		a.addMetaLine(g, args, pos)
 	default:
 		a.warnDirectivef(pos, "unknown directive %q — no such openapi directive", name)
 		return false
@@ -340,15 +358,6 @@ func (a *ProjectAnalyzer) directiveGroupAt(pos token.Pos) *directiveGroup {
 	return g
 }
 
-// directivesAt returns the Directives attached to the registration call whose
-// first token is at pos. The zero value is returned when there are none.
-func (a *ProjectAnalyzer) directivesAt(pos token.Pos) routeDirectives {
-	if g := a.directiveGroupAt(pos); g != nil {
-		return g.rd
-	}
-	return routeDirectives{}
-}
-
 // markDirectivesAttached records that the call at pos was recognised as a route
 // registration, so the group directly above it is attached. Called at
 // recognition — before path, prefix, or method resolution — so a directive
@@ -415,9 +424,15 @@ func detachedDirectiveMessage(names []string) string {
 
 // applyRouteDirectives stamps the Directives attached to the registration call
 // at pos onto the route: `public` marks it auth-free, `errors` contributes the
-// declared extra error statuses the generator unions with its baseline.
+// declared extra error statuses the generator unions with its baseline, and
+// `meta` documents the meta keys a ResultWithMeta handler supplies.
 func (a *ProjectAnalyzer) applyRouteDirectives(route *models.Route, pos token.Pos) {
-	rd := a.directivesAt(pos)
+	g := a.directiveGroupAt(pos)
+	var rd routeDirectives
+	if g != nil {
+		rd = g.rd
+		a.applyMetaDirective(route, g)
+	}
 	if rd.public {
 		route.Public = true
 	}

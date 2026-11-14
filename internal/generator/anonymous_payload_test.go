@@ -15,7 +15,7 @@ import (
 // never nullable, and never annotated as the untyped fallback, even empty.
 func TestAnonymousStructPayloadSchema(t *testing.T) {
 	data := func(r models.TypeShape) *OpenAPIProperty {
-		return successEnvelopeSchema(resolvedPayloadOf(r)).Properties[propNameData]
+		return successEnvelopeSchema(resolvedPayloadOf(r), nil).Properties[propNameData]
 	}
 	x := anonOf(requiredX())
 	cases := []struct {

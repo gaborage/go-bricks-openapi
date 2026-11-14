@@ -791,7 +791,7 @@ func (g *OpenAPIGenerator) buildResponses(route *models.Route) map[string]*OpenA
 	case route.RawResponse:
 		success.Content = map[string]*OpenAPIMediaType{mediaJSON: {Schema: responsePayloadSchema(route.Response)}}
 	default:
-		success.Content = map[string]*OpenAPIMediaType{mediaJSON: {Schema: successEnvelopeSchema(route.Response)}}
+		success.Content = map[string]*OpenAPIMediaType{mediaJSON: {Schema: successEnvelopeSchema(route.Response, route.Meta)}}
 	}
 
 	// Pre-trust failures on JOSE routes are plaintext minimal envelopes per the
@@ -903,8 +903,10 @@ func (g *OpenAPIGenerator) successPlaintextSchema(route *models.Route) string {
 
 // successEnvelopeSchema builds the inline {data, meta} success envelope. data is
 // the payload's schema (responsePayloadSchema); a bare untyped object (the
-// handler returned an untyped or unresolved payload) is annotated.
-func successEnvelopeSchema(response *models.TypeInfo) *OpenAPIProperty {
+// handler returned an untyped or unresolved payload) is annotated. meta is the
+// framework block, joined by the route's `//openapi:meta` type when it has one
+// (routeMetaSchema).
+func successEnvelopeSchema(response, meta *models.TypeInfo) *OpenAPIProperty {
 	data := responsePayloadSchema(response)
 	if data.Ref == "" && data.Type == typeObject && data.AdditionalProperties == nil && !inlineStructPayload(response) {
 		// Only the bare untyped object is the fallback — annotate it for
@@ -918,9 +920,21 @@ func successEnvelopeSchema(response *models.TypeInfo) *OpenAPIProperty {
 		Type: typeObject,
 		Properties: map[string]*OpenAPIProperty{
 			propNameData: data,
-			propNameMeta: metaEnvelopeSchema(),
+			propNameMeta: routeMetaSchema(meta),
 		},
 	}
+}
+
+// routeMetaSchema is a success envelope's meta: the framework block alone, or,
+// for a route whose `//openapi:meta` Directive applied (issue 69),
+// allOf: [<the framework block, unchanged>, {$ref: <the meta type>}]. go-bricks
+// merges the handler's meta map into the block it writes, so the document
+// promises both.
+func routeMetaSchema(meta *models.TypeInfo) *OpenAPIProperty {
+	if meta == nil {
+		return metaEnvelopeSchema()
+	}
+	return &OpenAPIProperty{AllOf: []*OpenAPIProperty{metaEnvelopeSchema(), {Ref: refPath(schemaName(meta))}}}
 }
 
 // inlineStructPayload reports whether a payload is an anonymous struct
@@ -1306,9 +1320,10 @@ func (g *OpenAPIGenerator) generateSchemasFromTypes(types map[string]*models.Typ
 }
 
 // referencedSchemaNames collects every component name a document points at:
-// typed (non-JOSE) response payloads, field/map-value refs across all types, and
-// the plaintext types of JOSE routes. Used so a type that is referenced is not
-// skipped (which would leave the reference pointing at nothing). A response's
+// typed (non-JOSE) response payloads, field/map-value refs across all types,
+// the plaintext types of JOSE routes, and applied `//openapi:meta` types. Used
+// so a type that is referenced is not skipped (which would leave the reference
+// pointing at nothing). A response's
 // Resolution is walked for $ref leaves exactly as a field's is; a request's own
 // name still is not marked (unless JOSE), but the $ref targets of its Fields
 // are (addRequestFieldRefs).
@@ -1370,6 +1385,12 @@ func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeI
 			out[schemaName(r.Request)] = true
 		}
 		addRequestFieldRefs(out, r.Request)
+		// An applied `//openapi:meta` type is $ref'd from its route's envelope
+		// meta, so it is emitted even with no property ({type: object}); its
+		// nested refs are its registry entry's, marked by addFieldSchemaRefs.
+		if r.Meta != nil {
+			out[schemaName(r.Meta)] = true
+		}
 	}
 	addFieldSchemaRefs(out, types)
 	return out
@@ -1519,6 +1540,7 @@ func routeTypeRegistry(project *models.Project) map[string]*models.TypeInfo {
 			route := &project.Modules[mi].Routes[ri]
 			add(route.Request)
 			add(bodyPayload(route.Response))
+			add(route.Meta)
 		}
 	}
 	return types

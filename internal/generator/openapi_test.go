@@ -2964,7 +2964,7 @@ func TestResponsePayloadSchemaWellKnownSlice(t *testing.T) {
 	}
 
 	// The envelope must not annotate it as the untyped fallback either.
-	data := successEnvelopeSchema(&models.TypeInfo{Shape: payloadSlice(prim(goTypeByte))}).Properties[propNameData]
+	data := successEnvelopeSchema(&models.TypeInfo{Shape: payloadSlice(prim(goTypeByte))}, nil).Properties[propNameData]
 	assert.Equal(t, typeString, data.Type)
 	assert.Empty(t, data.Description)
 }
@@ -3075,7 +3075,7 @@ func TestSuccessEnvelopeSchemaSliceData(t *testing.T) {
 	env := successEnvelopeSchema(&models.TypeInfo{
 		Name:  "Item",
 		Shape: payloadSlice(named("Item")),
-	})
+	}, nil)
 	data := env.Properties[propNameData]
 	require.NotNil(t, data)
 	assert.Equal(t, typeArray, data.Type)
@@ -3084,7 +3084,7 @@ func TestSuccessEnvelopeSchemaSliceData(t *testing.T) {
 	assert.Empty(t, data.Description, "a typed array is not the untyped 'Response data' fallback")
 
 	// The untyped fallback keeps its annotation.
-	assert.Equal(t, responseDataDescription, successEnvelopeSchema(nil).Properties[propNameData].Description)
+	assert.Equal(t, responseDataDescription, successEnvelopeSchema(nil, nil).Properties[propNameData].Description)
 }
 
 func TestBuildResponsesSliceEnvelope(t *testing.T) {
