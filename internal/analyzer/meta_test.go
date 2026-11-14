@@ -562,3 +562,33 @@ func TestMetaDirectiveCrossModuleLoserRegistersNothing(t *testing.T) {
 	assert.NotContains(t, a.typeRegistry, "LoserMeta")
 	assert.NotContains(t, a.typeRegistry, "Nest")
 }
+
+// TestMetaDirectiveInterfaceCopiesDisagree verifies a meta type whose
+// build-tagged copies (or a name on its chain) disagree on an in-module
+// interface's marshal methods (issue 179) is refused at the directive: no
+// single declaration can be selected, so it registers no component, and
+// the route keeps the framework meta with one located warning rather than
+// losing the directive silently.
+func TestMetaDirectiveInterfaceCopiesDisagree(t *testing.T) {
+	for _, typ := range []string{"BT", "DBT"} {
+		t.Run(typ, func(t *testing.T) {
+			head := resolveModuleHead + "\ntype Item struct {\n\tID int64 `json:\"id\"`\n}\n\ntype DBT BT\n\n" +
+				"func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {\n" +
+				"\t//openapi:meta " + typ + "\n" +
+				"\tserver.GET(hr, r, \"/items\", m.items)\n}\n\n" +
+				"func (m *Module) items(ctx server.HandlerContext) (server.ResultWithMeta[[]Item], server.IAPIError) { panic(0) }\n"
+			a := analyzeDirectiveProject(t, map[string]string{
+				"go.mod": resolveGoMod,
+				filepath.Join("mod", "bt_linux.go"): "//go:build linux\n\npackage mod\n\n" +
+					"type BT interface{ MarshalJSON() ([]byte, error) }\n",
+				filepath.Join("mod", "bt_other.go"): "//go:build !linux\n\npackage mod\n\n" +
+					"type BT struct {\n\tX int `json:\"x\"`\n}\n",
+				filepath.Join("mod", "module.go"): head,
+			})
+			want := fileLoc(t, filepath.Join("mod", "module.go"), head, "//openapi:meta") + fmt.Sprintf(metaUnresolvedMsg, typ)
+			assert.Equal(t, []string{want}, a.Warnings(t.Context()))
+			assert.NotContains(t, a.typeRegistry, typ)
+			assert.NotContains(t, a.typeRegistry, "BT")
+		})
+	}
+}

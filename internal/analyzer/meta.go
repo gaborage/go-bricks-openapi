@@ -211,8 +211,16 @@ func (a *ProjectAnalyzer) resolveMetaLine(l metaLine) (metaTarget, bool) {
 		a.warnDirectivef(l.pos, metaGenericDeclMsg, l.arg)
 		return metaTarget{}, false
 	}
-	if _, _, isMarshaler := a.marshalerNamed(ti, file, path); isMarshaler {
+	_, fb, isMarshaler := a.marshalerNamed(ti, file, path)
+	if isMarshaler {
 		a.warnDirectivef(l.pos, metaMarshalerMsg, l.arg)
+		return metaTarget{}, false
+	}
+	if fb.kind == fallbackDeclsDisagree && fb.detail == declsInterfaceCause {
+		// Its build-tagged copies (or a name on its chain) disagree on an
+		// interface's marshal methods (issue 179): no one declaration is the
+		// type, and registerPayloadType registers none.
+		a.warnDirectivef(l.pos, metaUnresolvedMsg, l.arg)
 		return metaTarget{}, false
 	}
 	return metaTarget{line: l, ti: ti, site: site, file: file, path: path, key: a.metaKey(ti, site, file, path)}, true
