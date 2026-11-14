@@ -146,6 +146,10 @@ type ProjectAnalyzer struct {
 	methodSetMemo    map[string]methodSet               // "home\x00typeKey\x00keep" -> a method set no cut shortened (methodSetOf)
 	methodSetCuts    int                                // cycle cuts methodSetOf has hit: a change marks a path-dependent set
 	methodSetWalks   int                                // method sets methodSetOf computed rather than recalled
+	curEnv           typeEnv                            // the bindings the fields being built resolve under: the Instantiation whose struct is extracted (extractUnder)
+	instances        map[string]*instance               // provisional ShapeRef name -> struct Instantiation it refers to (structInstantiation)
+	baseAssign       map[string]string                  // "dir\x00Generic" -> the name its Instantiations' component names start with (genericBaseName)
+	baseUsed         map[string]bool                    // generic base names already taken
 }
 
 // New creates a new project analyzer
@@ -173,6 +177,9 @@ func New(projectRoot string) *ProjectAnalyzer {
 		fieldWarnings:  make(map[string]int),
 		fieldSites:     make(map[*models.TypeShape]fieldSite),
 		literalCycles:  make(map[string]string),
+		instances:      make(map[string]*instance),
+		baseAssign:     make(map[string]string),
+		baseUsed:       make(map[string]bool),
 	}
 }
 
@@ -2570,6 +2577,11 @@ func (a *ProjectAnalyzer) payloadTypeInfo(expr ast.Expr, packageName string, ser
 	if joseLiteralPayload(expr) {
 		return nil
 	}
+	if s := a.typeShape(expr); firstInstantiation(&s) != "" {
+		// Holding an Instantiation (Page[A], []Page[A], *Pair[K, V]), it is
+		// carried nameless and resolved like a field of its type (issue 114).
+		return &models.TypeInfo{Package: packageName, Shape: &s}
+	}
 	switch e := expr.(type) {
 	case *ast.ArrayType:
 		return a.slicePayloadTypeInfo(e, packageName, serverAliases)
@@ -2631,8 +2643,8 @@ func isCompositePointee(x ast.Expr) bool {
 // compositePayloadTypeInfo carries a composite payload (a map, a nested slice,
 // an anonymous struct, a pointer to a container) nameless with its Shape, so
 // populateTypeFields can resolve it like a field of its type. A literal
-// unmodelled leaf (map[string]func(), a generic instantiation) returns nil,
-// keeping the pre-existing nil response (#114).
+// unmodelled leaf (map[string]func(), a generic instantiation that reaches
+// here) returns nil, keeping the pre-existing nil response.
 func (a *ProjectAnalyzer) compositePayloadTypeInfo(expr ast.Expr, packageName string) *models.TypeInfo {
 	shape := a.typeShape(expr)
 	if hasUnknownLeaf(&shape) {
@@ -2642,8 +2654,8 @@ func (a *ProjectAnalyzer) compositePayloadTypeInfo(expr ast.Expr, packageName st
 }
 
 // hasUnknownLeaf reports whether any emitted leaf of s is unmodelled
-// (ShapeUnknown, the zero Kind, or an Instantiation, which is not resolved:
-// #114). An anonymous struct is modelled: it is documented inline.
+// (ShapeUnknown, the zero Kind, or an Instantiation, resolved only through
+// the payload path's own early return). An anonymous struct is modelled: it is documented inline.
 func hasUnknownLeaf(s *models.TypeShape) bool {
 	found := false
 	walkResolvedLeaves(s, func(leaf *models.TypeShape) {
@@ -2866,8 +2878,8 @@ func (a *ProjectAnalyzer) handleSelectorExprType(t *ast.SelectorExpr, serverAlia
 // this tool does not document yet, and a parameter written with two or more
 // pointer levels (**T), screened
 // before typeInfoFromExpr so its pointers are never peeled to resolve **T as
-// T, and a generic instantiation (Box[A], *Box[A]), which is not resolved
-// (#114). Returns nil, "" and nil when the handler takes no request.
+// T, and a generic instantiation (Box[A], *Box[A]), which
+// populateInstantiationRequest resolves. Returns nil, "" and nil when the handler takes no request.
 func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName string, serverAliases map[string]struct{}) (request *models.TypeInfo, typeText string, typeExpr ast.Expr) {
 	if params == nil {
 		return nil, "", nil
@@ -2958,8 +2970,8 @@ func isMultiPointer(expr ast.Expr) bool {
 // ResultWithMeta[T], or the bare result itself, which go-bricks sends exactly
 // as it sends server.Result[T]) takes the payload path (payloadTypeInfo) and
 // is documented, warned about and classified alike. A payload holding a
-// generic instantiation (Page[A], []Page[A], a bare Pair[K, V]) resolves to
-// nil there (#114). That routing lives here rather than in typeInfoFromExpr,
+// generic instantiation (Page[A], []Page[A], a bare Pair[K, V]) is carried
+// nameless and resolved like a field of its type (issue 114). That routing lives here rather than in typeInfoFromExpr,
 // which request extraction shares: a request type must keep resolving as it
 // does today.
 //
@@ -3606,6 +3618,7 @@ func (a *ProjectAnalyzer) populateHandler(h *handlerAnalysis, astFile *ast.File,
 		return
 	}
 	a.populateTypeFields(h.response, h.responseType, astFile, filePath)
+	dropUnresolvedGenericPayload(h)
 	a.warnGenericPayload(h)
 }
 
@@ -3666,6 +3679,9 @@ func (a *ProjectAnalyzer) populateRequestType(h *handlerAnalysis, astFile *ast.F
 		}
 	}
 	if h.requestType == "" {
+		return
+	}
+	if a.populateInstantiationRequest(h, astFile, filePath) {
 		return
 	}
 	a.warnNonStructRequest(h, astFile, filePath)
@@ -3876,10 +3892,11 @@ func (a *ProjectAnalyzer) registerViaTypeSpecAt(name, pkg string, astFile *ast.F
 	if !found {
 		return nil
 	}
-	st, resolvedPkg, file, path, ok := a.resolveTypeSpecChain(astFile, filePath, name)
+	end, ok := a.followChain(astFile, filePath, name, 0, false)
 	if !ok {
 		return nil
 	}
+	resolvedPkg, path := end.pkg, end.path
 	if resolvedPkg == "" {
 		resolvedPkg = pkg
 	}
@@ -3895,7 +3912,7 @@ func (a *ProjectAnalyzer) registerViaTypeSpecAt(name, pkg string, astFile *ast.F
 		keyPkg, keyDir = resolvedPkg, filepath.Dir(path)
 	}
 	key := a.schemaKey(name, keyPkg, keyDir)
-	return a.registerStructKeyed(key, resolvedPkg, st, file, path, depth)
+	return a.registerStructKeyed(key, resolvedPkg, end.site(), depth)
 }
 
 // isSameNamedReExport reports whether spec is an alias of a qualified type of
@@ -3931,6 +3948,15 @@ type chainEnd struct {
 	pkg  string
 	file *ast.File
 	path string
+	// env binds the generic struct's type parameters when the chain reaches
+	// it through a defined type over one of its Instantiations (type
+	// AddrPage Page[Address]); nil otherwise.
+	env typeEnv
+}
+
+// site is the struct e reaches, with the bindings its fields resolve under.
+func (e chainEnd) site() structSite {
+	return structSite{st: e.st, pkg: e.pkg, file: e.file, path: e.path, env: e.env}
 }
 
 // followChain is resolveTypeSpecChain, returning the chainEnd it reaches.
@@ -4012,6 +4038,14 @@ func (a *ProjectAnalyzer) followSpecOnce(ts *ast.TypeSpec, file *ast.File, path 
 			return chainEnd{}, false
 		}
 		return a.followQualified(pkgIdent.Name+"."+rhs.Sel.Name, file, depth+1, deep)
+	case *ast.IndexExpr, *ast.IndexListExpr:
+		// type X G[A] is a struct of its own when G is a generic struct; an
+		// alias, type X = G[A], is that Instantiation, which reaches no
+		// struct here: it is resolved, and registered, as the Instantiation.
+		if ts.Assign.IsValid() {
+			return chainEnd{}, false
+		}
+		return a.followInstantiation(rhs, file, path)
 	default:
 		return chainEnd{}, false // slice/map/interface/func — not a struct shape
 	}
@@ -4100,35 +4134,24 @@ func structEndsCause(ends []chainEnd) (cause string, disagree bool) {
 // registerFieldRefAt (field-ref registration, Cycle A, incremented here), so
 // they share one budget.
 func (a *ProjectAnalyzer) registerStructAt(typeName, pkg string, structType *ast.StructType, astFile *ast.File, filePath string, depth int) *models.TypeInfo {
-	return a.registerStructKeyed(a.schemaKey(typeName, pkg, filepath.Dir(filePath)), pkg, structType, astFile, filePath, depth)
+	site := structSite{st: structType, pkg: pkg, file: astFile, path: filePath}
+	return a.registerStructKeyed(a.schemaKey(typeName, pkg, filepath.Dir(filePath)), pkg, site, depth)
 }
 
 // registerStructKeyed is registerStructAt under a component name the caller
 // already assigned: registerViaTypeSpecAt keys a named type over a struct by
 // the named type's own declaring site, not the struct's (a same-named alias
-// re-export, type User = d.User, takes the struct's key).
-func (a *ProjectAnalyzer) registerStructKeyed(key, pkg string, structType *ast.StructType, astFile *ast.File, filePath string, depth int) *models.TypeInfo {
+// re-export, type User = d.User, takes the struct's key). A defined type
+// over a generic struct's Instantiation (type AddrPage Page[Address])
+// extracts that struct's fields under the Instantiation's bindings (s.env).
+func (a *ProjectAnalyzer) registerStructKeyed(key, pkg string, s structSite, depth int) *models.TypeInfo {
 	if existing, ok := a.typeRegistry[key]; ok {
 		return existing
 	}
 
 	ti := &models.TypeInfo{Name: key, Package: pkg}
 	a.typeRegistry[key] = ti // register before recursing (cycle guard)
-	// Seed the embedded-promotion ancestor set with this struct so a
-	// self-embed (type Node struct{ *Node }, or *NA for type NA = Node) is
-	// not promoted into itself.
-	ti.Fields = a.extractStructFields(structType, astFile, filePath, map[string]struct{}{a.structIdentity(structType): {}}, depth)
-	ti.JOSE = hasJOSETag(structType)
-
-	// Warn only now that the field list is final: a promoted field shadowed
-	// by an outer one never reaches the document. Warnings precede ref
-	// registration, which shares the fieldWarned dedupe.
-	for i := range ti.Fields {
-		a.warnResolvedField(&ti.Fields[i])
-	}
-	for i := range ti.Fields {
-		a.registerFieldRefAt(&ti.Fields[i], astFile, filePath, depth+1)
-	}
+	a.fillStruct(ti, s.st, pkgFile{file: s.file, path: s.path}, s.env, depth)
 	return ti
 }
 
@@ -4724,7 +4747,7 @@ func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, astFil
 		// dominance rule or parameter deduplication drops never reaches the
 		// document, so an anonymous struct in its type is never extracted.
 		f := &ranked[i]
-		a.resolveField(&f.FieldInfo, f.decl.field, f.decl.file, f.decl.path, f.decl.depth)
+		a.resolveField(&f.FieldInfo, f.decl.field, f.decl.file, f.decl.path, f.decl.depth, f.decl.env)
 		fields[i] = f.FieldInfo
 	}
 	return fields
@@ -4860,7 +4883,7 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 		// depth+1 is the increment edge for the embedded-promotion cycle
 		// (Cycle B).
 		visited[id] = struct{}{}
-		fields = a.extractRankedFields(s.st, s.file, s.path, visited, depth+1)
+		fields = a.promotedFields(s, visited, depth+1)
 		delete(visited, id) // backtrack: keep visited scoped to the current chain
 		for i := range fields {
 			fields[i].depth++
@@ -4869,13 +4892,24 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 	case embedNonStruct:
 		return []rankedField{a.embedProperty(field, astFile, filePath, depth)}, false
 	case embedMarshaler:
-		return a.marshalerEmbedFields(field, astFile, filePath, depth, target, tags.paramType), false
+		return a.marshalerEmbedFields(field, astFile, filePath, depth, &target, tags.paramType), false
 	case embedGeneric, embedUnresolvable:
-		a.warnDroppedEmbed(field, target)
+		a.warnDroppedEmbed(field, &target)
 	default:
 		// embedOpaqueStruct: a struct with no exported field promotes nothing.
 	}
 	return nil, false
+}
+
+// promotedFields extracts the ranked fields of the struct an untagged embed
+// promotes, at depth, under its own bindings: an Instantiation's (a generic
+// struct embedded as Page[Address]), else none, so a type parameter of the
+// embedding generic struct never leaks into another declaration.
+func (a *ProjectAnalyzer) promotedFields(s structSite, visited map[string]struct{}, depth int) []rankedField {
+	outer := a.curEnv
+	a.curEnv = s.env
+	defer func() { a.curEnv = outer }()
+	return a.extractRankedFields(s.st, s.file, s.path, visited, depth)
 }
 
 // marshalerEmbedFields is a well-known Marshaler embed's fields (target is
@@ -4889,7 +4923,7 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 // type (wellKnownMarshalerEmbed): uuid.UUID, net.IP, json.RawMessage and
 // json.Number as one property keyed by the type name, time.Time and the
 // netip structs as nothing.
-func (a *ProjectAnalyzer) marshalerEmbedFields(field *ast.Field, astFile *ast.File, filePath string, depth int, target embedTarget, paramType string) []rankedField {
+func (a *ProjectAnalyzer) marshalerEmbedFields(field *ast.Field, astFile *ast.File, filePath string, depth int, target *embedTarget, paramType string) []rankedField {
 	param := paramType != "" && token.IsExported(embeddedFieldName(field.Type))
 	if !param && (a.quietEmbeds || wellKnownMarshalerEmbed(target.stop, true).class != embedNonStruct) {
 		return nil
@@ -4918,7 +4952,7 @@ func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field, astFile 
 		fieldInfo.PointerAlias = a.aliasesPointer(field.Type, astFile, filePath, 0)
 	}
 
-	return rankedField{FieldInfo: fieldInfo, decl: fieldDecl{field: field, file: astFile, path: filePath, depth: depth}}
+	return rankedField{FieldInfo: fieldInfo, decl: fieldDecl{field: field, file: astFile, path: filePath, depth: depth, env: a.curEnv}}
 }
 
 // aliasesPointer reports whether expr, a type written in file (at path), names

@@ -224,11 +224,13 @@ func (a *ProjectAnalyzer) visitMarshalerMethods(file *ast.File, name string, vis
 }
 
 // marshalerCandidate returns decl and the signature it must have when decl is
-// a method of name (receiver name or *name) named like one of the seven
-// methods, else nil.
+// a method of name (receiver name or *name, or, for a generic type, name[P]
+// or *name[P]: issue 114) named like one of the seven methods, else nil.
+// Generic receivers are matched here only, never in isMethodOnStruct, which
+// module and handler discovery share.
 func (a *ProjectAnalyzer) marshalerCandidate(decl ast.Decl, name string) (*ast.FuncDecl, methodSignature) {
 	fd, ok := decl.(*ast.FuncDecl)
-	if !ok || !a.isMethodOnStruct(fd.Recv, name) {
+	if !ok || !a.isMethodOnStruct(fd.Recv, name) && genericRecvName(fd.Recv) != name {
 		return nil, methodSignature{}
 	}
 	sig, known := marshalerSignatures[fd.Name.Name]
@@ -541,7 +543,8 @@ func (ms methodSet) ownedBy(owner, ownerKey string) {
 // rhsMethodSet returns the method set a declaration's right-hand side
 // contributes, parentheses shed: what a struct literal promotes, what an
 // interface literal declares (whatever keep), or the set of the named type
-// it names (keep false for a defined type's target).
+// it names (keep false for a defined type's target), an Instantiation's
+// being its generic type's (issue 114: type RA = rawOf[int]).
 func (a *ProjectAnalyzer) rhsMethodSet(rhs ast.Expr, c resolveCtx, keep bool, open []string) methodSet {
 	switch t := ast.Unparen(rhs).(type) {
 	case *ast.StructType:
@@ -552,6 +555,8 @@ func (a *ProjectAnalyzer) rhsMethodSet(rhs ast.Expr, c resolveCtx, keep bool, op
 		return a.methodSetOf(t.Name, c, keep, open)
 	case *ast.SelectorExpr:
 		return a.qualifiedMethodSet(a.typeShape(t).Name, c, keep, open)
+	case *ast.IndexExpr, *ast.IndexListExpr:
+		return a.rhsMethodSet(unwrapGenericType(t), c, keep, open)
 	default:
 		return methodSet{}
 	}
@@ -700,7 +705,13 @@ func (a *ProjectAnalyzer) embedMethodSet(f *ast.Field, c resolveCtx, open []stri
 	if s.Kind == models.ShapePointer && s.Elem != nil {
 		s, ptr = *s.Elem, true
 	}
-	em := embedMethods{via: s.Name, ptr: ptr}
+	via := s.Name
+	if s.Kind == models.ShapeInstantiation && s.Inst != nil {
+		// A generic embed promotes the methods declared on its generic
+		// receiver and on what its declaration names (issue 114).
+		via, s = s.Inst.Written, models.TypeShape{Kind: models.ShapeNamed, Name: s.Inst.Base}
+	}
+	em := embedMethods{via: via, ptr: ptr}
 	switch {
 	case s.Kind != models.ShapeNamed:
 		em.set = methodSet{}

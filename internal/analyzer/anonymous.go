@@ -109,7 +109,9 @@ func (a *ProjectAnalyzer) extractLiteral(lit *ast.StructType, key string, c reso
 	a.openLiterals = append(a.openLiterals, key)
 	a.literalExtracts++
 	defer a.closeLiteral()
-	fields := a.extractStructFields(lit, c.file, c.path, map[string]struct{}{}, depth)
+	fields := a.extractUnder(c.env, func() []models.FieldInfo {
+		return a.extractStructFields(lit, c.file, c.path, map[string]struct{}{}, depth)
+	})
 	if fields == nil {
 		return []models.FieldInfo{}
 	}

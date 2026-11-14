@@ -8,9 +8,9 @@
 // request vanished, and the Page[Address] and anonymous struct payloads
 // resolved to nothing, so every route fell back to the default 200 with no
 // inferred error response. Now each documents 201 (server.Created) and 404
-// (server.NewNotFoundError). The request still gets no requestBody and a
-// Page[Address] payload's data stays an untyped object: substituting the type
-// arguments is issue 114's. The anonymous struct payload is documented inline
+// (server.NewNotFoundError). Since issue 114 the Box[Address] request is the
+// Box-Address requestBody and a Page[Address] payload's data is the
+// Page-Address component. The anonymous struct payload is documented inline
 // (issue 118). Goldens do not capture warnings; the analyzer tests carry that
 // proof.
 package genericstatus

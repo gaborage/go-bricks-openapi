@@ -325,9 +325,10 @@ func TestEmbeddedJSONNumberIsMarshaler(t *testing.T) {
 // go-bricks binds no unexported field. An unexported struct, by pointer,
 // alias or defined type too (hidden, ba, bd), a defined type over time.Time
 // (lt, LT, ltOf[int]), whose fields are all unexported, a type of unknown
-// kind (page[int], ns), and an exported alias of an unexported non-struct
-// (CU) nest under the name, as encoding/json writes them, with only their
-// fields' own warnings.
+// kind (ns), a generic struct's instantiation (page[int], its component since
+// issue 114), and an exported alias of an unexported non-struct (CU) nest
+// under the name, as encoding/json writes them, with only their fields' own
+// warnings.
 func TestEmbeddedJSONNameSkipsUnexportedNonStruct(t *testing.T) {
 	rows := []embedRow{
 		{"JCents", "cents `json:\"c\"`", nil},
@@ -352,8 +353,8 @@ func TestEmbeddedJSONNameSkipsUnexportedNonStruct(t *testing.T) {
 		{"JBd", "bd `json:\"h\"`", map[string]string{"h": "$bd"}},
 		{"JLtLower", "lt `json:\"t\"`", map[string]string{"t": "lt"}},
 		{"JLT", "LT `json:\"t\"`", map[string]string{"t": "LT"}},
-		{"JLtOf", "ltOf[int] `json:\"t\"`", map[string]string{"t": "inst:ltOf[int]"}},
-		{"JPage", "page[int] `json:\"p\"`", map[string]string{"p": "inst:page[int]"}},
+		{"JLtOf", "ltOf[int] `json:\"t\"`", map[string]string{"t": "ltOf[int]"}},
+		{"JPage", "page[int] `json:\"p\"`", map[string]string{"p": "$page-int"}},
 		{"JNs", "ns `json:\"n\"`", map[string]string{"n": "sql.NullString"}},
 	}
 	a := analyzeEmbedRows(t, rows)
@@ -366,8 +367,8 @@ func TestEmbeddedJSONNameSkipsUnexportedNonStruct(t *testing.T) {
 	}
 	assert.Empty(t, embedWarnings(a))
 	warnings := a.Warnings(t.Context())
-	assert.Len(t, warnings, 5, "only the nested fields' own warnings: %v", warnings)
-	for _, name := range []string{"lt", "LT", "ltOf", "page", "ns"} {
+	assert.Len(t, warnings, 4, "only the nested fields' own warnings: %v", warnings)
+	for _, name := range []string{"lt", "LT", "ltOf", "ns"} {
 		assert.Len(t, fieldWarnings(a, name), 1, "field %s: %v", name, warnings)
 	}
 }
@@ -404,11 +405,40 @@ func TestEmbeddedDefinedOverWellKnown(t *testing.T) {
 	assert.Len(t, matching(a.warnings, "is a defined type over uuid.UUID"), 4, "the two properties warn as the two fields do: %v", a.warnings)
 }
 
+// TestEmbeddedGenericStructPromotes pins issue 114's embed rows: an
+// untagged instantiation of a generic struct, by value or pointer, through a
+// defined type over it (AddrPage), exported or not, or through a generic
+// type declared over another instantiation (pageA) or over a named struct
+// (baseOf, parenBase), promotes its substituted fields, with no warning.
+func TestEmbeddedGenericStructPromotes(t *testing.T) {
+	items := map[string]string{"items": "[]$Address"}
+	id := map[string]string{"id": goTypeInt}
+	rows := []embedRow{
+		{"EPage", "Page[Address]", items},
+		{"EPtrPage", "*Page[Address]", items},
+		{"EAddrPage", "AddrPage", items},
+		{"EPageLower", "page[Address]", items},
+		{"EPageALower", "pageA[Address]", items},
+		{"EBaseOfLower", "baseOf[int]", id},
+		{"EParenBaseLower", "parenBase[int]", id},
+	}
+	a := analyzeEmbedRows(t, rows)
+	for _, r := range rows {
+		want := map[string]string{"y": goTypeInt}
+		for k, v := range r.want {
+			want[k] = v
+		}
+		assert.Equal(t, want, renders(t, a.typeRegistry[r.typ]), r.typ)
+	}
+	assert.Empty(t, a.Warnings(t.Context()))
+}
+
 // TestEmbeddedUnexpandableWarns pins issue 116's warned rows: an embed this
 // tool cannot classify as struct or non-struct (a type from outside the
 // module, a local chain ending at one, an undeclared name) or a generic
-// instantiation is dropped with one warning, which feeds --strict, whatever
-// the case of its name: encoding/json promotes an unexported struct embed.
+// instantiation it cannot read is dropped with one warning, which feeds
+// --strict, whatever the case of its name: encoding/json promotes an
+// unexported struct embed.
 func TestEmbeddedUnexpandableWarns(t *testing.T) {
 	rows := []embedRow{
 		{"ENullString", "sql.NullString", nil},
@@ -421,15 +451,8 @@ func TestEmbeddedUnexpandableWarns(t *testing.T) {
 		{"EDecimal", "decimal.Decimal", nil},
 		{"EMissing", "Missing", nil},
 		{"EQMissing", "b.Missing", nil},
-		{"EPage", "Page[Address]", nil},
-		{"EPtrPage", "*Page[Address]", nil},
-		{"EAddrPage", "AddrPage", nil},
-		{"EPageLower", "page[Address]", nil},
-		{"EPageALower", "pageA[Address]", nil},
 		{"EGoneLower", "gone[int]", nil},
-		{"EBaseOfLower", "baseOf[int]", nil},
 		{"ENsOfLower", "nsOf[int]", nil},
-		{"EParenBaseLower", "parenBase[int]", nil},
 		{"EDangling", "b.Dangling", nil},
 		{"EShared1", "Shared", map[string]string{"s": goTypeInt}},
 		{"EShared2", "Shared", map[string]string{"s": goTypeInt}},
@@ -446,15 +469,8 @@ func TestEmbeddedUnexpandableWarns(t *testing.T) {
 		"has type decimal.Decimal: decimal.Decimal cannot be read",
 		"has type Missing: Missing cannot be read",
 		"has type b.Missing: b.Missing cannot be read",
-		"has type Page[Address]: Page[Address] is a generic instantiation, which is not expanded",
-		"has type *Page[Address]: Page[Address] is a generic instantiation",
-		"has type AddrPage: Page[Address] is a generic instantiation",
-		"has type page[Address]: page[Address] is a generic instantiation",
-		"has type pageA[Address]: pageA[Address] is a generic instantiation", // a defined type over a struct: not read
-		"has type gone[int]: gone[int] is a generic instantiation",
-		"has type baseOf[int]: baseOf[int] is a generic instantiation", // a named struct: encoding/json promotes its fields
+		"has type gone[int]: gone[int] is a generic instantiation, which is not expanded as an embed",
 		"has type nsOf[int]: nsOf[int] is a generic instantiation",
-		"has type parenBase[int]: parenBase[int] is a generic instantiation",
 		"has type b.Dangling: b.Gone cannot be read", // named in its own package
 		"has type sql.NullInt64:",                    // Shared's embed, reached twice, warns once
 	}

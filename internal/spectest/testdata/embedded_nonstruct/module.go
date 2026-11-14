@@ -3,7 +3,8 @@
 // writes it; alias and defined types over a struct promote its fields; an
 // unexported embed, a predeclared type and a well-known Marshaler one add
 // nothing, but a defined type over json.RawMessage is a property; an unreadable
-// type and a generic instantiation of a struct add nothing and warn, while an
+// type adds nothing and warns, a generic instantiation of a struct promotes its
+// fields with the type arguments substituted (issue 114), while an
 // unexported instantiation of a generic non-struct type, through an alias or
 // defined type or not, adds nothing silently. A json name nests an
 // unexported struct embed, but not an unexported non-struct one.
@@ -65,7 +66,8 @@ type BD b.Base
 // NS is an alias of a type from outside the module: it cannot be read.
 type NS = sql.NullString
 
-// Page is a generic struct: an embedded instantiation is not expanded.
+// Page is a generic struct: an embedded instantiation promotes items, typed
+// by the type argument.
 type Page[T any] struct {
 	Items []T `json:"items"`
 }
@@ -74,7 +76,7 @@ type Page[T any] struct {
 // in-module qualified alias and defined type over instantiations of generic
 // non-struct types: encoding/json skips them, json name or not, as it skips
 // a direct list[int]. LL and b.List[int] are exported: each is one property,
-// untyped until generic instantiations are expanded.
+// an array of the type argument.
 type list[T any] []T
 
 type ll = list[int]
@@ -136,8 +138,9 @@ type PromotedB struct {
 }
 
 // Dropped embeds what adds no property: an unexported type, a predeclared
-// one, an unreadable type and a generic instantiation. (A well-known Marshaler embed would make
-// Dropped itself a Marshaler type; StampedReq has one.)
+// one and an unreadable type; and Page[Base], which promotes items, typed by
+// its type argument. (A well-known Marshaler embed would make Dropped itself
+// a Marshaler type; StampedReq has one.)
 type Dropped struct {
 	cents
 	error

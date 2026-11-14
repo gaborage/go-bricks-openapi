@@ -291,9 +291,9 @@ const (
 	// ShapeInstantiation is a generic type written with its type arguments
 	// (G[A], G[A, B], q.G[A]): CONTEXT.md, "Instantiation". Inst carries the
 	// generic type and the arguments; Name stays empty, so no consumer that
-	// reads a leaf's Name ever sees the bare generic type G. It is not
-	// resolved (#114): every consumer treats it as unmodelled, and it emits
-	// an untyped object.
+	// reads a leaf's Name ever sees the bare generic type G. The analyzer's
+	// resolver substitutes the arguments into G's declaration; one whose
+	// declaration it cannot read stays unmodelled and emits an untyped object.
 	ShapeInstantiation ShapeKind = "instantiation"
 
 	// Resolution-only kinds. The analyzer's resolver writes them into a

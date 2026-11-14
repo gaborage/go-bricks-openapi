@@ -347,14 +347,31 @@ nested Go module, is not.
   carries `value`, and `details` is sent in any development environment even
   with `app.debug` off. The `ErrorResponse` schema follows v0.61.0+, so it
   documents neither.
-- A generic type instantiation (`Page[Address]`, `pg.List[string]`, or a
-  named type declared as one, `type AddrPage Page[Address]`) is not resolved
-  until #114 substitutes its type arguments. A field or a path, query or
-  header parameter holding one at any depth (`[]Box[int]`,
-  `map[string]Box[int]`) is documented as an untyped object and reported as a
-  warning (so `--strict` fails on it). That includes a generic text marshaler
-  (`TBox[int]`), whose wire form is a string, and a recursive generic type
-  (`type Tree[T any] map[string]Tree[T]`).
+- A generic type instantiation (`Page[Address]`, `pg.List[string]`) is
+  resolved by substituting its type arguments into the generic declaration
+  (ADR 0003). A struct one is its own component, named by the generic type
+  and each argument joined by `-` (`Page-Address`, `Pair-string-int`,
+  `Box-ptr-Address`, `Box-slice-Address`, `Box-map-string-int`, `Box-any`,
+  `Box-time.Time`). An argument with no component of its own is spelled
+  `package.Name` from its package clause, never the import alias; a second
+  package's generic type is package-qualified (`BillingPage-Address`); every
+  spelling of one Go type shares one component (`Box[t.Time]`,
+  `Box[billing.Timestamp]` for `type Timestamp = time.Time`); and a name
+  collision falls back to the usual package prefix. An instantiation with an
+  anonymous-struct argument, and a non-struct one (`List[int]` for
+  `type List[T any] []T`), are inlined; one whose generic type has its own
+  marshal method (`TBox[int]`) is a Marshaler type. A named type declared as
+  one (`type AddrPage Page[Address]`) is its own component; an alias of one
+  is the instantiation. A defined type drops the methods, so
+  `type DM MJ[int]` over a generic marshaler is documented by its underlying
+  type. An instantiation whose type arguments hold a func or chan
+  (`Box[chan int]`) gets no component: it is an untyped object with the
+  func or chan warning. An instantiation of a generic type from outside the
+  module (`mo.Option[Address]`) or with no declaration, in a field or a path,
+  query or header parameter at any depth (`[]Box[int]`), is documented as an
+  untyped object and reported as a warning (so `--strict` fails on it). A
+  recursive generic type (`type Tree[T any] map[string]Tree[T]`) is cut like
+  a recursive named type, with a warning.
 - A Marshaler type (one with a `MarshalJSON`, `MarshalJSONTo`, `MarshalText`,
   `AppendText`, `UnmarshalJSON`, `UnmarshalJSONFrom` or `UnmarshalText` method
   with the exact `encoding/json` signature, on the type or its pointer, or on a
@@ -487,23 +504,26 @@ nested Go module, is not.
   unsigned integer; the two net types are base64 `[]byte`). An embed of a type from
   outside the module other than those and the well-known Marshaler types
   above (`sql.NullString`, `sync.Mutex`, `fmt.Stringer`), of a name with no
-  declaration, or of a generic instantiation that may be a struct
-  (`Page[Address]`, until #114) is dropped with a warning, so `--strict`
+  declaration, or of a generic instantiation of such a type
+  (`mo.Option[Address]`) is dropped with a warning, so `--strict`
   fails, although `encoding/json` would promote such a struct's fields
-  (`sql.NullString`'s `String` and `Valid`). An unexported embed of an
+  (`sql.NullString`'s `String` and `Valid`). An embedded instantiation of an
+  in-module generic struct (`Page[Address]`) promotes its fields, the type
+  arguments substituted. An unexported embed of an
   instantiation of a local or in-module generic type declared as a
   non-struct type (`list[int]` for `type list[T any] []T`, directly or
   through an alias or defined type such as `type ll = list[int]`,
   `type lsd list[int]` or `type ol = b.List[int]`) is skipped silently,
   json name or not, as `encoding/json` skips it; an exported one
-  (`type LL = list[int]`, `b.List[int]`) is one untyped-object property
-  with the unresolved-generic warning, until #114. An instantiation of a
-  generic alias of a pointer (`type ptr[T any] = *Base`), of a
-  well-known Marshaler type reached through aliases only
-  (`type raw[T any] = json.RawMessage`), or of a generic type declaring a
-  marshal method (`MarshalJSON` on `hidden[T]`) is dropped with a warning
-  whatever its name: the promoted method makes the embedding struct a
-  Marshaler. Exclude the embed with `json:"-"` to silence the warning. Two
+  (`type LL = list[int]`, `b.List[int]`) is one property, typed by
+  substitution. An instantiation of a
+  generic alias of a pointer (`type ptr[T any] = *Base`) is dropped with a
+  warning whatever its name. One of a well-known Marshaler type reached
+  through aliases only (`type raw[T any] = json.RawMessage`), or of a
+  generic type declaring a marshal method (`MarshalJSON` on `hidden[T]`),
+  promotes that method whatever its name, so the embedding struct is a
+  Marshaler type, with a warning, as with a non-generic alias. Exclude the
+  embed with `json:"-"` to silence the warning. Two
   fields of one key at the shallowest depth that key reaches, both tagged
   or both untagged (properties included), which `encoding/json` both
   drops, keep the first.
@@ -600,8 +620,10 @@ nested Go module, is not.
   the untyped fallback. Generic payloads
   (`server.Result[Page[User]]`,
   `server.Result[[]Page[User]]`, a bare `Pair[string, int]`, or a named type
-  declared as one, `type UserPage Page[User]`) stay untyped (#114), but
-  each raises one warning, so `--strict` fails on it. A handler with a
+  declared as one, `type UserPage Page[User]`) are typed by substitution,
+  like a field of their type; one whose generic type cannot be read (outside
+  the module, undeclared) stays untyped and raises one warning, so
+  `--strict` fails on it. A handler with a
   generic request parameter (`Box[User]`), whatever its payload, or a
   request-less handler whose payload holds a generic
   instantiation, is now recognised as the route's handler, so its success
@@ -623,11 +645,13 @@ nested Go module, is not.
   (its known gap F26, gaborage/go-bricks#1811) — so there is no body contract
   to document. A generic request whose generic type is a non-struct
   (`List[Address]` with `type List[T any] []T`) is one of these. A generic
-  request over a struct (`Box[Address]`, `type AddrPage Page[Address]`, with
-  or without a `MarshalJSON`-style method of its own), or one whose generic
-  type cannot be located (outside the module, undeclared), also gets no
-  `requestBody` and counts as untyped, but with an
-  unresolved-generic warning instead (#114). A named pointer type over one
+  request over an in-module struct (`Box[Address]`,
+  `type AddrPage Page[Address]`) is documented like a named struct request:
+  typed parameters and a `requestBody` `$ref` to its component (none when it
+  holds only parameters). One whose generic type has a `MarshalJSON`-style
+  method of its own is a Marshaler request. One whose generic type cannot be
+  located (outside the module, undeclared) gets no `requestBody`, counts as
+  untyped, and raises the unresolved-generic warning. A named pointer type over one
   (`type PP *Page[Address]`) gets the not-a-struct warning, like any named
   pointer type (`type PA *Address`). A request type that is an anonymous
   struct with fields (`struct{…}`, `*struct{…}`) is documented as a named

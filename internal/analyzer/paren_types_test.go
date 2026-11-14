@@ -95,17 +95,22 @@ func TestParenNonStructRequestWarnsOnce(t *testing.T) {
 }
 
 // TestParenGenericRequestWarns pins that a generic request written in
-// parentheses, around or under its pointer, raises the generic request
-// warning of Box[CreateReq], not F26.
+// parentheses, around or under its pointer, resolves as its unparenthesized
+// form: Box[CreateReq]'s component (issue 114), with no warning, while one
+// the tool cannot read raises the generic request warning, not F26.
 func TestParenGenericRequestWarns(t *testing.T) {
 	for _, typ := range []string{"*(Box[CreateReq])", "(*Box[CreateReq])", "(Box[CreateReq])"} {
 		t.Run(typ, func(t *testing.T) {
 			route, warnings := analyzeParen(t, "req "+typ+", ctx server.HandlerContext", "server.Result[Named]")
-			want := "request type " + typ + ": Box[CreateReq] is a generic type instantiation, which is not resolved — no requestBody emitted"
-			assert.Equal(t, []string{want}, warnings)
-			assert.Nil(t, route.Request)
+			assert.Empty(t, warnings)
+			require.NotNil(t, route.Request)
+			assert.Equal(t, "Box-CreateReq", route.Request.Name)
 		})
 	}
+	route, warnings := analyzeParen(t, "req *(Gone[CreateReq]), ctx server.HandlerContext", "server.Result[Named]")
+	assert.Equal(t, []string{"request type *(Gone[CreateReq]): Gone[CreateReq] is a generic type instantiation, " +
+		"which is not resolved — no requestBody emitted"}, warnings)
+	assert.Nil(t, route.Request)
 }
 
 // TestParenPayloads pins that a payload written in parentheses, in the
@@ -151,15 +156,25 @@ func TestParenNoContentResult(t *testing.T) {
 }
 
 // TestParenGenericPayloadWarns pins that a parenthesized generic payload
-// raises the generic payload warning of its unparenthesized form, naming the
-// type as written, and that a pointer to a result wrapper, parenthesized
-// around or under the pointer, is unwrapped like its value form (issue 143):
-// typed, with no warning.
+// resolves as its unparenthesized form (issue 114: a ref to Box[Named]'s
+// component), that one the tool cannot read raises the generic payload
+// warning naming the type as written, and that a pointer to a result
+// wrapper, parenthesized around or under the pointer, is unwrapped like its
+// value form (issue 143): typed, with no warning.
 func TestParenGenericPayloadWarns(t *testing.T) {
 	for _, typ := range []string{"(Box[Named])", "Box[Named]"} {
 		t.Run(typ, func(t *testing.T) {
 			route, warnings := analyzeParen(t, "ctx server.HandlerContext", "server.Result["+typ+"]")
-			want := "response type " + typ + ": Box[Named] is a generic type instantiation, which is not resolved — emitting an untyped schema"
+			assert.Empty(t, warnings)
+			require.NotNil(t, route.Response)
+			require.NotNil(t, route.Response.Resolution)
+			assert.Equal(t, "$Box-Named", renderShape(*route.Response.Resolution))
+		})
+	}
+	for _, typ := range []string{"(Gone[Named])", "Gone[Named]"} {
+		t.Run(typ, func(t *testing.T) {
+			route, warnings := analyzeParen(t, "ctx server.HandlerContext", "server.Result["+typ+"]")
+			want := "response type " + typ + ": Gone[Named] is a generic type instantiation, which is not resolved — emitting an untyped schema"
 			assert.Equal(t, []string{want}, warnings)
 			assert.Nil(t, route.Response)
 		})

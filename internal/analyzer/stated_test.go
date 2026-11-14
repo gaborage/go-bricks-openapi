@@ -329,11 +329,14 @@ func TestSchemaDirectiveOnGenericType(t *testing.T) {
 		"directive schema has no effect — JBox is a generic type, whose wire form usually depends on its type arguments")
 	assert.Contains(t, warnings, statedLoc(t, body, "//openapi:schema string\ntype KBox")+
 		"directive schema has no effect — KBox is a generic type, whose wire form usually depends on its type arguments")
-	// KBox[int] is documented exactly as without the directive: no Stated schema.
+	// KBox[int] is documented exactly as without the directive. Issue 114
+	// detects its generic-receiver MarshalJSON, so it is a Marshaler leaf,
+	// {} with the Marshaler warning, and still carries no Stated schema.
 	k := fieldByJSON(t, a.typeRegistry["Holder"], "k").Resolution
 	require.NotNil(t, k)
-	assert.Equal(t, models.ShapeInstantiation, k.Kind)
+	assert.Equal(t, models.ShapeMarshaler, k.Kind)
 	assert.Nil(t, k.Stated, "%v", warnings)
+	assert.Len(t, matching(warnings, "has type KBox[int]: KBox has its own MarshalJSON method"), 1, "%v", warnings)
 }
 
 // TestSchemaDirectiveRepeatedLines pins the duplicate rule within one group:

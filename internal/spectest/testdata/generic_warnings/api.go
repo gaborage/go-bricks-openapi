@@ -1,15 +1,12 @@
-// Package genericwarnings pins issue 138: an unresolved generic type
-// instantiation (G[A], G[A, B], q.G[A]) in a field, a path/query/header
-// parameter, a request or a payload raises one warning, so --strict fails,
-// while the emitted spec is unchanged. Substituting the type arguments is
-// issue 114's.
+// Package genericwarnings pins issue 138's generic type instantiations (G[A],
+// G[A, B], q.G[A]) in fields, path/query/header parameters, requests and
+// payloads, as issue 114 resolves them: an in-module instantiation is
+// substituted (a struct one becomes its own component, a non-struct one is
+// inlined), while one the analyzer cannot read (out of module, undeclared)
+// still raises one warning, so --strict fails, and stays an untyped object.
 //
 // Goldens do not capture warnings: the analyzer tests carry that proof. This
-// golden locks the output half. It was generated before the analyzer learned
-// about instantiations and must stay byte-identical: every generic field and
-// parameter is still an untyped object (or an array or map of them), no
-// generic request gets a requestBody, every generic payload's data is still
-// an untyped object, and no component is emitted for Page, Box, Pair or List.
+// golden locks the output half.
 // Every handler returns server.NewResult(http.StatusOK, ...) or a bare value
 // and calls no error constructor, so recognising a generic-only handler
 // (issue 138's status change, pinned by generic_status) moves nothing here.

@@ -310,9 +310,12 @@ func TestUnbindableParamOneWarning(t *testing.T) {
 		{"Stamped", "Stamp", queryTag("stamped"), reasonStruct},
 		{"Ptrs", "[]uintptr", pathTag("ptrs"), reasonPathSlice},
 		{"Decs", "[]decimal.Decimal", pathTag("decs"), reasonPathSlice},
+		// Issue 114: an Instantiation is substituted, so the binding rule
+		// applies to the struct Box[int] is.
+		{"Boxed", "Box[int]", queryTag("boxed"), reasonStruct},
 	}
 	extra := "\tDec decimal.Decimal `query:\"dec\"`\n\tQDecs []decimal.Decimal `query:\"qDecs\"`\n" +
-		"\tPDec *decimal.Decimal `query:\"pDec\"`\n\tBoxed Box[int] `query:\"boxed\"`\n"
+		"\tPDec *decimal.Decimal `query:\"pDec\"`\n\tGoneP Gone[int] `query:\"gone\"`\n"
 	ws := analyzeBindRows(t, rows, extra)
 	for _, r := range rows {
 		got := warningsAbout(ws, r.field)
@@ -324,7 +327,7 @@ func TestUnbindableParamOneWarning(t *testing.T) {
 		"Dec":   "decimal.Decimal resolves to no schema",
 		"QDecs": "decimal.Decimal resolves to no schema",
 		"PDec":  "decimal.Decimal resolves to no schema",
-		"Boxed": "Box[int] is a generic type instantiation",
+		"GoneP": "Gone[int] is a generic type instantiation",
 	} {
 		got := warningsAbout(ws, field)
 		if assert.Len(t, got, 1, field) {

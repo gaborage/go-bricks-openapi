@@ -265,18 +265,37 @@ type structSite struct {
 	pkg  string
 	file *ast.File
 	path string
+	env  typeEnv // the bindings its fields resolve under: a generic struct reached through a defined type over its Instantiation
+}
+
+// extractFields extracts the fields of the struct at s, at depth, under its
+// bindings, its own declaration seeding the embed ancestor set.
+func (a *ProjectAnalyzer) extractFields(s structSite, depth int) []models.FieldInfo {
+	return a.extractUnder(s.env, func() []models.FieldInfo {
+		return a.extractStructFields(s.st, s.file, s.path, map[string]struct{}{a.structIdentity(s.st): {}}, depth)
+	})
 }
 
 // payloadStructSite finds the struct a request TypeInfo names, as
 // registerPayloadType would: a local chain, or a struct of another package
-// of the module.
+// of the module, its own struct literal or the struct its chain reaches in
+// its package (a defined type over an Instantiation, type MPage
+// Page[Addr], included: issue 114).
 func (a *ProjectAnalyzer) payloadStructSite(ti *models.TypeInfo, astFile *ast.File, filePath string) (structSite, bool) {
 	if ti.Package != "" && ti.Package != astFile.Name.Name {
-		q, ok := a.resolveQualifiedStruct(ti.Package+"."+ti.Name, astFile)
-		return structSite{st: q.st, pkg: q.pkg, file: q.file, path: q.filePath}, ok
+		qualified := ti.Package + "." + ti.Name
+		if q, ok := a.resolveQualifiedStruct(qualified, astFile); ok {
+			return structSite{st: q.st, pkg: q.pkg, file: q.file, path: q.filePath}, true
+		}
+		site, name, ok := a.inModuleTypeSite(qualified, astFile)
+		if !ok {
+			return structSite{}, false
+		}
+		end, ok := a.followChain(site.file, site.path, name, 0, false)
+		return end.site(), ok
 	}
-	st, pkg, file, path, ok := a.resolveTypeSpecChain(astFile, filePath, ti.Name)
-	return structSite{st: st, pkg: pkg, file: file, path: path}, ok
+	end, ok := a.followChain(astFile, filePath, ti.Name, 0, false)
+	return end.site(), ok
 }
 
 // populateMarshalerRequest documents a request whose type is a struct
@@ -314,7 +333,7 @@ func (a *ProjectAnalyzer) populateMarshalerRequest(h *handlerAnalysis, astFile *
 // body field's named type is not: encoding/json never reads those fields.
 func (a *ProjectAnalyzer) requestParamFields(s structSite) ([]models.FieldInfo, bool) {
 	a.quietEmbeds = true
-	fields := a.extractStructFields(s.st, s.file, s.path, map[string]struct{}{a.structIdentity(s.st): {}}, 0)
+	fields := a.extractFields(s, 0)
 	a.quietEmbeds = false
 	total := len(fields)
 	params := paramFields(fields)

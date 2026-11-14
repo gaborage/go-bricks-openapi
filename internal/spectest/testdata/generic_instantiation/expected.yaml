@@ -1,0 +1,520 @@
+openapi: 3.0.1
+info:
+  title: Genericinstantiation API
+  version: 1.0.0
+  description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
+paths:
+  /boxes:
+    post:
+      operationId: genericinstantiationBox
+      summary: POST /boxes
+      tags:
+        - generic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Box-Address'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Pair-string-User'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /defined:
+    get:
+      operationId: genericinstantiationDefined
+      summary: GET /defined
+      tags:
+        - generic
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Defined'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /queries/{id}:
+    get:
+      operationId: genericinstantiationQuery
+      summary: GET /queries/{id}
+      tags:
+        - generic
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: tags
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+        - name: X-Opt
+          in: header
+          required: false
+          schema:
+            type: array
+            items:
+              type: integer
+              format: int64
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Page-User'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /rows:
+    get:
+      operationId: genericinstantiationRows
+      summary: GET /rows
+      tags:
+        - generic
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Rows'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    AddrPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
+        total:
+          type: integer
+          format: int64
+    Address:
+      type: object
+      properties:
+        city:
+          type: string
+    BillingPage-Address:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
+    Box-Address:
+      type: object
+      properties:
+        v:
+          $ref: '#/components/schemas/Address'
+    Box-any:
+      type: object
+      properties:
+        v: {}
+    Box-array-int:
+      type: object
+      properties:
+        v:
+          type: array
+          items:
+            type: integer
+            format: int64
+    Box-billing.Cents:
+      type: object
+      properties:
+        v:
+          type: integer
+          format: int64
+    Box-billing.Money:
+      type: object
+      properties:
+        v: {}
+    Box-decimal.Decimal:
+      type: object
+      properties:
+        v:
+          type: object
+    Box-map-string-int:
+      type: object
+      properties:
+        v:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+    Box-models.ID:
+      type: object
+      properties:
+        v:
+          type: string
+    Box-ptr-Address:
+      type: object
+      properties:
+        v:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/Address'
+          nullable: true
+    Box-slice-Address:
+      type: object
+      properties:
+        v:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
+    Box-time.Time:
+      type: object
+      properties:
+        v:
+          type: string
+          format: date-time
+    Box-uuid.UUID:
+      type: object
+      properties:
+        v:
+          type: string
+          format: uuid
+    Defined:
+      type: object
+      properties:
+        bc:
+          type: object
+        bf:
+          type: object
+        dm:
+          type: array
+          items:
+            type: integer
+            format: int64
+        ed:
+          $ref: '#/components/schemas/EmbedDM'
+        gd:
+          $ref: '#/components/schemas/JBox-int'
+        gm:
+          type: array
+          items:
+            type: integer
+            format: int64
+        mj:
+          type: string
+    EmbedDM:
+      type: object
+      properties:
+        DM:
+          type: array
+          items:
+            type: integer
+            format: int64
+        k:
+          type: integer
+          format: int64
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code (e.g. BAD_REQUEST, NOT_FOUND, INTERNAL_ERROR, or a custom business code)
+            details:
+              type: object
+              properties:
+                validationErrors:
+                  type: array
+                  description: Per-field validation failures (400 validation errors)
+                  items:
+                    type: object
+                    properties:
+                      field:
+                        type: string
+                        description: Field that failed validation
+                      message:
+                        type: string
+                        description: Violated validation rule
+                  maxItems: 100
+              description: Contextual error payload, sent only when app.debug is enabled in a development environment
+            message:
+              type: string
+              description: Human-readable error message
+          description: Error details
+        meta:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+              description: RFC3339 response timestamp
+            traceId:
+              type: string
+              description: W3C trace identifier for the request
+      required:
+        - error
+    GenericinstantiationBox-models.ID:
+      type: object
+      properties:
+        v:
+          type: integer
+          format: int64
+    JBox-int:
+      type: object
+      properties:
+        v:
+          type: integer
+          format: int64
+    Node-int:
+      type: object
+      properties:
+        next:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/Node-int'
+          nullable: true
+        val:
+          type: integer
+          format: int64
+    Page-Address:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
+        total:
+          type: integer
+          format: int64
+    Page-Box-Address:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Box-Address'
+        total:
+          type: integer
+          format: int64
+    Page-User:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        total:
+          type: integer
+          format: int64
+    Pair-string-User:
+      type: object
+      properties:
+        key:
+          type: string
+        val:
+          $ref: '#/components/schemas/User'
+    Pair-string-int:
+      type: object
+      properties:
+        key:
+          type: string
+        val:
+          type: integer
+          format: int64
+    Rows:
+      type: object
+      properties:
+        ap:
+          $ref: '#/components/schemas/Page-Address'
+        b3:
+          $ref: '#/components/schemas/Box-array-int'
+        b5:
+          $ref: '#/components/schemas/Box-array-int'
+        ba:
+          $ref: '#/components/schemas/Box-any'
+        bc:
+          $ref: '#/components/schemas/Box-billing.Cents'
+        bd:
+          $ref: '#/components/schemas/Box-decimal.Decimal'
+        bi:
+          $ref: '#/components/schemas/Box-any'
+        bm:
+          $ref: '#/components/schemas/Box-map-string-int'
+        bmo:
+          $ref: '#/components/schemas/Box-billing.Money'
+        bp:
+          $ref: '#/components/schemas/Box-ptr-Address'
+        bpg:
+          $ref: '#/components/schemas/BillingPage-Address'
+        bs:
+          $ref: '#/components/schemas/Box-slice-Address'
+        bt:
+          $ref: '#/components/schemas/Box-time.Time'
+        bta:
+          $ref: '#/components/schemas/Box-time.Time'
+        bts:
+          $ref: '#/components/schemas/Box-time.Time'
+        bu:
+          $ref: '#/components/schemas/Box-uuid.UUID'
+        bx:
+          type: object
+          properties:
+            v:
+              type: object
+              properties:
+                X:
+                  type: integer
+                  format: int64
+        dp:
+          $ref: '#/components/schemas/AddrPage'
+        ida:
+          $ref: '#/components/schemas/Box-models.ID'
+        idb:
+          $ref: '#/components/schemas/GenericinstantiationBox-models.ID'
+        l:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
+        ls:
+          type: array
+          items:
+            type: string
+        ml:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        "n":
+          $ref: '#/components/schemas/Node-int'
+        p1:
+          $ref: '#/components/schemas/Page-Address'
+        p2:
+          $ref: '#/components/schemas/Page-Address'
+        pb:
+          $ref: '#/components/schemas/Page-Box-Address'
+        pr:
+          $ref: '#/components/schemas/Pair-string-int'
+        pu:
+          $ref: '#/components/schemas/Page-User'
+    User:
+      type: object
+      properties:
+        name:
+          type: string
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+      description: Tenant identifier. Enforced only when the service runs with multitenancy enabled and a header-based tenant resolver; a missing or invalid tenant yields HTTP 400. Deployments resolving the tenant from the subdomain or URL path do not read this header.
+security:
+  - TenantID: []

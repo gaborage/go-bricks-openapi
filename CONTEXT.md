@@ -13,7 +13,7 @@ The registry outcome for a declared type — of a field or of a payload — at a
 _Avoid_: lookup, ref info
 
 **Instantiation**:
-A generic type written with its type arguments (`Page[Address]`, `pg.List[string]`), whose Resolution substitutes those arguments into the generic declaration. Its Shape keeps the generic type and the arguments' Shapes as written, and never reads as the bare generic type. Until that substitution lands (#114), an Instantiation is not resolved: it is documented as an untyped object, wherever it is written, and raises a warning.
+A generic type written with its type arguments (`Page[Address]`, `pg.List[string]`), whose Resolution substitutes those arguments into the generic declaration. Its Shape keeps the generic type and the arguments' Shapes as written, and never reads as the bare generic type. A struct Instantiation is its own component, shared by every spelling of one Go type and named as ADR 0003 sets; a non-struct one is inlined. An Instantiation whose generic declaration cannot be read (outside the module, undeclared) is not resolved: it is documented as an untyped object, wherever it is written, and raises a warning.
 _Avoid_: generic type (that names the declaration), specialization
 
 **Marshaler type**:

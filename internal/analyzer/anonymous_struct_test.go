@@ -421,13 +421,18 @@ func TestAnonymousStructDominatedCycle(t *testing.T) {
 }
 
 // TestAnonymousStructInnerGenericField pins that an Instantiation inside an
-// anonymous struct warns on the inner field, not on the field holding it.
+// anonymous struct resolves as in any field (issue 114), a ref to its
+// component, and that one the tool cannot read warns on the inner field, not
+// on the field holding it.
 func TestAnonymousStructInnerGenericField(t *testing.T) {
-	src := rowsModule("", "type Box[T any] struct{ V T }\n", "\tW struct{ P Box[int] `json:\"p\"` } `json:\"w\"`\n")
+	src := rowsModule("", "type Box[T any] struct{ V T }\n",
+		"\tW struct{ P Box[int] `json:\"p\"`; G Gone[int] `json:\"g\"` } `json:\"w\"`\n")
 	a, _ := analyzeSingleModule(t, src)
 	assert.Equal(t, []string{
-		fmt.Sprintf(genericFieldWarning, "P", anonLoc(t, src, "P Box[int]"), "Box[int]", "Box[int]"),
+		fmt.Sprintf(genericFieldWarning, "G", anonLoc(t, src, "G Gone[int]"), "Gone[int]", "Gone[int]"),
 	}, a.Warnings(t.Context()))
+	assert.Equal(t, map[string]string{"w": "struct{p $Box-int; g inst:Gone[int]}"}, renders(t, a.typeRegistry["Rows"]))
+	assert.Contains(t, a.typeRegistry, "Box-int")
 }
 
 // payloadOverLiteralModule is a module whose routes return and take named
