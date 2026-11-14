@@ -290,8 +290,10 @@ nested Go module, is not.
   and only when the named error result is never assigned anything but the
   literal `nil` outside function literals. A write to a local map counts
   when one such return can run after both the write and the assignment
-  giving the map to the returned result, and one of those two can run after
-  the other (in either order), or when such a return gives a literal
+  giving the map to the returned result, and the two are one statement or
+  one of them can run after the other (in either order) — a write and an
+  assignment that connect only across loop iterations are not followed, so
+  that header is not documented — or when such a return gives a literal
   holding the map; a map that is ever reassigned after its
   declaration (`h = …`) contributes nothing. They are documented on the
   success response as optional string headers, under their canonical names,

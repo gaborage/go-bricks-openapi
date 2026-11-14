@@ -75,6 +75,24 @@ func TestExtractResponseHeadersInitAndHolderPaths(t *testing.T) {
 	}
 	h.Set("X-Map", "1")
 	return server.Result[Resp]{}, nil`, nil},
+		{"map_link_and_write_in_one_assignment", `h := http.Header{}
+	res := server.Result[Resp]{}
+	h["Location"], res.Headers = []string{"/x"}, h
+	return res, nil`, []string{"Location"}},
+		// Known limitation, pinned so a change is deliberate: a link and a
+		// map write that connect only across loop iterations (the link in one
+		// iteration's arm, the write in a later iteration's other arm) are
+		// not followed, so the header is not documented.
+		{"map_link_and_write_across_loop_iterations_not_followed", `h := http.Header{}
+	res := server.Result[Resp]{}
+	for i := range 2 {
+		if i == 0 {
+			res.Headers = h
+		} else {
+			h.Set("X-Map", "1")
+		}
+	}
+	return res, nil`, nil},
 		{"map_link_and_write_in_exclusive_arms", `h := http.Header{}
 	res := server.Result[Resp]{}
 	if req.ID == "" {

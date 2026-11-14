@@ -427,10 +427,12 @@ func (c *headerCollector) mapReaches(w *headerWrite, holders map[*ast.ReturnStmt
 	return false
 }
 
-// onePath reports whether b can run after a, or a after b
-// (followingStmts).
+// onePath reports whether a and b are one statement, or b can run after a,
+// or a after b (followingStmts). Statements that connect only across loop
+// iterations are not followed, so such a pair is not on one path.
 func (c *headerCollector) onePath(a, b ast.Node) bool {
-	return follows(c.body, a, b) || follows(c.body, b, a)
+	// One statement doing both (h["K"], res.Headers = v, h) is one path.
+	return a == b || follows(c.body, a, b) || follows(c.body, b, a)
 }
 
 // follows reports whether later lies in a statement that can run after n.
