@@ -562,7 +562,8 @@ func (ms methodSet) union(method string, exact bool) {
 // interfaceEmbedSet returns the method set of an interface's embedded
 // element t: a local or in-module qualified name's, keep false (an
 // interface's methods survive it, and nothing else is embedded in an
-// interface a field can have). A union or approximation element
+// interface a field can have), or an embedded interface literal's own
+// (interfaceMethods). A union or approximation element
 // (constraint-only) contributes nothing.
 func (a *ProjectAnalyzer) interfaceEmbedSet(t ast.Expr, c resolveCtx, open []string) methodSet {
 	switch e := ast.Unparen(t).(type) {
@@ -570,6 +571,10 @@ func (a *ProjectAnalyzer) interfaceEmbedSet(t ast.Expr, c resolveCtx, open []str
 		return a.methodSetOf(e.Name, c, false, open)
 	case *ast.SelectorExpr:
 		return a.qualifiedMethodSet(a.typeShape(e).Name, c, false, open)
+	case *ast.InterfaceType:
+		// An embedded interface literal (interface{ interface{ M() } }) is
+		// read in place, its methods at the embedding interface's depth.
+		return a.interfaceMethods(e, c, open)
 	default:
 		return methodSet{}
 	}

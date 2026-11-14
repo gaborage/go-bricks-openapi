@@ -3,6 +3,7 @@ package analyzer
 import (
 	"fmt"
 	"go/ast"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -67,6 +68,16 @@ type QT domain.TM
 type Iface interface{ MarshalJSON() ([]byte, error) }
 
 type TMOnly interface{ MarshalText() ([]byte, error) }
+
+type LitEmb interface {
+	interface{ MarshalJSON() ([]byte, error) }
+	Name() string
+}
+
+type NLit struct {
+	LitEmb
+	L int ` + "`json:\"l\"`" + `
+}
 
 type NJM struct {
 	JM
@@ -151,6 +162,8 @@ func TestInterfaceMethodSet(t *testing.T) {
 		own("Lit", "Lit", methodUnmarshalJSON),
 		own("Odd", "Odd", methodMarshalText),
 		own("TMOnly", "TMOnly", methodMarshalText),
+		own("LitEmb", "LitEmb", methodMarshalJSON),
+		promoted("NLit", methodMarshalJSON, "LitEmb"),
 		{name: "BadJM"},
 		{name: "Ext"},
 		{name: "Constraint"},
@@ -383,9 +396,18 @@ func ifCopiesFiles(linux, other string) map[string]string {
 			"type BT2 interface{ Name() string }\n\n" +
 			"type BTSame interface {\n\tMarshalJSON() ([]byte, error)\n}\n\n" +
 			"type BTNone struct {\n\tX int `json:\"x\"`\n}\n",
-		filepath.Join("mod", "module.go"): rowsModule("", "type EmbBT2 struct {\n\tBT2\n\tE int `json:\"e\"`\n}\n",
-			"\tBT BT `json:\"bt\"`\n\tBT2 BT2 `json:\"bt2\"`\n\tBTSame BTSame `json:\"btSame\"`\n"+
-				"\tBTNone BTNone `json:\"btNone\"`\n\tEmb EmbBT2 `json:\"emb\"`\n\tPBT *BT `json:\"pbt\"`\n"),
+		filepath.Join("mod", "module.go"): resolveModuleHead +
+			"\ntype EmbBT2 struct {\n\tBT2\n\tE int `json:\"e\"`\n}\n\ntype ABT = BT\n\ntype DBT BT\n\n" +
+			"type Rows struct {\n\tBT BT `json:\"bt\"`\n\tBT2 BT2 `json:\"bt2\"`\n\tBTSame BTSame `json:\"btSame\"`\n" +
+			"\tBTNone BTNone `json:\"btNone\"`\n\tEmb EmbBT2 `json:\"emb\"`\n\tPBT *BT `json:\"pbt\"`\n" +
+			"\tABT ABT `json:\"abt\"`\n\tDBT DBT `json:\"dbt\"`\n}\n\n" +
+			"func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {\n" +
+			"\tserver.GET(hr, r, \"/rows\", m.rows)\n\tserver.GET(hr, r, \"/bt\", m.bt)\n" +
+			"\tserver.GET(hr, r, \"/abt\", m.abt)\n\tserver.GET(hr, r, \"/dbt\", m.dbt)\n}\n\n" +
+			"func (m *Module) rows(ctx server.HandlerContext) (server.Result[Rows], server.IAPIError) { panic(0) }\n\n" +
+			"func (m *Module) bt(ctx server.HandlerContext) (server.Result[BT], server.IAPIError) { panic(0) }\n\n" +
+			"func (m *Module) abt(ctx server.HandlerContext) (server.Result[ABT], server.IAPIError) { panic(0) }\n\n" +
+			"func (m *Module) dbt(ctx server.HandlerContext) (server.Result[DBT], server.IAPIError) { panic(0) }\n",
 	}
 }
 
@@ -398,8 +420,9 @@ func ifCopiesFiles(linux, other string) map[string]string {
 // which holds a marshal method (BTNone) resolve as before.
 func TestInterfaceCopiesFileOrderIndependent(t *testing.T) {
 	type result struct {
-		rows, emb map[string]string
-		warnings  []string
+		rows, emb  map[string]string
+		warnings   []string
+		registered []string
 	}
 	run := func(linux, other string) result {
 		a := analyzeDirectiveProject(t, ifCopiesFiles(linux, other))
@@ -408,7 +431,8 @@ func TestInterfaceCopiesFileOrderIndependent(t *testing.T) {
 			ws[i] = strings.NewReplacer(linux, "<linux>", other, "<other>").Replace(w)
 		}
 		slices.Sort(ws)
-		return result{rows: renders(t, a.typeRegistry["Rows"]), emb: renders(t, a.typeRegistry["EmbBT2"]), warnings: ws}
+		return result{rows: renders(t, a.typeRegistry["Rows"]), emb: renders(t, a.typeRegistry["EmbBT2"]), warnings: ws,
+			registered: slices.Sorted(maps.Keys(a.typeRegistry))}
 	}
 	first := run("bt_linux.go", "bt_other.go")
 	assert.Equal(t, first, run("z_linux.go", "a_other.go"), "file order must not decide the output")
@@ -419,12 +443,20 @@ func TestInterfaceCopiesFileOrderIndependent(t *testing.T) {
 	assert.Equal(t, "$BTNone", first.rows["btNone"])
 	assert.Equal(t, "$EmbBT2", first.rows["emb"])
 	assert.Equal(t, "BT2", first.emb["BT2"])
+	// An alias or defined type over BT reaches BT's struct copy, but follows
+	// BT's disagreement, which its warning names.
+	assert.Equal(t, "ABT", first.rows["abt"])
+	assert.Equal(t, "DBT", first.rows["dbt"])
 	// BT2 warns twice: as a Rows field and as EmbBT2's embedded field.
-	for field, n := range map[string]int{"BT": 1, "BT2": 2, "PBT": 1} {
+	for field, n := range map[string]int{"BT": 1, "BT2": 2, "PBT": 1, "ABT": 1, "DBT": 1} {
 		w := fieldWarnings(&ProjectAnalyzer{warnings: first.warnings}, field)
 		if assert.Len(t, w, n, field) {
 			assert.Contains(t, w[0], "build-tagged declarations disagree on shape ("+declsInterfaceCause, field)
 		}
 	}
-	assert.Len(t, first.warnings, 5, "and BTSame's Marshaler warning: %q", first.warnings)
+	for _, payload := range []string{"BT", "ABT", "DBT"} {
+		assert.Contains(t, first.warnings, fmt.Sprintf(declsDisagreePayloadWarning, payload, "BT", declsInterfaceCause), payload)
+	}
+	assert.Len(t, first.warnings, 10, "and BTSame's Marshaler warning: %q", first.warnings)
+	assert.Equal(t, []string{"BTNone", "EmbBT2", "Rows"}, first.registered, "no copy-disagreeing type registers")
 }

@@ -708,14 +708,51 @@ func (a *ProjectAnalyzer) specEndsAtInterface(ts *ast.TypeSpec, file *ast.File, 
 // (interfaceCopiesDisagree): one declaring an interface that holds one of
 // the seven methods beside one that is no interface or holds other ones.
 // Which applies depends on the build, so name is an untyped object, noted
-// as a disagreement, in either file order (#179). A parameter is bound by
-// kind and never reads the methods, so it resolves as before.
+// as a disagreement, in either file order (#179). So is a name whose chain
+// of aliases and defined types reaches such a name (type A = BT, type D BT),
+// the warning naming the one whose copies disagree: otherwise the chain
+// would accept BT's struct copy and A would get a component. A parameter is
+// bound by kind and never reads the methods, so it resolves as before.
 func (a *ProjectAnalyzer) interfaceCopiesFallback(name string, c resolveCtx) (models.TypeShape, bool) {
-	if c.st.param || !a.interfaceCopiesDisagree(name, c, nil) {
+	if c.st.param {
 		return models.TypeShape{}, false
 	}
-	c.st.note(fieldFallback{kind: fallbackDeclsDisagree, typeName: c.display(name), detail: declsInterfaceCause})
+	at, atCtx, disagree := a.chainCopiesDisagree(name, c, 0)
+	if !disagree {
+		return models.TypeShape{}, false
+	}
+	c.st.note(fieldFallback{kind: fallbackDeclsDisagree, typeName: atCtx.display(at), detail: declsInterfaceCause})
 	return models.TypeShape{Kind: models.ShapeNamed, Name: name}, true
+}
+
+// chainCopiesDisagree returns the first name on name's chain of local and
+// in-module qualified named types (name itself, then each declaration's
+// right-hand side, within the depth cap) whose build-tagged copies disagree
+// on an interface's marshal methods (interfaceCopiesDisagree), with the
+// context declaring it.
+func (a *ProjectAnalyzer) chainCopiesDisagree(name string, c resolveCtx, depth int) (string, resolveCtx, bool) {
+	if depth >= maxNamedResolutionDepth {
+		return "", c, false
+	}
+	if a.interfaceCopiesDisagree(name, c, nil) {
+		return name, c, true
+	}
+	ts, file, path, ok := a.resolveLocalTypeSpec(c.file, c.path, name)
+	if !ok {
+		return "", c, false
+	}
+	switch t := ast.Unparen(ts.Type).(type) {
+	case *ast.Ident:
+		return a.chainCopiesDisagree(t.Name, c.in(file, path), depth+1)
+	case *ast.SelectorExpr:
+		site, target, inModule := a.inModuleTypeSite(a.typeShape(t).Name, file)
+		if !inModule {
+			return "", c, false
+		}
+		return a.chainCopiesDisagree(target, c.in(site.file, site.path), depth+1)
+	default:
+		return "", c, false
+	}
 }
 
 // structMarshalerLeaf resolves name, a named type whose chain ends at a
