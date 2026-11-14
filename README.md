@@ -285,12 +285,14 @@ nested Go module, is not.
   the same `switch`/`select`, the other arm of an `if`/`else`, statements
   earlier in an enclosing loop and `goto` targets never count, so such a
   write is not documented; a write in an `if`/`switch`/`for` initializer is
-  followed by every arm. A bare `return` returns the first named result,
+  followed by every arm, and one in a `case` ending in `fallthrough` by the
+  clauses it falls into. A bare `return` returns the first named result,
   and only when the named error result is never assigned anything but the
   literal `nil` outside function literals. A write to a local map counts
   when one such return can run after both the write and the assignment
-  giving the map to the returned result (in either order), or returns a
-  literal holding the map; a map that is ever reassigned after its
+  giving the map to the returned result, and one of those two can run after
+  the other (in either order), or when such a return gives a literal
+  holding the map; a map that is ever reassigned after its
   declaration (`h = …`) contributes nothing. They are documented on the
   success response as optional string headers, under their canonical names,
   with `Content-Type` and names that are not valid header tokens dropped.

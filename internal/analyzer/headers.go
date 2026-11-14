@@ -244,9 +244,8 @@ func followingStmts(body *ast.BlockStmt, n ast.Node) []ast.Stmt {
 		}
 		list := stmtList(node)
 		for i, stmt := range list {
-			if stmt.Pos() <= n.Pos() && n.End() <= stmt.End() {
-				_, ends := list[len(list)-1].(*ast.ReturnStmt)
-				levels = append(levels, followLevel{tail: list[i+1:], terminal: ends})
+			if within(stmt, n) {
+				levels = append(levels, listLevel(list, i))
 			}
 		}
 		return true
@@ -259,6 +258,40 @@ func followingStmts(body *ast.BlockStmt, n ast.Node) []ast.Stmt {
 		}
 	}
 	return out
+}
+
+// listLevel is the level of followingStmts' climb at a statement list whose
+// i-th statement holds n: the statements after it, terminal when the list
+// ends in a return. When that statement is a switch clause whose body ends
+// in fallthrough, the level is instead the body of the next clause, and of
+// each further one the chain falls through to, terminal when the last of
+// them ends in a return; no other clause ever follows.
+func listLevel(list []ast.Stmt, i int) followLevel {
+	var tail []ast.Stmt
+	last := list[len(list)-1]
+	for j := i; j+1 < len(list) && endsInFallthrough(list[j]); j++ {
+		next := list[j+1].(*ast.CaseClause)
+		tail = append(tail, next.Body...)
+		last = lastStmt(next.Body)
+	}
+	if tail == nil {
+		tail = list[i+1:]
+	}
+	_, ends := last.(*ast.ReturnStmt)
+	return followLevel{tail: tail, terminal: ends}
+}
+
+// lastStmt returns the last statement of list, or nil when it is empty.
+func lastStmt(list []ast.Stmt) ast.Stmt {
+	if len(list) == 0 {
+		return nil
+	}
+	return list[len(list)-1]
+}
+
+// within reports whether node lies inside outer.
+func within(outer, node ast.Node) bool {
+	return outer.Pos() <= node.Pos() && node.End() <= outer.End()
 }
 
 // followLevel is one level of followingStmts' climb: the statements that
@@ -337,7 +370,7 @@ func (c *headerCollector) inClosure(n ast.Node) bool {
 func (c *headerCollector) names() []string {
 	out := nameSet{}
 	maps.Copy(out, c.returned)
-	holders := map[*ast.ReturnStmt]map[varDeclKey]struct{}{}
+	holders := map[*ast.ReturnStmt]map[varDeclKey][]ast.Node{}
 	for _, w := range c.writes {
 		if !w.toMap {
 			c.keepFieldWrite(w, out, holders)
@@ -356,33 +389,54 @@ func (c *headerCollector) names() []string {
 
 // keepFieldWrite keeps a write to <decl>.Headers when a serving return of
 // decl can follow it, and records the maps the write gives the field as held
-// by each such return's result.
-func (c *headerCollector) keepFieldWrite(w *headerWrite, out nameSet, holders map[*ast.ReturnStmt]map[varDeclKey]struct{}) {
+// by each such return's result, with the node that gives it.
+func (c *headerCollector) keepFieldWrite(w *headerWrite, out nameSet, holders map[*ast.ReturnStmt]map[varDeclKey][]ast.Node) {
 	for _, ret := range c.servingAfter(w.node) {
 		if s := c.served[ret]; !s.hasKey || s.key != w.key {
 			continue
 		}
 		maps.Copy(out, w.names)
 		if holders[ret] == nil {
-			holders[ret] = map[varDeclKey]struct{}{}
+			holders[ret] = map[varDeclKey][]ast.Node{}
 		}
-		maps.Copy(holders[ret], w.links)
+		for m := range w.links {
+			holders[ret][m] = append(holders[ret][m], w.node)
+		}
 	}
 }
 
 // mapReaches reports whether a write to a local map can be followed by a
 // serving return whose result holds that map: a returned literal holding it,
-// or a variable a link the same return follows gave it to (holders), so the
-// link and the write lie on one path to that return, in either order. A map
-// that is ever reassigned holds nothing.
-func (c *headerCollector) mapReaches(w *headerWrite, holders map[*ast.ReturnStmt]map[varDeclKey]struct{}) bool {
+// or a variable a link the same return follows gave it to (holders), where
+// the link and the write lie on one path — one can run after the other — in
+// either order. A map that is ever reassigned holds nothing.
+func (c *headerCollector) mapReaches(w *headerWrite, holders map[*ast.ReturnStmt]map[varDeclKey][]ast.Node) bool {
 	if _, reassigned := c.reassigned[w.key]; reassigned {
 		return false
 	}
 	for _, ret := range c.servingAfter(w.node) {
-		_, literal := c.served[ret].links[w.key]
-		_, held := holders[ret][w.key]
-		if literal || held {
+		if _, literal := c.served[ret].links[w.key]; literal {
+			return true
+		}
+		for _, link := range holders[ret][w.key] {
+			if c.onePath(link, w.node) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// onePath reports whether b can run after a, or a after b
+// (followingStmts).
+func (c *headerCollector) onePath(a, b ast.Node) bool {
+	return follows(c.body, a, b) || follows(c.body, b, a)
+}
+
+// follows reports whether later lies in a statement that can run after n.
+func follows(body *ast.BlockStmt, n, later ast.Node) bool {
+	for _, stmt := range followingStmts(body, n) {
+		if within(stmt, later) {
 			return true
 		}
 	}

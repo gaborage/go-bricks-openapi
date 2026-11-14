@@ -68,6 +68,35 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.POST(hr, r, "/sibling-case", m.siblingCase)
 	server.POST(hr, r, "/init-write", m.initWrite)
 	server.POST(hr, r, "/map-split-paths", m.mapSplitPaths)
+	server.POST(hr, r, "/fallthrough", m.fallthroughCase)
+	server.POST(hr, r, "/map-exclusive-arms", m.mapExclusiveArms)
+}
+
+// fallthroughCase sets Location in a clause that falls through to one that
+// returns the result -> Location on 200.
+func (m *Module) fallthroughCase(req ItemReq, ctx server.HandlerContext) (server.Result[Item], server.IAPIError) {
+	res := server.Result[Item]{Data: Item{ID: req.Name}, Headers: http.Header{}}
+	switch req.Name {
+	case "a":
+		res.Headers.Set("Location", "/items/1")
+		fallthrough
+	case "b":
+		return res, nil
+	}
+	return res, server.NewNotFoundError("item")
+}
+
+// mapExclusiveArms gives h to the result in one arm and writes h in the
+// other, so the response never holds X-Map -> no headers key.
+func (m *Module) mapExclusiveArms(req ItemReq, ctx server.HandlerContext) (server.Result[Item], server.IAPIError) {
+	h := http.Header{}
+	res := server.Result[Item]{Data: Item{ID: req.Name}}
+	if req.Name == "" {
+		res.Headers = h
+	} else {
+		h.Set("X-Map", "1")
+	}
+	return res, nil
 }
 
 // initWrite sets Location in an if initializer, which runs before the arm

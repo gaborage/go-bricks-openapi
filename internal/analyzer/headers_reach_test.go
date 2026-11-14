@@ -67,6 +67,93 @@ func TestExtractResponseHeadersInitAndHolderPaths(t *testing.T) {
 		return res, nil
 	}
 	return res, server.NewNotFoundError("x")`, nil},
+		{"map_holder_return_precedes_write", `h := http.Header{}
+	res := server.Result[Resp]{}
+	res.Headers = h
+	if req.ID == "" {
+		return res, nil
+	}
+	h.Set("X-Map", "1")
+	return server.Result[Resp]{}, nil`, nil},
+		{"map_link_and_write_in_exclusive_arms", `h := http.Header{}
+	res := server.Result[Resp]{}
+	if req.ID == "" {
+		res.Headers = h
+	} else {
+		h.Set("X-Map", "1")
+	}
+	return res, nil`, nil},
+		{"map_link_and_write_in_exclusive_cases", `h := http.Header{}
+	res := server.Result[Resp]{}
+	switch req.ID {
+	case "a":
+		h.Set("X-Map", "1")
+	case "b":
+		res.Headers = h
+	}
+	return res, nil`, nil},
+		{"map_write_in_branch_after_link", `h := http.Header{}
+	res := server.Result[Resp]{}
+	res.Headers = h
+	if req.ID == "" {
+		h.Set("Location", "/x")
+	}
+	return res, nil`, []string{"Location"}},
+		{"map_link_in_branch_after_write", `h := http.Header{}
+	h.Set("Location", "/x")
+	res := server.Result[Resp]{}
+	if req.ID == "" {
+		res.Headers = h
+	}
+	return res, nil`, []string{"Location"}},
+		{"fallthrough_reaches_next_clause_return", `res := server.Result[Resp]{Headers: http.Header{}}
+	switch req.ID {
+	case "a":
+		res.Headers.Set("Location", "/x")
+		fallthrough
+	case "b":
+		return res, nil
+	}
+	return res, server.NewNotFoundError("x")`, []string{"Location"}},
+		{"fallthrough_chains", `res := server.Result[Resp]{Headers: http.Header{}}
+	switch req.ID {
+	case "a":
+		res.Headers.Set("Location", "/x")
+		fallthrough
+	case "b":
+		_ = req
+		fallthrough
+	case "c":
+		return res, nil
+	}
+	return res, server.NewNotFoundError("x")`, []string{"Location"}},
+		{"fallthrough_into_error_clause_stops", `res := server.Result[Resp]{Headers: http.Header{}}
+	switch req.ID {
+	case "a":
+		res.Headers.Set("Retry-After", "30")
+		fallthrough
+	case "b":
+		return res, server.NewNotFoundError("x")
+	case "c":
+		return res, nil
+	}
+	return res, nil`, nil},
+		{"fallthrough_into_empty_clause_leaves_switch", `res := server.Result[Resp]{Headers: http.Header{}}
+	switch req.ID {
+	case "a":
+		res.Headers.Set("Location", "/x")
+		fallthrough
+	case "b":
+	}
+	return res, nil`, []string{"Location"}},
+		{"no_fallthrough_keeps_clause_exclusion", `res := server.Result[Resp]{Headers: http.Header{}}
+	switch req.ID {
+	case "a":
+		res.Headers.Set("Retry-After", "30")
+	case "b":
+		return res, nil
+	}
+	return res, server.NewNotFoundError("x")`, nil},
 		{"map_link_and_write_on_different_paths", `h := http.Header{}
 	res := server.Result[Resp]{}
 	if req.ID == "" {
