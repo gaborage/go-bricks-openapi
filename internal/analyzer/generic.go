@@ -127,18 +127,17 @@ func typeSpecTarget(rhs ast.Expr) (name string, isStruct bool) {
 }
 
 // payloadInstantiation returns the Instantiation, as written, that a
-// handler's payload type (payloadExpr) holds on its element path, or "". A
-// pointer to a result wrapper (*server.Result[T]), which payloadExpr does not
-// unwrap, is go-bricks' own generic type, not one of the project's: it is
-// not reported, so its handler stays as it was before issue 138.
+// handler's payload type (payloadExpr) holds on its element path, or "".
+// payloadExpr sheds a single pointer to a result wrapper, so
+// *server.Result[Page[A]] reports Page[A]. Behind two or more pointers
+// (**server.Result[T]) the wrapper is not unwrapped and is reported itself:
+// go-bricks then encodes the Result struct under data, which stays untyped,
+// so the generic payload warning lets --strict catch it.
 func (a *ProjectAnalyzer) payloadInstantiation(results *ast.FieldList, serverAliases map[string]struct{}) string {
 	if results == nil || len(results.List) == 0 {
 		return ""
 	}
 	payload := a.payloadExpr(results.List[0].Type, serverAliases)
-	if star, ok := ast.Unparen(payload).(*ast.StarExpr); ok && a.isResultWrapper(unwrapGenericType(ast.Unparen(singlePointer(star).X)), serverAliases) {
-		return ""
-	}
 	s := a.typeShape(payload)
 	return firstInstantiation(&s)
 }

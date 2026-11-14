@@ -152,8 +152,9 @@ func TestParenNoContentResult(t *testing.T) {
 
 // TestParenGenericPayloadWarns pins that a parenthesized generic payload
 // raises the generic payload warning of its unparenthesized form, naming the
-// type as written, and that a parenthesized pointer to a result wrapper is
-// still not reported as one of the project's generic types.
+// type as written, and that a pointer to a result wrapper, parenthesized
+// around or under the pointer, is unwrapped like its value form (issue 143):
+// typed, with no warning.
 func TestParenGenericPayloadWarns(t *testing.T) {
 	for _, typ := range []string{"(Box[Named])", "Box[Named]"} {
 		t.Run(typ, func(t *testing.T) {
@@ -165,10 +166,10 @@ func TestParenGenericPayloadWarns(t *testing.T) {
 	}
 	for _, typ := range []string{"*server.Result[Named]", "*(server.Result[Named])", "(*server.Result[Named])"} {
 		t.Run(typ, func(t *testing.T) {
-			_, warnings := analyzeParen(t, "ctx server.HandlerContext", typ)
-			for _, w := range warnings {
-				assert.NotContains(t, w, "generic type instantiation")
-			}
+			route, warnings := analyzeParen(t, "ctx server.HandlerContext", typ)
+			assert.Empty(t, warnings)
+			require.NotNil(t, route.Response)
+			assert.Equal(t, "Named", route.Response.Name)
 		})
 	}
 }

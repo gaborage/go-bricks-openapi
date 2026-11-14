@@ -2783,8 +2783,10 @@ func (a *ProjectAnalyzer) handleIdentType(t *ast.Ident, packageName string) *mod
 
 // handleStarExprType processes pointer types (e.g., *TypeName or *pkg.TypeName).
 // It needs no serverAliases: the framework-type decision flows through
-// isFrameworkType (which takes pkg.Name), and a pointer is never a Result wrapper
-// or NoContentResult marker (those are value types handled elsewhere).
+// isFrameworkType (which takes pkg.Name). A single pointer to a Result wrapper
+// never reaches it as a payload, because payloadExpr sheds *server.Result[T]
+// to T; it has no index-expression case, so any other pointer to a generic
+// (**server.Result[T] included) resolves to nil.
 func (a *ProjectAnalyzer) handleStarExprType(t *ast.StarExpr, packageName string) *models.TypeInfo {
 	x := ast.Unparen(t.X) // *(T) is *T
 	// Handle simple pointer: *TypeName
@@ -2965,10 +2967,21 @@ func (a *ProjectAnalyzer) extractResponseType(
 }
 
 // payloadExpr returns the payload type of a handler's first result: the type
-// argument of a result wrapper (server.Result[T], ResultWithMeta[T]), the
-// wrapper parenthesized or not, else the result itself as written.
+// argument of a result wrapper (server.Result[T], ResultWithMeta[T]) or of a
+// single pointer to one (*server.Result[T]), parenthesized or not, else the
+// result itself as written.
+//
+// go-bricks serves *Result[T] exactly as Result[T]: the wrappers' provider
+// methods (ResultMeta, ResultEnvelope) have value receivers, so the pointer
+// satisfies the same interfaces its response writer type-asserts. Exactly one
+// written pointer is shed: **Result[T] has no methods, go-bricks encodes the
+// Result struct itself under data, and it stays the result as written.
 func (a *ProjectAnalyzer) payloadExpr(first ast.Expr, serverAliases map[string]struct{}) ast.Expr {
-	if idx, ok := ast.Unparen(first).(*ast.IndexExpr); ok && a.isResultWrapper(idx.X, serverAliases) {
+	wrapper := ast.Unparen(first)
+	if star, ok := wrapper.(*ast.StarExpr); ok {
+		wrapper = ast.Unparen(star.X) // *(server.Result[T]) is *server.Result[T]
+	}
+	if idx, ok := wrapper.(*ast.IndexExpr); ok && a.isResultWrapper(idx.X, serverAliases) {
 		return idx.Index
 	}
 	return first
@@ -3045,7 +3058,9 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 // bindings collected by collectResultBindings, so the common
 // `res := server.Accepted(x); res.Headers = ...; return res, nil` shape is
 // documented with its real status instead of the 200 default. A naked `return`
-// resolves the first named result through the same bindings.
+// resolves the first named result through the same bindings. A pointer
+// handler's `return &res, nil` and `return &server.Result[T]{...}, nil` resolve
+// as their value forms do (statusFromAddressOf).
 func (a *ProjectAnalyzer) extractSuccessStatus(funcDecl *ast.FuncDecl, serverAliases map[string]struct{}) int {
 	if funcDecl.Body == nil {
 		return 0
@@ -3104,8 +3119,47 @@ func (a *ProjectAnalyzer) statusFromReturn(
 		if returnsNilError(ret) {
 			return a.statusFromResultLiteral(res, serverAliases, shadows)
 		}
+	case *ast.UnaryExpr:
+		return a.statusFromAddressOf(ret, res, bindings, serverAliases, shadows)
 	}
 	return 0
+}
+
+// statusFromAddressOf resolves a returned &x, the success result of a handler
+// returning *server.Result[T]: &server.Result[T]{...} reads the literal under
+// the same nil-error gate as the value literal, and &res reads res's binding
+// with no gate, like a returned identifier. A res bound to an address
+// (res := &server.Result[T]{...}) makes &res a **server.Result[T], which
+// go-bricks serves through its default writer with the default status, so it
+// yields 0, as does any other operand.
+func (a *ProjectAnalyzer) statusFromAddressOf(
+	ret *ast.ReturnStmt,
+	u *ast.UnaryExpr,
+	bindings map[string]*resultBinding,
+	serverAliases map[string]struct{},
+	shadows shadowIndex,
+) int {
+	if u.Op != token.AND {
+		return 0
+	}
+	switch x := ast.Unparen(u.X).(type) {
+	case *ast.CompositeLit:
+		if returnsNilError(ret) {
+			return a.statusFromResultLiteral(x, serverAliases, shadows)
+		}
+	case *ast.Ident:
+		if b, ok := bindings[x.Name]; ok && b.pointer {
+			return 0
+		}
+		return boundStatus(bindings, x.Name)
+	}
+	return 0
+}
+
+// isAddressOf reports whether expr, parenthesized or not, takes an address.
+func isAddressOf(expr ast.Expr) bool {
+	u, ok := ast.Unparen(expr).(*ast.UnaryExpr)
+	return ok && u.Op == token.AND
 }
 
 // boundStatus returns the status of an unambiguous binding of name, or 0 when
@@ -3145,6 +3199,10 @@ func firstNamedResult(funcDecl *ast.FuncDecl) string {
 type resultBinding struct {
 	status    int
 	ambiguous bool
+	// pointer marks a binding to an address (res := &server.Result[T]{...}):
+	// &res is then a **server.Result[T], which has no provider methods, so
+	// go-bricks serves it with the default status, never the wrapper's.
+	pointer bool
 }
 
 // bindingCollector accumulates the identifier bindings of one handler body.
@@ -3258,7 +3316,10 @@ func (c *bindingCollector) bindResult(name string, rhs ast.Expr) {
 		existing.ambiguous = true
 		return
 	}
-	c.bindings[name] = &resultBinding{status: c.analyzer.statusFromBoundExpr(rhs, c.serverAliases, c.shadows)}
+	c.bindings[name] = &resultBinding{
+		status:  c.analyzer.statusFromBoundExpr(rhs, c.serverAliases, c.shadows),
+		pointer: isAddressOf(rhs),
+	}
 }
 
 // recordStatusWrite applies an unconditional `<ident>.Status = <expr>` write to
@@ -3356,13 +3417,18 @@ func varDeclNames(stmt *ast.DeclStmt) []string {
 
 // statusFromBoundExpr resolves the status implied by the expression an
 // identifier is bound to: a server constructor call, or a server.Result /
-// server.ResultWithMeta composite literal. Anything else yields 0.
+// server.ResultWithMeta composite literal, its address taken or not
+// (res := &server.Result[T]{...}). Anything else yields 0.
 func (a *ProjectAnalyzer) statusFromBoundExpr(expr ast.Expr, serverAliases map[string]struct{}, shadows shadowIndex) int {
 	switch e := expr.(type) {
 	case *ast.CallExpr:
 		return a.statusFromServerCall(e, serverAliases, shadows)
 	case *ast.CompositeLit:
 		return a.statusFromResultLiteral(e, serverAliases, shadows)
+	case *ast.UnaryExpr:
+		if lit, ok := ast.Unparen(e.X).(*ast.CompositeLit); ok && e.Op == token.AND {
+			return a.statusFromResultLiteral(lit, serverAliases, shadows)
+		}
 	}
 	return 0
 }

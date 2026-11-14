@@ -546,14 +546,19 @@ func TestGenericOnlyHandlersAreFound(t *testing.T) {
 	}
 }
 
-// TestPointerResultWrapperIsNoInstantiation pins that a pointer to a result
-// wrapper (*server.Result[T], *srv.ResultWithMeta[T]), which payloadExpr does
-// not unwrap, is not taken for an unresolved instantiation of the project's:
-// a request-less handler returning one raises no generic payload warning and
-// stays unfound, so its route keeps no inferred error statuses, as before
-// issue 138.
-func TestPointerResultWrapperIsNoInstantiation(t *testing.T) {
-	for _, result := range []string{"*server.Result[Receipt]", "*server.Result[Page[Address]]", "*server.ResultWithMeta[Receipt]"} {
+// TestPointerResultWrapperRequestLess pins that a request-less handler
+// returning a pointer to a result wrapper (*server.Result[T],
+// *server.ResultWithMeta[T]) is found, since payloadExpr unwraps it as it
+// does the value form (issue 143): its route keeps its inferred error
+// statuses, a plain payload is typed with no warning, and a generic payload
+// raises the generic payload warning of Result[Page[Address]].
+func TestPointerResultWrapperRequestLess(t *testing.T) {
+	cases := map[string]string{
+		"*server.Result[Receipt]":         "",
+		"*server.ResultWithMeta[Receipt]": "",
+		"*server.Result[Page[Address]]":   "response type Page[Address]: Page[Address] is a generic type instantiation, which is not resolved — emitting an untyped schema",
+	}
+	for result, warning := range cases {
 		src := strings.NewReplacer("PARAMS", "ctx server.HandlerContext", "RESULT", result,
 			"return out, nil", `return nil, server.NewNotFoundError("x")`).Replace(genericModSrc)
 		a, routes := analyzeProjectRoutes(t, map[string]string{
@@ -562,8 +567,14 @@ func TestPointerResultWrapperIsNoInstantiation(t *testing.T) {
 			filepath.FromSlash(genericModFile): src,
 		})
 		require.Len(t, routes, 1)
-		assert.Empty(t, a.Warnings(t.Context()), result)
-		assert.Empty(t, routes[0].ErrorStatuses, result)
+		assert.Equal(t, []int{404}, routes[0].ErrorStatuses, result)
+		if warning == "" {
+			assert.Empty(t, a.Warnings(t.Context()), result)
+			require.NotNil(t, routes[0].Response, result)
+			assert.Equal(t, "Receipt", routes[0].Response.Name, result)
+			continue
+		}
+		assert.Equal(t, []string{warning}, a.Warnings(t.Context()), result)
 		assert.Nil(t, routes[0].Response, result)
 	}
 }
