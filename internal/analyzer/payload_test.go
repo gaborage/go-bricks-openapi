@@ -323,7 +323,8 @@ func payloadRows() []payloadRow {
 		{result: "server.Result[**Address]", name: "Address"},
 		{result: "server.Result[**[]string]", res: "**[]string"},
 		// U4: a nameless composite over a named func or chan type is typed
-		// from its Shape, silently, like the field of its type.
+		// from its Shape, silently (a README known limitation), though a
+		// field of its type warns (issue 158).
 		{result: "server.Result[map[string]Fn]", shape: "map[string]Fn"},
 		{result: "server.Result[map[string]Ch]", shape: "map[string]Ch"},
 		{result: "server.Result[*[]Fn]", shape: "*[]Fn"},

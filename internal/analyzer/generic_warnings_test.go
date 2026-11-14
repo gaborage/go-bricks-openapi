@@ -334,12 +334,13 @@ func TestGenericParamFieldsWarnOnce(t *testing.T) {
 // TestGenericControlsUnchanged pins table 5: an untagged generic embed keeps
 // issue 116's dropped-embed warning and gets no second one, an untagged named
 // slice of an instantiation is a property with the generic field warning,
-// and an undeclared bare type, a recursive map, chan, func, anonymous struct
-// and json:"-" fields keep what they had.
+// an undeclared bare type, a recursive map, anonymous struct and json:"-"
+// fields keep what they had, and chan and func fields raise issue 158's
+// func-or-chan warning.
 func TestGenericControlsUnchanged(t *testing.T) {
 	run := analyzeGenericRoute(t, "req IDReq, ctx server.HandlerContext", "server.Result[Controls]")
 	a, warnings := run.a, run.warnings
-	assert.Len(t, warnings, 4, "%v", warnings)
+	assert.Len(t, warnings, 6, "%v", warnings)
 	assert.Len(t, matching(warnings, "embedded field Page at "), 1)
 	assert.Len(t, matching(warnings, "has type Page[Address]: Page[Address] is a generic instantiation, which is not expanded"), 1)
 	if w := fieldWarnings(a, "LP"); assert.Len(t, w, 1) {
@@ -351,7 +352,12 @@ func TestGenericControlsUnchanged(t *testing.T) {
 	if w := fieldWarnings(a, "NT"); assert.Len(t, w, 1) {
 		assert.Contains(t, w[0], "contains itself")
 	}
-	for _, name := range []string{"Ch", "Fn", "Anon", "Skip", "Note"} {
+	for name, held := range map[string]string{"Ch": "chan", "Fn": "func"} {
+		if w := fieldWarnings(a, name); assert.Len(t, w, 1, name) {
+			assert.Contains(t, w[0], "which holds a "+held+", a Go type encoding/json cannot marshal", name)
+		}
+	}
+	for _, name := range []string{"Anon", "Skip", "Note"} {
 		assert.Empty(t, fieldWarnings(a, name), name)
 	}
 }

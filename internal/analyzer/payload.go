@@ -148,6 +148,10 @@ func (a *ProjectAnalyzer) warnPayload(written string, r *models.TypeShape, fb fi
 		a.addWarningf(declsDisagreePayloadWarning, written, fb.typeName, declsCause(fb))
 	case fallbackMarshalerPromoted:
 		a.addWarningf(marshalerPromotedPayloadWarning, written, fb.typeName, fb.detail, fb.via)
+	case fallbackFuncChan:
+		// A payload over a func or chan is a README known limitation, warned
+		// (or not) as before: no fallback text applies to it.
+		return false
 	default:
 		a.addWarningf(untypedBuiltinPayloadWarning, written, fb.detail)
 	}

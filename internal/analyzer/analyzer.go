@@ -4990,7 +4990,10 @@ func isSequence(kind models.ShapeKind) bool {
 }
 
 // typeShape decodes an AST type expression into its structural Shape. Total:
-// unmodeled nodes (chan, func) decode as ShapeUnknown. Parentheses are shed
+// unmodeled nodes decode as ShapeUnknown, a func or chan type (any direction)
+// with Name set to models.UnknownFunc or models.UnknownChan, so its field can
+// warn (issue 158) while every other ShapeUnknown consumer is untouched; any
+// other unmodeled node leaves Name empty. Parentheses are shed
 // wherever they are written: (T) decodes as T, *(T) as *T. A fixed-size array
 // decodes as ShapeArray, distinct from a slice (see sequenceKind); its length
 // is not recorded. A generic instantiation decodes as ShapeInstantiation
@@ -5035,6 +5038,12 @@ func (a *ProjectAnalyzer) typeShape(expr ast.Expr) models.TypeShape {
 
 	case *ast.StructType:
 		return models.TypeShape{Kind: models.ShapeStruct, Struct: &models.AnonymousStruct{Literal: t}}
+
+	case *ast.FuncType:
+		return models.TypeShape{Kind: models.ShapeUnknown, Name: models.UnknownFunc}
+
+	case *ast.ChanType:
+		return models.TypeShape{Kind: models.ShapeUnknown, Name: models.UnknownChan}
 	}
 
 	return models.TypeShape{Kind: models.ShapeUnknown}

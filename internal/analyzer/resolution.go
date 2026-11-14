@@ -44,6 +44,8 @@ const (
 		"constraints are not evaluated) — emitting an untyped object"
 	untypedBuiltinFieldWarning = "field %s at %s has type %s, which holds the builtin %s, a Go type with no JSON schema " +
 		"— emitting an untyped object"
+	funcChanFieldWarning = "field %s at %s has type %s, which holds a %s, a Go type encoding/json cannot marshal " +
+		"— emitting an untyped object"
 	unregisteredRefFieldWarning = "field %s at %s has type %s: struct %s could not be registered as a component " +
 		"— emitting an untyped object"
 	unknownFieldPosition          = "unknown position"
@@ -78,6 +80,7 @@ const (
 	fallbackUntypedBuiltin
 	fallbackMarshalerPromoted
 	fallbackGeneric
+	fallbackFuncChan
 )
 
 // fieldFallback is the first fallback a field's resolution met.
@@ -86,7 +89,7 @@ type fieldFallback struct {
 	typeName string // the named type where resolution stopped
 	// detail is the Marshaler method (fallbackMarshaler), the qualified
 	// underlying (fallbackDefinedOverQualified), the builtin
-	// (fallbackUntypedBuiltin), the generic type of the Instantiation, as
+	// (fallbackUntypedBuiltin), func or chan (fallbackFuncChan), the generic type of the Instantiation, as
 	// written (fallbackGeneric, whose typeName is the whole Instantiation), or
 	// the cause the declarations disagree (fallbackDeclsDisagree:
 	// declsShapeCause or declsClashCause).
@@ -307,9 +310,18 @@ func (a *ProjectAnalyzer) resolveShape(s models.TypeShape, c resolveCtx) models.
 	case models.ShapeStruct:
 		return a.resolveStruct(s, c)
 	default:
-		// ShapeUnknown: chan, func.
+		noteFuncChan(s, c)
 	}
 	return s
+}
+
+// noteFuncChan notes a func or chan leaf (ShapeUnknown named UnknownFunc or
+// UnknownChan), which encoding/json cannot marshal. Any other unmodelled leaf
+// notes nothing.
+func noteFuncChan(s models.TypeShape, c resolveCtx) {
+	if s.Kind == models.ShapeUnknown && (s.Name == models.UnknownFunc || s.Name == models.UnknownChan) {
+		c.st.note(fieldFallback{kind: fallbackFuncChan, typeName: s.Name, detail: s.Name})
+	}
 }
 
 // noteInstantiation notes an Instantiation, which is not resolved (#114),
@@ -853,7 +865,8 @@ func mergeShapes(x, y models.TypeShape) (models.TypeShape, bool) {
 // mergeSameKind merges two shapes of one kind: containers by their elements,
 // primitives when they are one builtin, extracted anonymous structs when they
 // are written alike (the first's extraction is kept) and unextracted ones
-// always, other leaves when they are one name.
+// always, unmodelled leaves (a func, a chan) always, other leaves when they
+// are one name.
 func mergeSameKind(x, y models.TypeShape) (models.TypeShape, bool) {
 	switch x.Kind {
 	case models.ShapePointer, models.ShapeSlice, models.ShapeArray, models.ShapeMap:
@@ -869,6 +882,11 @@ func mergeSameKind(x, y models.TypeShape) (models.TypeShape, bool) {
 			return x, true
 		}
 		return x, sameLiteral(x.Struct, y.Struct)
+	case models.ShapeUnknown:
+		// Unmodelled leaves all emit an untyped object; a func or chan
+		// leaf's Name is diagnostic only (issue 158), so it never splits
+		// a common container shape.
+		return x, true
 	default:
 		return x, x.Name == y.Name
 	}
@@ -1064,6 +1082,8 @@ func (a *ProjectAnalyzer) warnFieldFallback(f *models.FieldInfo, site *fieldSite
 		a.addWarningf(marshalerPromotedFieldWarning, append(head, fb.typeName, fb.detail, fb.via)...)
 	case fallbackGeneric:
 		a.addWarningf(genericFieldWarning, append(head, fb.typeName)...)
+	case fallbackFuncChan:
+		a.addWarningf(funcChanFieldWarning, append(head, fb.detail)...)
 	default:
 		a.addWarningf(untypedBuiltinFieldWarning, append(head, fb.detail)...)
 	}

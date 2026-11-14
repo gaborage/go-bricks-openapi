@@ -246,7 +246,7 @@ const (
 	// a Resolution adds the fields. It names no component: it is documented
 	// inline (CONTEXT.md, "Resolution").
 	ShapeStruct  ShapeKind = "struct"
-	ShapeUnknown ShapeKind = "unknown" // an AST shape the decoder does not model (chan, func)
+	ShapeUnknown ShapeKind = "unknown" // an AST shape the decoder does not model (chan, func: Name UnknownChan, UnknownFunc)
 	// ShapeInstantiation is a generic type written with its type arguments
 	// (G[A], G[A, B], q.G[A]): CONTEXT.md, "Instantiation". Inst carries the
 	// generic type and the arguments; Name stays empty, so no consumer that
@@ -289,6 +289,15 @@ const (
 	ShapeText ShapeKind = "text"
 )
 
+// The Names a ShapeUnknown leaf carries for a func or chan type, literal
+// (func(), chan int, <-chan T) or reached through a named type. encoding/json
+// cannot marshal either, so a field holding one warns. Any other unmodelled
+// node leaves Name empty.
+const (
+	UnknownFunc = "func"
+	UnknownChan = "chan"
+)
+
 // StatedSchema is a Stated schema (CONTEXT.md): the scalar wire schema the
 // project states for a Marshaler type it declares, with an
 // `//openapi:schema <type> [<format>]` type directive. Type is string,
@@ -313,6 +322,7 @@ type TypeShape struct {
 	Kind ShapeKind
 	// Name is set for ShapeNamed and ShapePrimitive: the identifier as written,
 	// qualified for selector types ("time.Time"), including "interface{}" and "any".
+	// A ShapeUnknown func or chan type carries UnknownFunc or UnknownChan.
 	Name string
 	// Key is the map key shape (ShapeMap only).
 	Key *TypeShape
