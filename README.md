@@ -284,12 +284,14 @@ nested Go module, is not.
   depth, without leaving a block that ends in a `return`. Another `case` of
   the same `switch`/`select`, the other arm of an `if`/`else`, statements
   earlier in an enclosing loop and `goto` targets never count, so such a
-  write is not documented. A bare `return` returns the first named result,
+  write is not documented; a write in an `if`/`switch`/`for` initializer is
+  followed by every arm. A bare `return` returns the first named result,
   and only when the named error result is never assigned anything but the
   literal `nil` outside function literals. A write to a local map counts
-  when such a return of a result holding the map can run after it; a map
-  that is ever reassigned after its declaration (`h = …`) contributes
-  nothing. They are documented on the
+  when one such return can run after both the write and the assignment
+  giving the map to the returned result (in either order), or returns a
+  literal holding the map; a map that is ever reassigned after its
+  declaration (`h = …`) contributes nothing. They are documented on the
   success response as optional string headers, under their canonical names,
   with `Content-Type` and names that are not valid header tokens dropped.
   Keys from constants (`echo.HeaderLocation`) or variables are not

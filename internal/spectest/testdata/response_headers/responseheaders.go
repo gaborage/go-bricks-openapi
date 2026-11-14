@@ -66,6 +66,31 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.POST(hr, r, "/named-bare-error", m.namedBareError)
 	server.POST(hr, r, "/nil-before-error", m.nilBeforeError)
 	server.POST(hr, r, "/sibling-case", m.siblingCase)
+	server.POST(hr, r, "/init-write", m.initWrite)
+	server.POST(hr, r, "/map-split-paths", m.mapSplitPaths)
+}
+
+// initWrite sets Location in an if initializer, which runs before the arm
+// that returns the result -> Location on 200.
+func (m *Module) initWrite(req ItemReq, ctx server.HandlerContext) (server.Result[Item], server.IAPIError) {
+	res := server.Result[Item]{Data: Item{ID: req.Name}}
+	if res.Headers = (http.Header{"Location": {"/items/1"}}); req.Name != "" {
+		return res, nil
+	}
+	return server.Result[Item]{}, nil
+}
+
+// mapSplitPaths gives h to the result on one path and writes h on another,
+// so no response carries X-Map -> no headers key.
+func (m *Module) mapSplitPaths(req ItemReq, ctx server.HandlerContext) (server.Result[Item], server.IAPIError) {
+	h := http.Header{}
+	res := server.Result[Item]{Data: Item{ID: req.Name}}
+	if req.Name == "" {
+		res.Headers = h
+		return res, nil
+	}
+	h.Set("X-Map", "1")
+	return res, nil
 }
 
 // siblingCase sets Retry-After in one switch arm and returns with a nil

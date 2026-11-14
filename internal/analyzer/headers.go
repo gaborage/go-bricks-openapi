@@ -225,35 +225,69 @@ func stmtList(n ast.Node) []ast.Stmt {
 // jump: in every statement list enclosing n, the statements after the one
 // holding n. A switch or select clause is never one of them — its siblings
 // are other arms — and neither is the other arm of an if/else, which sits in
-// no list with the arm holding n. Statements before n in an enclosing loop
-// body could run on a later iteration but are not counted, so a write is
-// dropped rather than credited to them; nor are statements a goto reaches.
-// Lists are taken innermost first, and a list that ends in a return stops
-// the climb: control never leaves it to reach the enclosing statements.
+// no list with the arm holding n. A write in the initializer of an if,
+// switch, type switch or for statement runs before every arm, so that
+// statement's bodies follow it (initBodies). Statements before n in an
+// enclosing loop body could run on a later iteration but are not counted, so
+// a write is dropped rather than credited to them; nor are statements a goto
+// reaches. Levels are taken innermost first, and a list that ends in a
+// return stops the climb: control never leaves it to reach the enclosing
+// statements.
 func followingStmts(body *ast.BlockStmt, n ast.Node) []ast.Stmt {
-	var tails [][]ast.Stmt // the statements after n's ancestor, outermost list first
-	var lists [][]ast.Stmt
+	var levels []followLevel // outermost first
 	ast.Inspect(body, func(node ast.Node) bool {
 		if _, ok := node.(*ast.FuncLit); ok {
 			return false
 		}
+		if bodies := initBodies(node, n); bodies != nil {
+			levels = append(levels, followLevel{tail: bodies})
+		}
 		list := stmtList(node)
 		for i, stmt := range list {
 			if stmt.Pos() <= n.Pos() && n.End() <= stmt.End() {
-				tails = append(tails, list[i+1:])
-				lists = append(lists, list)
+				_, ends := list[len(list)-1].(*ast.ReturnStmt)
+				levels = append(levels, followLevel{tail: list[i+1:], terminal: ends})
 			}
 		}
 		return true
 	})
 	var out []ast.Stmt
-	for i := len(tails) - 1; i >= 0; i-- {
-		out = appendFollowing(out, tails[i])
-		if _, ends := lists[i][len(lists[i])-1].(*ast.ReturnStmt); ends {
+	for i := len(levels) - 1; i >= 0; i-- {
+		out = appendFollowing(out, levels[i].tail)
+		if levels[i].terminal {
 			break
 		}
 	}
 	return out
+}
+
+// followLevel is one level of followingStmts' climb: the statements that
+// follow n there, and whether that level's list ends in a return.
+type followLevel struct {
+	tail     []ast.Stmt
+	terminal bool
+}
+
+// initBodies returns the bodies of an if, switch, type switch or for
+// statement whose initializer holds n — every arm, since the initializer
+// runs before all of them — or nil.
+func initBodies(node, n ast.Node) []ast.Stmt {
+	var init ast.Stmt
+	var bodies []ast.Stmt
+	switch s := node.(type) {
+	case *ast.IfStmt:
+		init, bodies = s.Init, []ast.Stmt{s.Body, s.Else}
+	case *ast.SwitchStmt:
+		init, bodies = s.Init, []ast.Stmt{s.Body}
+	case *ast.TypeSwitchStmt:
+		init, bodies = s.Init, []ast.Stmt{s.Body}
+	case *ast.ForStmt:
+		init, bodies = s.Init, []ast.Stmt{s.Body}
+	}
+	if init == nil || n.Pos() < init.Pos() || init.End() < n.End() {
+		return nil
+	}
+	return slices.DeleteFunc(bodies, func(b ast.Stmt) bool { return b == nil })
 }
 
 // appendFollowing appends the statements of list that are not switch or
@@ -269,22 +303,22 @@ func appendFollowing(out, list []ast.Stmt) []ast.Stmt {
 	return out
 }
 
-// reaches reports whether a serving return that match accepts lies in a
-// statement that can run after n (followingStmts), at any depth. A return
-// inside a function literal is never in served (the walk skips literals), so
-// it never matches.
-func (c *headerCollector) reaches(n ast.Node, match func(servedValue) bool) bool {
-	found := false
+// servingAfter returns the serving returns in the statements that can run
+// after n (followingStmts), at any depth. A return inside a function literal
+// is never in served (the walk skips literals), so it is never returned.
+func (c *headerCollector) servingAfter(n ast.Node) []*ast.ReturnStmt {
+	var out []*ast.ReturnStmt
 	for _, stmt := range followingStmts(c.body, n) {
 		ast.Inspect(stmt, func(node ast.Node) bool {
 			if ret, ok := node.(*ast.ReturnStmt); ok {
-				served, ok := c.served[ret]
-				found = found || (ok && match(served))
+				if _, serving := c.served[ret]; serving {
+					out = append(out, ret)
+				}
 			}
-			return !found
+			return true
 		})
 	}
-	return found
+	return out
 }
 
 // inClosure reports whether n lies inside one of the body's function literals.
@@ -298,25 +332,19 @@ func (c *headerCollector) inClosure(n ast.Node) bool {
 }
 
 // names keeps the writes a serving return of their target can follow: first
-// the writes to a Headers field, which also decide which maps each result
-// holds, then the writes to a local map, which need a serving return of a
-// result holding the map (a declaration, or a returned literal).
+// the writes to a Headers field, which also decide which maps each serving
+// return's result holds, then the writes to a local map.
 func (c *headerCollector) names() []string {
 	out := nameSet{}
 	maps.Copy(out, c.returned)
-	held := map[varDeclKey]map[varDeclKey]struct{}{}
+	holders := map[*ast.ReturnStmt]map[varDeclKey]struct{}{}
 	for _, w := range c.writes {
-		if w.toMap || !c.reaches(w.node, func(s servedValue) bool { return s.hasKey && s.key == w.key }) {
-			continue
+		if !w.toMap {
+			c.keepFieldWrite(w, out, holders)
 		}
-		maps.Copy(out, w.names)
-		if held[w.key] == nil {
-			held[w.key] = map[varDeclKey]struct{}{}
-		}
-		maps.Copy(held[w.key], w.links)
 	}
 	for _, w := range c.writes {
-		if w.toMap && c.mapReaches(w, held) {
+		if w.toMap && c.mapReaches(w, holders) {
 			maps.Copy(out, w.names)
 		}
 	}
@@ -326,20 +354,39 @@ func (c *headerCollector) names() []string {
 	return slices.Sorted(maps.Keys(out))
 }
 
-// mapReaches reports whether a write to a local map is followed by a serving
-// return of a result holding that map. A map that is ever reassigned holds
-// nothing.
-func (c *headerCollector) mapReaches(w *headerWrite, held map[varDeclKey]map[varDeclKey]struct{}) bool {
+// keepFieldWrite keeps a write to <decl>.Headers when a serving return of
+// decl can follow it, and records the maps the write gives the field as held
+// by each such return's result.
+func (c *headerCollector) keepFieldWrite(w *headerWrite, out nameSet, holders map[*ast.ReturnStmt]map[varDeclKey]struct{}) {
+	for _, ret := range c.servingAfter(w.node) {
+		if s := c.served[ret]; !s.hasKey || s.key != w.key {
+			continue
+		}
+		maps.Copy(out, w.names)
+		if holders[ret] == nil {
+			holders[ret] = map[varDeclKey]struct{}{}
+		}
+		maps.Copy(holders[ret], w.links)
+	}
+}
+
+// mapReaches reports whether a write to a local map can be followed by a
+// serving return whose result holds that map: a returned literal holding it,
+// or a variable a link the same return follows gave it to (holders), so the
+// link and the write lie on one path to that return, in either order. A map
+// that is ever reassigned holds nothing.
+func (c *headerCollector) mapReaches(w *headerWrite, holders map[*ast.ReturnStmt]map[varDeclKey]struct{}) bool {
 	if _, reassigned := c.reassigned[w.key]; reassigned {
 		return false
 	}
-	return c.reaches(w.node, func(s servedValue) bool {
-		if _, ok := s.links[w.key]; ok {
+	for _, ret := range c.servingAfter(w.node) {
+		_, literal := c.served[ret].links[w.key]
+		_, held := holders[ret][w.key]
+		if literal || held {
 			return true
 		}
-		_, ok := held[s.key][w.key]
-		return s.hasKey && ok
-	})
+	}
+	return false
 }
 
 // visit records one node of the handler's own body.
