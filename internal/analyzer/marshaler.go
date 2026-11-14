@@ -120,11 +120,14 @@ var (
 	}
 
 	// wellKnownMethodSets are the out-of-module types whose methods are known
-	// without their source, read only when one is embedded (promotion): used
-	// directly, each keeps its well-known schema. Every encode-side method
-	// here has a value receiver, so none is pointer-only. time.Time, net.IP
-	// and the netip types have had AppendText since Go 1.24, below the go
-	// 1.26 floor. The UnmarshalText of net.IP and the netip types is on the
+	// without their source, each method with its receiver, as Go 1.27's
+	// standard library and the UUID libraries declare it. A directly used
+	// well-known type keeps its well-known schema, except one with an
+	// encode-side method only on the pointer (math/big's Int, Float and Rat:
+	// pointerOnlyWellKnownLeaf); embedding one promotes its methods, a pointer
+	// embed putting its pointer methods in the embedding struct's value method
+	// set. time.Time, net.IP and the netip types have had AppendText since Go
+	// 1.24, below the go 1.26 floor. Every decode-side method here is on the
 	// pointer, which textBothWays allows: a decode target is always
 	// addressable. json.Number has
 	// MarshalJSONTo and UnmarshalJSONFrom only in the jsonv2-backed
@@ -132,16 +135,50 @@ var (
 	// since Go 1.27): an embedding struct is written as a bare number there
 	// and as an object with a Number field otherwise, so, as for any type
 	// with only jsonv2 methods (ADR 0002), it is a Marshaler type either way.
-	wellKnownMethodSets = map[string][]string{
-		models.WellKnownTimeTime:      {methodMarshalJSON, methodMarshalText, methodAppendText, methodUnmarshalJSON, methodUnmarshalText},
-		models.WellKnownUUID:          {methodMarshalText, methodUnmarshalText},
-		models.WellKnownRawMessage:    {methodMarshalJSON, methodUnmarshalJSON},
-		models.WellKnownJSONNumber:    {methodMarshalJSONTo, methodUnmarshalJSONFrom},
-		models.WellKnownNetIP:         {methodMarshalText, methodAppendText, methodUnmarshalText},
-		models.WellKnownNetipAddr:     {methodMarshalText, methodAppendText, methodUnmarshalText},
-		models.WellKnownNetipPrefix:   {methodMarshalText, methodAppendText, methodUnmarshalText},
-		models.WellKnownNetipAddrPort: {methodMarshalText, methodAppendText, methodUnmarshalText},
+	// Every method of big.Int, big.Float and big.Rat is on the pointer:
+	// big.Int has MarshalJSON, so it is never a text type, while *big.Float
+	// and *big.Rat are text both ways.
+	wellKnownMethodSets = map[string][]wellKnownMethod{
+		models.WellKnownTimeTime: {
+			onValue(methodMarshalJSON), onValue(methodMarshalText), onValue(methodAppendText),
+			onPointer(methodUnmarshalJSON), onPointer(methodUnmarshalText),
+		},
+		models.WellKnownUUID:          {onValue(methodMarshalText), onPointer(methodUnmarshalText)},
+		models.WellKnownRawMessage:    {onValue(methodMarshalJSON), onPointer(methodUnmarshalJSON)},
+		models.WellKnownJSONNumber:    {onValue(methodMarshalJSONTo), onPointer(methodUnmarshalJSONFrom)},
+		models.WellKnownNetIP:         textOnValue,
+		models.WellKnownNetipAddr:     textOnValue,
+		models.WellKnownNetipPrefix:   textOnValue,
+		models.WellKnownNetipAddrPort: textOnValue,
+		models.WellKnownBigInt: {
+			onPointer(methodMarshalJSON), onPointer(methodMarshalText), onPointer(methodAppendText),
+			onPointer(methodUnmarshalJSON), onPointer(methodUnmarshalText),
+		},
+		models.WellKnownBigFloat: textOnPointer,
+		models.WellKnownBigRat:   textOnPointer,
 	}
+)
+
+// wellKnownMethod is one method of a well-known type's method set and
+// whether its receiver is the pointer (it is missing from the value method
+// set).
+type wellKnownMethod struct {
+	name string
+	ptr  bool
+}
+
+// onValue and onPointer record a well-known method with a value or a
+// pointer receiver.
+func onValue(method string) wellKnownMethod   { return wellKnownMethod{name: method} }
+func onPointer(method string) wellKnownMethod { return wellKnownMethod{name: method, ptr: true} }
+
+var (
+	// textOnValue is the text types' method set: MarshalText and AppendText
+	// on the value, UnmarshalText on the pointer (net.IP, the netip types).
+	textOnValue = []wellKnownMethod{onValue(methodMarshalText), onValue(methodAppendText), onPointer(methodUnmarshalText)}
+	// textOnPointer is the same three methods, every one on the pointer
+	// (big.Float, big.Rat).
+	textOnPointer = []wellKnownMethod{onPointer(methodMarshalText), onPointer(methodAppendText), onPointer(methodUnmarshalText)}
 )
 
 // marshalerSet scans every file of c's package for methods of name (receiver
@@ -588,13 +625,20 @@ func (a *ProjectAnalyzer) qualifiedMethodSet(qualified string, c resolveCtx, kee
 	if site, name, ok := a.inModuleTypeSite(qualified, c.file); ok {
 		return a.methodSetOf(name, c.in(site.file, site.path), keep, open)
 	}
-	ms := methodSet{}
 	if !keep {
-		return ms
+		return methodSet{}
 	}
 	name, _ := a.wellKnownName(qualified, c.file)
-	for _, method := range wellKnownMethodSets[name] {
-		ms[method] = methodEntry{exact: true, owner: qualified}
+	return wellKnownMethodSet(name, qualified)
+}
+
+// wellKnownMethodSet returns the method set of the well-known type name
+// (wellKnownMethodSets), each method exact and at depth 0 with its receiver,
+// owned by written, the type as written; empty for a name with no entry.
+func wellKnownMethodSet(name, written string) methodSet {
+	ms := methodSet{}
+	for _, m := range wellKnownMethodSets[name] {
+		ms[m.name] = methodEntry{exact: true, ptrOnly: m.ptr, owner: written}
 	}
 	return ms
 }

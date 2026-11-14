@@ -263,12 +263,16 @@ func (ec embedClassifier) qualified(file *ast.File, qualified string, depth int,
 }
 
 // wellKnownStructs are the well-known Marshaler types that are structs, none
-// with an exported field: time.Time and the netip structs.
+// with an exported field: time.Time, the netip structs and math/big's Int,
+// Float and Rat.
 var wellKnownStructs = map[string]bool{
 	models.WellKnownTimeTime:      true,
 	models.WellKnownNetipAddr:     true,
 	models.WellKnownNetipPrefix:   true,
 	models.WellKnownNetipAddrPort: true,
+	models.WellKnownBigInt:        true,
+	models.WellKnownBigFloat:      true,
+	models.WellKnownBigRat:        true,
 }
 
 // wellKnownMarshalerEmbed classifies an embed whose chain ends at a
@@ -278,9 +282,9 @@ var wellKnownStructs = map[string]bool{
 // query or header parameter, or when a sibling embed cancels those methods
 // and it is written as through a defined type (marshalerEmbedFields). A
 // defined type on the way drops them, and encoding/json reads the
-// underlying type: time.Time and the netip structs (netip.Addr,
-// netip.Prefix, netip.AddrPort), structs with no exported field, add
-// nothing, while uuid.UUID ([16]byte), json.RawMessage and net.IP ([]byte)
+// underlying type: time.Time, the netip structs (netip.Addr,
+// netip.Prefix, netip.AddrPort) and math/big's Int, Float and Rat, structs
+// with no exported field, add nothing, while uuid.UUID ([16]byte), json.RawMessage and net.IP ([]byte)
 // and json.Number (string) are one property, typed as a field of the
 // written type is (a byte string, a string, or an untyped object with that
 // field's warning).

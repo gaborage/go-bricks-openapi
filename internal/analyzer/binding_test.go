@@ -188,6 +188,7 @@ const bindModuleHead = `package mod
 import (
 	"encoding/json"
 	"io/fs"
+	"math/big"
 	"net"
 	"net/netip"
 	"os"
@@ -430,9 +431,8 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 
 // TestWellKnownBinderKinds pins issue 121's table of well-known type names
-// and their binder kinds, the rows of names not well-known yet included:
-// big.Int is consulted only once issue 113 makes it well-known, so a
-// big.Int parameter, unresolvable until then, gets no verdict.
+// and their binder kinds: every row is a well-known name, math/big's three
+// structs included, and a pointer to one is judged by what it points to.
 func TestWellKnownBinderKinds(t *testing.T) {
 	assert.Equal(t, map[string]binderKind{
 		models.WellKnownTimeTime:      kindTime,
@@ -443,16 +443,18 @@ func TestWellKnownBinderKinds(t *testing.T) {
 		models.WellKnownNetipAddr:     kindStruct,
 		models.WellKnownNetipPrefix:   kindStruct,
 		models.WellKnownNetipAddrPort: kindStruct,
-		"big.Int":                     kindStruct,
+		models.WellKnownBigInt:        kindStruct,
+		models.WellKnownBigFloat:      kindStruct,
+		models.WellKnownBigRat:        kindStruct,
 	}, wellKnownBinderKinds)
 	for name := range wellKnownBinderKinds {
-		assert.Equal(t, name != bigInt, models.WellKnownTypeNames[name], "%s is well-known", name)
+		assert.True(t, models.WellKnownTypeNames[name], "%s is well-known", name)
 	}
-	big := models.TypeShape{Kind: models.ShapeNamed, Name: bigInt}
-	unresolvable := fieldFallback{kind: fallbackUnresolvable, typeName: bigInt}
-	for _, fb := range []fieldFallback{{}, unresolvable} {
-		_, known := paramBindReason(&models.TypeShape{Kind: models.ShapePointer, Elem: &big}, paramTypeQuery, fb)
-		assert.False(t, known, "%+v", fb)
+	for _, name := range bigTypes {
+		leaf := models.TypeShape{Kind: models.ShapeNamed, Name: name}
+		reason, known := paramBindReason(&models.TypeShape{Kind: models.ShapePointer, Elem: &leaf}, paramTypeQuery, fieldFallback{})
+		assert.True(t, known, name)
+		assert.Equal(t, reasonStruct, reason, name)
 	}
 }
 
