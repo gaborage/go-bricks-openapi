@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.8.0](https://github.com/gaborage/go-bricks-openapi/compare/v0.7.0...v0.8.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **analyzer:** a struct embedding an in-module interface that declares a marshal method, and a field of such an interface type, are now documented as {} with a Marshaler warning (or as {type: string} for an interface with the text pair) instead of from the struct's fields or as a silent {}. Such structs no longer get a component, and --strict now fails on the new warnings. In the other direction, a struct whose interface embed ties with a struct embed's marshal method at one depth (struct{ JM; S }) is no longer {} with a promoted-method warning: it gets a component documented from its fields. A type whose build-tagged copies disagree on an interface's marshal methods is an untyped object with a disagreement warning, where it used to follow a struct copy or the first copy.
+* **analyzer:** a body field whose type holds a func or chan, at any depth, now raises a warning, so generate --strict fails on such a project. The emitted schema is unchanged.
+* **generator:** integer minimum/maximum values that were written in e-notation are now plain integers (uint32's type-range maximum becomes 4294967295, max=1000000 becomes 1000000), integer bounds above 2^53 and uint64 bounds and enum members above MaxInt64 carry the tag's exact digits, and an integer example is no longer emitted when it ties an exclusive bound after float64 rounding or exceeds a bound only exactly (2^60+2 under maximum 2^60+1).
+* **analyzer:** a type whose build-tagged declarations each reach a different struct, whether declared in the referencing package or in another package of the module, is documented as an untyped object instead of a $ref to the first copy's struct, registers no component, and a request of it emits no requestBody. Each use raises a warning, so generate --strict now fails on such projects. The build-tagged warning's text changes: its parenthetical names the cause, and a payload rooted at such a type raises it instead of the named non-struct warning.
+* **analyzer:** a handler returning *server.Result[T] or *server.ResultWithMeta[T] now documents data as T and its real success status (201, 202, ...) instead of an untyped object and 200; a request-less such handler gains its success status and inferred error responses, leaves the untyped-route warning and counts as typed in doctor. *server.Result[Page[A]] and **server.Result[T] newly raise the generic payload warning, so generate --strict newly fails on them. A *server.NoContentResult handler returning &server.NoContentResult{} or &res now documents a bodiless 204 instead of an untyped 200, and no longer raises the "resolves to no schema component" warning.
+* **analyzer:** a project registering one route node twice (including in exclusive if/else branches or build-tagged files) now gets a warning per dropped registration, so generate --strict and --fail-on-warnings newly fail, and doctor's route count drops by the dropped routes. The emitted spec loses the dropped paths (e.g. /u/{uid}, /files/*rest) and the components only a dropped route in the same module registered.
+* **analyzer:** a ,string body field whose type is an alias chain ending at a single pointer literal (type PA = *int64) changes from {type: integer|number|boolean, nullable: true} with its format to {type: string, nullable: true}.
+* **analyzer:** properties for unexported json-named embeds of generic non-struct alias or defined types are removed from generated schemas; exported embeds of a generic non-struct type (through an alias, or directly as a local exported Seq[int] or an in-module b.List[int]) now appear as one untyped-object property keyed by the type name instead of being dropped; the dropped-embed warnings for all of these are gone, so generate --strict passes for the unexported cases.
+* **analyzer:** generated output changes for parenthesized types: requests gain a requestBody, payloads gain a typed data schema, fields and query parameters gain their types, and PB/PBA/PS-style declarations gain their own components. (string) and *(string) requests newly raise the F26 warning, and a parenthesized generic request or payload newly raises the generic warning, so generate --strict newly fails on them; doctor's untyped-route list shrinks.
+
+### Added
+
+* **analyzer:** document ResultWithMeta meta keys via //openapi:meta ([#230](https://github.com/gaborage/go-bricks-openapi/issues/230)) ([10eb314](https://github.com/gaborage/go-bricks-openapi/commit/10eb314a80cc4edf8c897b7e126f12932e5ee19b))
+
+
+### Fixed
+
+* **analyzer:** document *server.Result[T] payloads like the value form ([#223](https://github.com/gaborage/go-bricks-openapi/issues/223)) ([1de618b](https://github.com/gaborage/go-bricks-openapi/commit/1de618bf576f5a18107a5c0973b064cb83694a55))
+* **analyzer:** document parenthesized types as their unwrapped form ([#217](https://github.com/gaborage/go-bricks-openapi/issues/217)) ([773a782](https://github.com/gaborage/go-bricks-openapi/commit/773a7824f4a8c12c8a7ef8f96985d2a23ed8ebfb)), closes [#160](https://github.com/gaborage/go-bricks-openapi/issues/160) [#167](https://github.com/gaborage/go-bricks-openapi/issues/167) [#177](https://github.com/gaborage/go-bricks-openapi/issues/177)
+* **analyzer:** fall back when build-tagged copies reach two structs ([#224](https://github.com/gaborage/go-bricks-openapi/issues/224)) ([2a46457](https://github.com/gaborage/go-bricks-openapi/commit/2a464572b6b04b83715f92eb0673c30ba7987292))
+* **analyzer:** keep well-known Marshaler embeds a sibling cancels ([#225](https://github.com/gaborage/go-bricks-openapi/issues/225)) ([f31485d](https://github.com/gaborage/go-bricks-openapi/commit/f31485de659c97ee86948d0c0906f3da9d6ee290)), closes [#163](https://github.com/gaborage/go-bricks-openapi/issues/163)
+* **analyzer:** quote ,string fields typed as an alias of a pointer ([#221](https://github.com/gaborage/go-bricks-openapi/issues/221)) ([8ae0d36](https://github.com/gaborage/go-bricks-openapi/commit/8ae0d3690988b20bae9e14f01ac37848d326886a))
+* **analyzer:** read in-module interfaces' marshal methods ([#229](https://github.com/gaborage/go-bricks-openapi/issues/229)) ([ff3b901](https://github.com/gaborage/go-bricks-openapi/commit/ff3b9013b7166a5d938ef41400de6bf276fe44c4))
+* **analyzer:** skip unexported generic non-struct embeds silently ([#218](https://github.com/gaborage/go-bricks-openapi/issues/218)) ([9fc534d](https://github.com/gaborage/go-bricks-openapi/commit/9fc534d202ac76cddecf28217cd391bfde7e7c51))
+* **analyzer:** type net.HardwareAddr and net.IPMask as base64 bytes ([#227](https://github.com/gaborage/go-bricks-openapi/issues/227)) ([982b034](https://github.com/gaborage/go-bricks-openapi/commit/982b034235452eb9d2392005a1e28189a1944f83)), closes [#149](https://github.com/gaborage/go-bricks-openapi/issues/149)
+* **analyzer:** warn on and drop duplicate route-node registrations ([#222](https://github.com/gaborage/go-bricks-openapi/issues/222)) ([94b4cf5](https://github.com/gaborage/go-bricks-openapi/commit/94b4cf5b7989af4804b50ab87f7df86acbea8e71))
+* **analyzer:** warn on body fields that hold a func or chan ([#228](https://github.com/gaborage/go-bricks-openapi/issues/228)) ([db61aa9](https://github.com/gaborage/go-bricks-openapi/commit/db61aa98fe56acfa0439676a41d79cc9672fe0ce))
+* **generator:** document integer bounds and enum members exactly ([#226](https://github.com/gaborage/go-bricks-openapi/issues/226)) ([843b8cd](https://github.com/gaborage/go-bricks-openapi/commit/843b8cd775335d122f3c82bc4d3dc28efce89035)), closes [#200](https://github.com/gaborage/go-bricks-openapi/issues/200)
+* **generator:** keep uint64 examples above MaxInt64 ([#214](https://github.com/gaborage/go-bricks-openapi/issues/214)) ([6cad942](https://github.com/gaborage/go-bricks-openapi/commit/6cad942903bcdfbf5c5ba4366fec8f37c5fc312a))
+
 ## [0.7.0](https://github.com/gaborage/go-bricks-openapi/compare/v0.6.0...v0.7.0) (2026-11-09)
 
 
