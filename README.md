@@ -245,6 +245,14 @@ nested Go module, is not.
 - Routes registered outside a module's `RegisterRoutes` (e.g. via
   `RootGroup()` in `main`) are not discovered.
 - Embedded-module method promotion is not resolved.
+- Two registrations of one go-bricks route node (the same method and path,
+  ignoring path parameter names and anything after a `*` wildcard) keep the
+  first and drop the second with a warning (so `--strict` fails). Registrations
+  in exclusive `if`/`else` branches or build-tagged files are reported too,
+  since neither is evaluated. "First" means source order within a module and
+  lexical file-path order (the directory walk) across modules, not
+  `app.RegisterModule` order. A dropped cross-module registration's payload
+  components stay emitted, unreferenced.
 - Error-response inference walks the handler's own body only. A constructor
   called from a helper, a service layer, or middleware is invisible to it — no
   call is followed, even within the same package. Declare those statuses with
