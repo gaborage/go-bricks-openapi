@@ -277,18 +277,19 @@ nested Go module, is not.
   outside function literals (`res.Headers = http.Header{"Location": …}`,
   `res.Headers.Set("Location", …)`, `.Add`, `res.Headers["Location"] = …`, a
   `Headers:` element of a Result literal, or a local `h` given as `Headers: h`
-  / `res.Headers = h` and written with the same shapes). Only a result
-  returned with a literal `nil` error counts, matched by declaration, so a
-  same-named variable in an inner block is not it; a bare `return` counts the
-  first named result only if the named error result is never assigned
-  anything but the literal `nil` outside function literals. A write is
-  dropped when the innermost block or `case` enclosing it that ends in a
-  `return` ends in one with a non-`nil` error, unless a `return …, nil` (or a
-  bare `return` that counts the named result) follows the write inside that
-  block, nested statements included; a write that reaches an error
-  return by other control flow (`goto`, a loop exit) is still documented. A
-  local map that is ever reassigned after its declaration (`h = …`)
-  contributes nothing. They are documented on the
+  / `res.Headers = h` and written with the same shapes). A write counts only
+  when a return of the same variable with a literal `nil` error — matched by
+  declaration, so a same-named variable in an inner block is not it — can
+  run after it: a statement following it in an enclosing block, at any
+  depth, without leaving a block that ends in a `return`. Another `case` of
+  the same `switch`/`select`, the other arm of an `if`/`else`, statements
+  earlier in an enclosing loop and `goto` targets never count, so such a
+  write is not documented. A bare `return` returns the first named result,
+  and only when the named error result is never assigned anything but the
+  literal `nil` outside function literals. A write to a local map counts
+  when such a return of a result holding the map can run after it; a map
+  that is ever reassigned after its declaration (`h = …`) contributes
+  nothing. They are documented on the
   success response as optional string headers, under their canonical names,
   with `Content-Type` and names that are not valid header tokens dropped.
   Keys from constants (`echo.HeaderLocation`) or variables are not

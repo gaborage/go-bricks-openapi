@@ -65,6 +65,21 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.POST(hr, r, "/before-error", m.beforeError)
 	server.POST(hr, r, "/named-bare-error", m.namedBareError)
 	server.POST(hr, r, "/nil-before-error", m.nilBeforeError)
+	server.POST(hr, r, "/sibling-case", m.siblingCase)
+}
+
+// siblingCase sets Retry-After in one switch arm and returns with a nil
+// error from another; the arm that writes falls through to the error return,
+// so the header never reaches a success response -> no headers key.
+func (m *Module) siblingCase(req ItemReq, ctx server.HandlerContext) (server.Result[Item], server.IAPIError) {
+	res := server.Result[Item]{Headers: http.Header{}}
+	switch req.Name {
+	case "bad":
+		res.Headers.Set("Retry-After", "30")
+	case "ok":
+		return res, nil
+	}
+	return res, server.NewNotFoundError("item")
 }
 
 // nilBeforeError sets Location, then returns the result with a nil error on

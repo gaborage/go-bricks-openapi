@@ -54,53 +54,63 @@ type varDeclKey struct {
 type nameSet map[string]struct{}
 
 // headerCollector accumulates, in one scoped walk of a handler body, every
-// header write keyed by the declaration it targets; extractResponseHeaders
-// keeps only those that reach a returned result.
+// header write with the node it sits at and the declaration it targets, and
+// every return that serves a result; names keeps a write only when a return
+// serving its target is reachable after it.
 type headerCollector struct {
 	analyzer      *ProjectAnalyzer
 	serverAliases map[string]struct{}
-	// scopes is the binding chain in effect at the node being visited.
+	body          *ast.BlockStmt
+	// scopes is the binding chain in effect at the node being visited, and
+	// cur that node: every write recorded is attributed to it.
 	scopes constScopes
+	cur    ast.Node
 	// closures are the spans of the body's function literals, whose nodes
 	// are skipped.
 	closures []ast.Node
-	// results are the declarations returned as the first result with a nil
-	// error, or by a bare return of the first named result.
-	results map[varDeclKey]struct{}
-	// fieldWrites are the names written to <decl>.Headers (or by a wrapper
-	// literal bound to <decl>); fieldLinks the local header maps assigned to
-	// <decl>.Headers.
-	fieldWrites map[varDeclKey]nameSet
-	fieldLinks  map[varDeclKey]map[varDeclKey]struct{}
-	// mapWrites are the names written to a local header map variable.
-	mapWrites map[varDeclKey]nameSet
+	// writes are the recorded writes, one per node, target and kind.
+	writes map[writeID]*headerWrite
+	// served maps each return that serves a result to what it returns.
+	served map[*ast.ReturnStmt]servedValue
 	// returned are the names of wrapper literals returned directly with a nil
-	// error, and returnedLinks the local maps such a literal's Headers holds.
-	returned      nameSet
-	returnedLinks map[varDeclKey]struct{}
+	// error.
+	returned nameSet
 	// reassigned are the declarations a plain assignment targets after they
 	// are declared; a linked map among them contributes nothing, since which
 	// map the result ends up holding depends on the order of the writes.
 	reassigned map[varDeclKey]struct{}
-	// terminals are the body's statement lists that end in a return.
-	terminals []terminalBlock
 	// errResult is the declaration of the second named result (an empty or
-	// blank name, which no identifier resolves to, when there is none), and errAssigned whether the body ever assigns it
-	// anything but the literal nil: a bare return then counts nothing.
+	// blank name, which no identifier resolves to, when there is none), and
+	// errAssigned whether the body ever assigns it anything but the literal
+	// nil: a bare return then serves nothing. namedResult is the first named
+	// result's declaration, which a serving bare return returns.
 	errResult   varDeclKey
 	errAssigned bool
-	// successReturns are the positions of the body's returns, outside
-	// function literals, that serve a result: a nil-error return, or a bare
-	// return when it counts the named result.
-	successReturns []token.Pos
+	namedResult varDeclKey
 }
 
-// terminalBlock is one statement list (a block or a case clause body) whose
-// last statement is a return, and whether that return carries a non-nil
-// error, which makes go-bricks drop the result.
-type terminalBlock struct {
-	from, to    token.Pos
-	errorReturn bool
+// writeID identifies the writes one node makes to one declaration: to its
+// Headers field (toMap false) or to it as a header map variable (toMap true).
+type writeID struct {
+	node  ast.Node
+	key   varDeclKey
+	toMap bool
+}
+
+// headerWrite is what one node writes to one declaration: header names, and
+// for a Headers field the local maps it is given.
+type headerWrite struct {
+	writeID
+	names nameSet
+	links map[varDeclKey]struct{}
+}
+
+// servedValue is what a serving return returns: a declaration (hasKey), or a
+// wrapper literal whose Headers element holds the local maps in links.
+type servedValue struct {
+	key    varDeclKey
+	hasKey bool
+	links  map[varDeclKey]struct{}
 }
 
 // extractResponseHeaders returns the canonical, sorted, deduplicated header
@@ -109,23 +119,25 @@ type terminalBlock struct {
 // pointer, which go-bricks serves alike: the wrappers' provider methods have
 // value receivers).
 //
-// The result is every variable a return statement in the handler's own body
-// gives as its first result, as is or with its address taken, with the bare
-// nil identifier as its error (go-bricks drops the result whenever the error
-// is non-nil), plus the first named result when the body has a bare return.
-// A write counts when it targets one of those declarations, in a branch or
-// not:
+// A serving return is one in the handler's own body that gives a variable
+// (as is or with its address taken) or a wrapper literal as its first result
+// with the bare nil identifier as its error (go-bricks drops the result
+// whenever the error is non-nil), or a bare return, which returns the first
+// named result, when the named error result is never assigned anything but
+// the literal nil. A write to a variable counts only when a serving return of
+// that same declaration is reachable after it (reaches):
 //
 //	res.Headers = <composite literal>      // each string-literal key
 //	res.Headers.Set("K", v) / .Add("K", v)
 //	res.Headers["K"] = v
 //	res := server.Result[T]{Headers: <composite literal>, ...}
 //
-// and so does the Headers element of a wrapper literal returned directly with
-// a nil error. Where Headers is given a local map variable instead
-// (res.Headers = h, server.Result[T]{Headers: h}), the names written to that
-// map's declaration count — h := http.Header{"K": ...}, h.Set/Add("K", ...),
-// h["K"] = ... — wherever in the body they are written.
+// and the Headers element of a wrapper literal returned by a serving return
+// counts too. Where Headers is given a local map variable instead
+// (res.Headers = h, server.Result[T]{Headers: h}), a write to that map's
+// declaration — h := http.Header{"K": ...}, h.Set/Add("K", ...), h["K"] = ...
+// — counts when a serving return of a result holding it is reachable after
+// the write.
 func (a *ProjectAnalyzer) extractResponseHeaders(funcDecl *ast.FuncDecl, serverAliases map[string]struct{}) []string {
 	if funcDecl.Body == nil || a.resultWrapperKind(funcDecl.Type.Results, serverAliases) == models.ResultWrapperNone {
 		return nil
@@ -133,36 +145,24 @@ func (a *ProjectAnalyzer) extractResponseHeaders(funcDecl *ast.FuncDecl, serverA
 	c := &headerCollector{
 		analyzer:      a,
 		serverAliases: serverAliases,
+		body:          funcDecl.Body,
 		closures:      functionLiterals(funcDecl.Body),
-		results:       map[varDeclKey]struct{}{},
-		fieldWrites:   map[varDeclKey]nameSet{},
-		fieldLinks:    map[varDeclKey]map[varDeclKey]struct{}{},
-		mapWrites:     map[varDeclKey]nameSet{},
+		writes:        map[writeID]*headerWrite{},
+		served:        map[*ast.ReturnStmt]servedValue{},
 		returned:      nameSet{},
-		returnedLinks: map[varDeclKey]struct{}{},
 		reassigned:    map[varDeclKey]struct{}{},
-		terminals:     terminalBlocks(funcDecl.Body),
 		errResult:     varDeclKey{name: secondNamedResult(funcDecl), from: funcDecl.Body.Pos()},
+		namedResult:   varDeclKey{name: firstNamedResult(funcDecl), from: funcDecl.Body.Pos()},
 	}
 	outer := funcTypeBindings(funcDecl.Type, receiverVarName(funcDecl.Recv), funcDecl.Body.Pos())
 	// The assignments go first: whether a bare return serves the named result
-	// (errAssigned) decides which returns rescue a write from an error path.
+	// (errAssigned) must be known when the returns are recorded.
 	c.walk(funcDecl.Body, outer, func(n ast.Node) {
 		if assign, ok := n.(*ast.AssignStmt); ok {
 			c.noteAssignments(assign)
 		}
 	})
-	c.successReturns = successReturns(funcDecl.Body, !c.errAssigned)
-	bare := false
-	c.walk(funcDecl.Body, outer, func(n ast.Node) {
-		if ret, ok := n.(*ast.ReturnStmt); ok && len(ret.Results) == 0 {
-			bare = true
-		}
-		c.visit(n)
-	})
-	if named := firstNamedResult(funcDecl); bare && !c.errAssigned && named != "" && named != "_" {
-		c.results[varDeclKey{name: named, from: funcDecl.Body.Pos()}] = struct{}{}
-	}
+	c.walk(funcDecl.Body, outer, c.visit)
 	return c.names()
 }
 
@@ -207,44 +207,6 @@ func (c *headerCollector) walk(body *ast.BlockStmt, outer map[string]binding, vi
 	})
 }
 
-// successReturns returns the positions of body's returns, outside function
-// literals, that serve a result: those with the bare nil identifier as their
-// error, and bare returns when bareServes.
-func successReturns(body *ast.BlockStmt, bareServes bool) []token.Pos {
-	var out []token.Pos
-	ast.Inspect(body, func(n ast.Node) bool {
-		switch s := n.(type) {
-		case *ast.FuncLit:
-			return false
-		case *ast.ReturnStmt:
-			if returnsNilError(s) || (bareServes && len(s.Results) == 0) {
-				out = append(out, s.Pos())
-			}
-		}
-		return true
-	})
-	return out
-}
-
-// terminalBlocks returns every statement list in body whose last
-// statement is a return. A function literal's lists are
-// included but harmless: no recorded write lies inside one.
-func terminalBlocks(body *ast.BlockStmt) []terminalBlock {
-	var out []terminalBlock
-	ast.Inspect(body, func(n ast.Node) bool {
-		list := stmtList(n)
-		if len(list) == 0 {
-			return true
-		}
-		if ret, ok := list[len(list)-1].(*ast.ReturnStmt); ok {
-			errorReturn := len(ret.Results) == 2 && !returnsNilError(ret)
-			out = append(out, terminalBlock{from: n.Pos(), to: n.End(), errorReturn: errorReturn})
-		}
-		return true
-	})
-	return out
-}
-
 // stmtList returns the statement list a block or a switch/select clause
 // holds, or nil for any other node.
 func stmtList(n ast.Node) []ast.Stmt {
@@ -259,31 +221,70 @@ func stmtList(n ast.Node) []ast.Stmt {
 	return nil
 }
 
-// onErrorPath reports whether the innermost statement list enclosing n that
-// ends in a return ends in one with a non-nil error, and no return serving a
-// result (successReturns) follows n inside that list, nested statements
-// included: every path from such a write ends in a response go-bricks
-// answers with the error, so it never reaches the success response. A write
-// that reaches an error return by other control flow (a goto, a loop exit)
-// is not detected. Any serving return rescues the write, whichever variable
-// it returns.
-func (c *headerCollector) onErrorPath(n ast.Node) bool {
-	var innermost *terminalBlock
-	for i := range c.terminals {
-		t := &c.terminals[i]
-		if t.from <= n.Pos() && n.End() <= t.to && (innermost == nil || t.from > innermost.from) {
-			innermost = t
-		}
-	}
-	if innermost == nil || !innermost.errorReturn {
-		return false
-	}
-	for _, pos := range c.successReturns {
-		if n.End() <= pos && pos < innermost.to {
+// followingStmts returns the statements that can run after n without a
+// jump: in every statement list enclosing n, the statements after the one
+// holding n. A switch or select clause is never one of them — its siblings
+// are other arms — and neither is the other arm of an if/else, which sits in
+// no list with the arm holding n. Statements before n in an enclosing loop
+// body could run on a later iteration but are not counted, so a write is
+// dropped rather than credited to them; nor are statements a goto reaches.
+// Lists are taken innermost first, and a list that ends in a return stops
+// the climb: control never leaves it to reach the enclosing statements.
+func followingStmts(body *ast.BlockStmt, n ast.Node) []ast.Stmt {
+	var tails [][]ast.Stmt // the statements after n's ancestor, outermost list first
+	var lists [][]ast.Stmt
+	ast.Inspect(body, func(node ast.Node) bool {
+		if _, ok := node.(*ast.FuncLit); ok {
 			return false
 		}
+		list := stmtList(node)
+		for i, stmt := range list {
+			if stmt.Pos() <= n.Pos() && n.End() <= stmt.End() {
+				tails = append(tails, list[i+1:])
+				lists = append(lists, list)
+			}
+		}
+		return true
+	})
+	var out []ast.Stmt
+	for i := len(tails) - 1; i >= 0; i-- {
+		out = appendFollowing(out, tails[i])
+		if _, ends := lists[i][len(lists[i])-1].(*ast.ReturnStmt); ends {
+			break
+		}
 	}
-	return true
+	return out
+}
+
+// appendFollowing appends the statements of list that are not switch or
+// select clauses.
+func appendFollowing(out, list []ast.Stmt) []ast.Stmt {
+	for _, stmt := range list {
+		switch stmt.(type) {
+		case *ast.CaseClause, *ast.CommClause:
+			continue
+		}
+		out = append(out, stmt)
+	}
+	return out
+}
+
+// reaches reports whether a serving return that match accepts lies in a
+// statement that can run after n (followingStmts), at any depth. A return
+// inside a function literal is never in served (the walk skips literals), so
+// it never matches.
+func (c *headerCollector) reaches(n ast.Node, match func(servedValue) bool) bool {
+	found := false
+	for _, stmt := range followingStmts(c.body, n) {
+		ast.Inspect(stmt, func(node ast.Node) bool {
+			if ret, ok := node.(*ast.ReturnStmt); ok {
+				served, ok := c.served[ret]
+				found = found || (ok && match(served))
+			}
+			return !found
+		})
+	}
+	return found
 }
 
 // inClosure reports whether n lies inside one of the body's function literals.
@@ -296,14 +297,28 @@ func (c *headerCollector) inClosure(n ast.Node) bool {
 	return false
 }
 
-// names merges the writes that reach a returned result.
+// names keeps the writes a serving return of their target can follow: first
+// the writes to a Headers field, which also decide which maps each result
+// holds, then the writes to a local map, which need a serving return of a
+// result holding the map (a declaration, or a returned literal).
 func (c *headerCollector) names() []string {
 	out := nameSet{}
 	maps.Copy(out, c.returned)
-	c.addLinked(out, c.returnedLinks)
-	for key := range c.results {
-		maps.Copy(out, c.fieldWrites[key])
-		c.addLinked(out, c.fieldLinks[key])
+	held := map[varDeclKey]map[varDeclKey]struct{}{}
+	for _, w := range c.writes {
+		if w.toMap || !c.reaches(w.node, func(s servedValue) bool { return s.hasKey && s.key == w.key }) {
+			continue
+		}
+		maps.Copy(out, w.names)
+		if held[w.key] == nil {
+			held[w.key] = map[varDeclKey]struct{}{}
+		}
+		maps.Copy(held[w.key], w.links)
+	}
+	for _, w := range c.writes {
+		if w.toMap && c.mapReaches(w, held) {
+			maps.Copy(out, w.names)
+		}
 	}
 	if len(out) == 0 {
 		return nil
@@ -311,26 +326,28 @@ func (c *headerCollector) names() []string {
 	return slices.Sorted(maps.Keys(out))
 }
 
-// addLinked adds the names written to each linked local map.
-func (c *headerCollector) addLinked(out nameSet, links map[varDeclKey]struct{}) {
-	for key := range links {
-		if _, reassigned := c.reassigned[key]; reassigned {
-			continue
-		}
-		maps.Copy(out, c.mapWrites[key])
+// mapReaches reports whether a write to a local map is followed by a serving
+// return of a result holding that map. A map that is ever reassigned holds
+// nothing.
+func (c *headerCollector) mapReaches(w *headerWrite, held map[varDeclKey]map[varDeclKey]struct{}) bool {
+	if _, reassigned := c.reassigned[w.key]; reassigned {
+		return false
 	}
+	return c.reaches(w.node, func(s servedValue) bool {
+		if _, ok := s.links[w.key]; ok {
+			return true
+		}
+		_, ok := held[s.key][w.key]
+		return s.hasKey && ok
+	})
 }
 
 // visit records one node of the handler's own body.
 func (c *headerCollector) visit(n ast.Node) {
-	if ret, ok := n.(*ast.ReturnStmt); ok {
-		c.recordReturn(ret)
-		return
-	}
-	if c.onErrorPath(n) {
-		return
-	}
+	c.cur = n
 	switch s := n.(type) {
+	case *ast.ReturnStmt:
+		c.recordReturn(s)
 	case *ast.AssignStmt:
 		c.recordAssign(s)
 	case *ast.DeclStmt:
@@ -341,11 +358,10 @@ func (c *headerCollector) visit(n ast.Node) {
 }
 
 // noteAssignments records, in a first walk and wherever the statement sits,
-// which existing
-// variables it assigns (reassigned) and whether it gives the named error
-// result anything but the literal nil (errAssigned). A name the statement
-// itself declares enters scope at its end; any other resolves to an earlier
-// declaration, so it is assigned, not declared.
+// which existing variables it assigns (reassigned) and whether it gives the
+// named error result anything but the literal nil (errAssigned). A name the
+// statement itself declares enters scope at its end; any other resolves to
+// an earlier declaration, so it is assigned, not declared.
 func (c *headerCollector) noteAssignments(stmt *ast.AssignStmt) {
 	for i, lhs := range stmt.Lhs {
 		key, ok := c.identDecl(ast.Unparen(lhs), stmt.End())
@@ -365,18 +381,26 @@ func isNilIdent(expr ast.Expr) bool {
 	return ok && id.Name == "nil"
 }
 
-// recordReturn records a nil-error return: its first result's declaration
-// joins the results, or a wrapper literal returned directly contributes its
-// Headers element.
+// recordReturn records a serving return: what declaration it returns, or the
+// Headers element of a wrapper literal it returns directly.
 func (c *headerCollector) recordReturn(ret *ast.ReturnStmt) {
+	if len(ret.Results) == 0 {
+		if !c.errAssigned && c.namedResult.name != "" && c.namedResult.name != "_" {
+			c.served[ret] = servedValue{key: c.namedResult, hasKey: true}
+		}
+		return
+	}
 	if !returnsNilError(ret) {
 		return
 	}
 	if key, ok := c.identDecl(stripAddressOf(ret.Results[0]), ret.Pos()); ok {
-		c.results[key] = struct{}{}
+		c.served[ret] = servedValue{key: key, hasKey: true}
 		return
 	}
-	c.addWrapperLiteral(ret.Results[0], c.returned, c.returnedLinks)
+	links := map[varDeclKey]struct{}{}
+	if c.addWrapperLiteral(ret.Results[0], c.returned, links) {
+		c.served[ret] = servedValue{links: links}
+	}
 }
 
 // recordAssign records each target of an assignment.
@@ -402,7 +426,8 @@ func (c *headerCollector) recordTarget(lhs, rhs ast.Expr, end token.Pos) {
 		}
 	case *ast.SelectorExpr:
 		if key, ok := c.headersDecl(target); ok && rhs != nil {
-			c.linkOrAdd(rhs, c.set(c.fieldWrites, key), c.links(key))
+			w := c.write(key, false)
+			c.linkOrAdd(rhs, w.names, w.links)
 		}
 	case *ast.IndexExpr:
 		if into := c.headerMap(target.X); into != nil {
@@ -415,11 +440,13 @@ func (c *headerCollector) recordTarget(lhs, rhs ast.Expr, end token.Pos) {
 // literal's Headers element for a would-be result, or a header map literal's
 // keys for a would-be local map.
 func (c *headerCollector) bindValue(key varDeclKey, rhs ast.Expr) {
-	if c.addWrapperLiteral(rhs, c.set(c.fieldWrites, key), c.links(key)) {
+	if lit, ok := stripAddressOf(rhs).(*ast.CompositeLit); ok && c.isWrapperLiteral(lit) {
+		w := c.write(key, false)
+		c.addWrapperLiteral(lit, w.names, w.links)
 		return
 	}
 	if lit, ok := ast.Unparen(rhs).(*ast.CompositeLit); ok {
-		c.addLiteralKeys(lit, c.set(c.mapWrites, key))
+		c.addLiteralKeys(lit, c.write(key, true).names)
 	}
 }
 
@@ -458,17 +485,17 @@ func (c *headerCollector) recordCall(call *ast.CallExpr) {
 }
 
 // headerMap returns the set the names written into expr belong to: the
-// field writes of <decl>.Headers, or the map writes of a local variable.
-// nil when expr is neither.
+// writes to <decl>.Headers, or to a local map variable. nil when expr is
+// neither.
 func (c *headerCollector) headerMap(expr ast.Expr) nameSet {
 	switch x := ast.Unparen(expr).(type) {
 	case *ast.SelectorExpr:
 		if key, ok := c.headersDecl(x); ok {
-			return c.set(c.fieldWrites, key)
+			return c.write(key, false).names
 		}
 	case *ast.Ident:
 		if key, ok := c.identDecl(x, x.Pos()); ok {
-			return c.set(c.mapWrites, key)
+			return c.write(key, true).names
 		}
 	}
 	return nil
@@ -501,20 +528,13 @@ func (c *headerCollector) identDecl(expr ast.Expr, at token.Pos) (varDeclKey, bo
 	return varDeclKey{name: id.Name, from: b.from}, true
 }
 
-// set returns the name set of key in sets, creating it.
-func (c *headerCollector) set(sets map[varDeclKey]nameSet, key varDeclKey) nameSet {
-	if sets[key] == nil {
-		sets[key] = nameSet{}
+// write returns the write the visited node makes to key, creating it.
+func (c *headerCollector) write(key varDeclKey, toMap bool) *headerWrite {
+	id := writeID{node: c.cur, key: key, toMap: toMap}
+	if c.writes[id] == nil {
+		c.writes[id] = &headerWrite{writeID: id, names: nameSet{}, links: map[varDeclKey]struct{}{}}
 	}
-	return sets[key]
-}
-
-// links returns the local maps linked to key's Headers, creating the set.
-func (c *headerCollector) links(key varDeclKey) map[varDeclKey]struct{} {
-	if c.fieldLinks[key] == nil {
-		c.fieldLinks[key] = map[varDeclKey]struct{}{}
-	}
-	return c.fieldLinks[key]
+	return c.writes[id]
 }
 
 // linkOrAdd records a value given to a Headers field: a composite literal's

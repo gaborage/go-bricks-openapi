@@ -104,6 +104,58 @@ func TestExtractResponseHeadersErrorPathWrites(t *testing.T) {
 		return res, server.NewServiceUnavailableError("down")
 	}
 	return res, nil`, nil},
+		{"sibling_case_return_does_not_rescue", `res := server.Result[Resp]{Headers: http.Header{}}
+	switch req.ID {
+	case "bad":
+		res.Headers.Set("Retry-After", "30")
+	case "ok":
+		return res, nil
+	}
+	return res, server.NewNotFoundError("x")`, nil},
+		{"sibling_select_clause_does_not_rescue", `res := server.Result[Resp]{Headers: http.Header{}}
+	select {
+	case <-ctx.Done():
+		res.Headers.Set("Retry-After", "30")
+	default:
+		return res, nil
+	}
+	return res, server.NewNotFoundError("x")`, nil},
+		{"other_if_arm_does_not_rescue", `res := server.Result[Resp]{Headers: http.Header{}}
+	if req.ID == "" {
+		res.Headers.Set("Retry-After", "30")
+	} else {
+		return res, nil
+	}
+	return res, server.NewNotFoundError("x")`, nil},
+		{"earlier_loop_return_does_not_rescue", `res := server.Result[Resp]{Headers: http.Header{}}
+	for i := range 3 {
+		if i == 1 {
+			return res, nil
+		}
+		res.Headers.Set("Retry-After", "30")
+	}
+	return res, server.NewNotFoundError("x")`, nil},
+		{"later_case_body_statement_rescues", `res := server.Result[Resp]{Headers: http.Header{}}
+	switch req.ID {
+	case "ok":
+		res.Headers.Set("Location", "/x")
+		return res, nil
+	}
+	return res, server.NewNotFoundError("x")`, []string{"Location"}},
+		{"return_after_switch_rescues", `res := server.Result[Resp]{Headers: http.Header{}}
+	switch req.ID {
+	case "ok":
+		res.Headers.Set("Location", "/x")
+	}
+	return res, nil`, []string{"Location"}},
+		{"map_write_needs_reachable_holder_return", `h := http.Header{}
+	res := server.Result[Resp]{Headers: h}
+	if req.ID == "" {
+		h.Set("Retry-After", "30")
+		return res, server.NewNotFoundError("x")
+	}
+	h.Set("Location", "/x")
+	return res, nil`, []string{"Location"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -159,7 +211,7 @@ func TestExtractResponseHeadersBareReturnNamedError(t *testing.T) {
 	f := func() { e = server.NewNotFoundError("x") }
 	_ = f
 	return`, []string{"Location"}},
-		{"serving_bare_return_rescues_error_path_write", `other := server.Created(req)
+		{"bare_return_of_named_does_not_rescue_other", `other := server.Created(req)
 	if req.ID == "" {
 		other.Headers = http.Header{"Location": {"/x"}}
 		if req.Name == "a" {
@@ -167,7 +219,24 @@ func TestExtractResponseHeadersBareReturnNamedError(t *testing.T) {
 		}
 		return other, server.NewNotFoundError("x")
 	}
-	return other, nil`, []string{"Location"}},
+	return other, nil`, nil},
+		{"serving_bare_return_rescues_named_write", `if req.ID == "" {
+		res.Headers = http.Header{"Location": {"/x"}}
+		if req.Name == "a" {
+			return
+		}
+		return res, server.NewNotFoundError("x")
+	}
+	return res, nil`, []string{"Location"}},
+		{"unrelated_nil_return_does_not_rescue", `other := server.Created(req)
+	if req.ID == "" {
+		other.Headers.Set("Retry-After", "30")
+		if req.Name == "a" {
+			return res, nil
+		}
+		return other, server.NewNotFoundError("x")
+	}
+	return other, nil`, nil},
 		{"non_serving_bare_return_does_not_rescue", `other := server.Created(req)
 	if req.ID == "" {
 		other.Headers = http.Header{"Location": {"/x"}}
