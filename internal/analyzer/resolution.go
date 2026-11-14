@@ -536,6 +536,16 @@ func inPackage(path string, f *ast.File, clause string, sure bool) bool {
 	return !sure && !neverImportable(path, f) && !buildIgnored(f)
 }
 
+// buildExcluded reports whether no build compiles the file at path, whatever
+// its other tags: go/build skips a name starting with _ or . (editor and
+// temporary files), and a //go:build ignore file (buildIgnored). Unlike
+// neverImportable it says nothing about the package clause, so the files of
+// package main are not excluded.
+func buildExcluded(path string, f *ast.File) bool {
+	base := filepath.Base(path)
+	return strings.HasPrefix(base, "_") || strings.HasPrefix(base, ".") || buildIgnored(f)
+}
+
 // buildIgnored reports whether f's build constraint requires the ignore tag:
 // it holds with every tag set, but not once ignore alone is unset. Other
 // constraints are not evaluated (a //go:build !linux file is not ignored).
@@ -945,11 +955,16 @@ func (a *ProjectAnalyzer) samePackageFiles(file *ast.File, path string) []pkgFil
 }
 
 // localTypeDecls returns every declaration of name in file's package, in
-// samePackageFiles order. Build constraints are not evaluated, so a type
-// declared in several build-tagged files has one entry per file.
+// samePackageFiles order. A file no build compiles (buildExcluded: a name
+// starting with _ or ., or //go:build ignore) is skipped, except file itself.
+// Other build constraints are not evaluated, so a type declared in several
+// build-tagged files has one entry per file.
 func (a *ProjectAnalyzer) localTypeDecls(name string, file *ast.File, path string) []typeDecl {
 	var decls []typeDecl
 	for _, pf := range a.samePackageFiles(file, path) {
+		if pf.path != path && buildExcluded(pf.path, pf.file) {
+			continue
+		}
 		if ts := typeSpecInFile(pf.file, name); ts != nil {
 			decls = append(decls, typeDecl{spec: ts, file: pf.file, path: pf.path})
 		}

@@ -123,6 +123,7 @@ type ProjectAnalyzer struct {
 	unresolvedRoutes []models.UnresolvedRoute           // Route registrations dropped because their path did not resolve
 	typeRegistry     map[string]*models.TypeInfo        // Named struct types reachable from routes (by final schema name)
 	pkgCache         map[string]map[string]*ast.File    // dir -> (file path -> parsed AST), populated on demand
+	chainMemo        map[chainMemoKey]chainMemoEntry    // followSpec results over pkgCache's ASTs, reset with it
 	nameAssign       map[string]string                  // "dir\x00pkg\x00Type" -> final schema name (collision qualification)
 	usedNames        map[string]struct{}                // final schema names already taken
 	directives       map[string]map[int]*directiveGroup // filename -> end line of a Directive comment group -> the group and its attached flag
@@ -161,6 +162,7 @@ func New(projectRoot string) *ProjectAnalyzer {
 		constants:      make(map[string]string),
 		typeRegistry:   make(map[string]*models.TypeInfo),
 		pkgCache:       make(map[string]map[string]*ast.File),
+		chainMemo:      make(map[chainMemoKey]chainMemoEntry),
 		nameAssign:     make(map[string]string),
 		usedNames:      make(map[string]struct{}),
 		directives:     map[string]map[int]*directiveGroup{},
@@ -258,6 +260,7 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	a.unresolvedRoutes = nil
 	a.typeRegistry = make(map[string]*models.TypeInfo)
 	a.pkgCache = make(map[string]map[string]*ast.File)
+	a.chainMemo = make(map[chainMemoKey]chainMemoEntry)
 	a.directives = make(map[string]map[int]*directiveGroup)
 	a.directiveFiles = make(map[string]struct{})
 	a.statedDecls = nil
@@ -3916,6 +3919,34 @@ func (a *ProjectAnalyzer) followChain(astFile *ast.File, filePath, name string, 
 // package), or a qualified name, resolved through file's imports in its own
 // package (followQualified). Anything else reaches no struct.
 func (a *ProjectAnalyzer) followSpec(ts *ast.TypeSpec, file *ast.File, path string, depth int, deep bool) (chainEnd, bool) {
+	key := chainMemoKey{spec: ts, depth: depth, deep: deep}
+	if m, ok := a.chainMemo[key]; ok {
+		return m.end, m.ok
+	}
+	end, ok := a.followSpecOnce(ts, file, path, depth, deep)
+	a.chainMemo[key] = chainMemoEntry{end: end, ok: ok}
+	return end, ok
+}
+
+// chainMemoKey identifies one followSpec call: a declaration (its file and
+// path are the ones declaring it) at one chain depth, followed deep or not.
+type chainMemoKey struct {
+	spec  *ast.TypeSpec
+	depth int
+	deep  bool
+}
+
+// chainMemoEntry is a followSpec result.
+type chainMemoEntry struct {
+	end chainEnd
+	ok  bool
+}
+
+// followSpecOnce is followSpec, uncached. Every build-tagged copy of every
+// name on a chain is followed (copyEnds), so without the cache a chain of
+// names each declared in n files would be walked n^depth times; with it,
+// each declaration is followed once per depth.
+func (a *ProjectAnalyzer) followSpecOnce(ts *ast.TypeSpec, file *ast.File, path string, depth int, deep bool) (chainEnd, bool) {
 	switch rhs := ast.Unparen(ts.Type).(type) {
 	case *ast.StructType:
 		return chainEnd{st: rhs, name: ts.Name.Name, pkg: file.Name.Name, file: file, path: path}, true
