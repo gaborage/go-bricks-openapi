@@ -4797,17 +4797,32 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, astFile *ast.File, fi
 	case embedNonStruct:
 		return []rankedField{a.embedProperty(field, astFile, filePath, depth)}, false
 	case embedMarshaler:
-		// go-bricks binds an exported embed's path, query or header tag as
-		// that parameter; the body is the promoted-method path's.
-		if tags.paramType != "" && token.IsExported(embeddedFieldName(field.Type)) {
-			return []rankedField{a.embedProperty(field, astFile, filePath, depth)}, false
-		}
+		return a.marshalerEmbedFields(field, astFile, filePath, depth, target, tags.paramType), false
 	case embedGeneric, embedUnresolvable:
 		a.warnDroppedEmbed(field, target)
 	default:
 		// embedOpaqueStruct: a struct with no exported field promotes nothing.
 	}
 	return nil, false
+}
+
+// marshalerEmbedFields is a well-known Marshaler embed's fields (target is
+// embedMarshaler). go-bricks binds an exported embed's path, query or header
+// tag as that parameter. Otherwise, while requestParamFields reads a
+// Marshaler request (quietEmbeds), the promoted methods own the body and the
+// embed adds nothing. Any other read documents a body from the embedding
+// struct's fields, so that struct is no Marshaler: the promoted methods are
+// cancelled, e.g. by a sibling embed at the same depth (type U struct{
+// uuid.UUID; Level }), and encoding/json writes the embed as it writes one through a defined
+// type (wellKnownMarshalerEmbed): uuid.UUID, net.IP, json.RawMessage and
+// json.Number as one property keyed by the type name, time.Time and the
+// netip structs as nothing.
+func (a *ProjectAnalyzer) marshalerEmbedFields(field *ast.Field, astFile *ast.File, filePath string, depth int, target embedTarget, paramType string) []rankedField {
+	param := paramType != "" && token.IsExported(embeddedFieldName(field.Type))
+	if !param && (a.quietEmbeds || wellKnownMarshalerEmbed(target.stop, true).class != embedNonStruct) {
+		return nil
+	}
+	return []rankedField{a.embedProperty(field, astFile, filePath, depth)}
 }
 
 // buildFieldInfo creates a field from a field name and AST field, its tags

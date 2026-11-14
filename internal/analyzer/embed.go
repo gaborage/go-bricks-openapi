@@ -275,13 +275,15 @@ var wellKnownStructs = map[string]bool{
 // well-known Marshaler type. Reached directly or through aliases only, the
 // type keeps its methods, which the embedding struct promotes: the
 // promoted-method path owns its body, so it is a property only as a path,
-// query or header parameter (embeddedFields). A defined type on the way
-// drops them, and encoding/json reads the underlying type: time.Time and
-// the netip structs (netip.Addr, netip.Prefix, netip.AddrPort), structs with
-// no exported field, add nothing, while uuid.UUID ([16]byte),
-// json.RawMessage and net.IP ([]byte) and json.Number (string) are one
-// property, typed as a field of the written type is (a byte string, a
-// string, or an untyped object with that field's warning).
+// query or header parameter, or when a sibling embed cancels those methods
+// and it is written as through a defined type (marshalerEmbedFields). A
+// defined type on the way drops them, and encoding/json reads the
+// underlying type: time.Time and the netip structs (netip.Addr,
+// netip.Prefix, netip.AddrPort), structs with no exported field, add
+// nothing, while uuid.UUID ([16]byte), json.RawMessage and net.IP ([]byte)
+// and json.Number (string) are one property, typed as a field of the
+// written type is (a byte string, a string, or an untyped object with that
+// field's warning).
 func wellKnownMarshalerEmbed(qualified string, defined bool) embedTarget {
 	switch {
 	case !defined:

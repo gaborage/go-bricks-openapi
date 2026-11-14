@@ -434,12 +434,10 @@ nested Go module, is not.
   (`type raw[T any] = json.RawMessage`), or of a generic type declaring a
   marshal method (`MarshalJSON` on `hidden[T]`) is dropped with a warning
   whatever its name: the promoted method makes the embedding struct a
-  Marshaler. Exclude the embed with `json:"-"` to silence the warning. A
-  well-known Marshaler embed adds no property even when a sibling embed at
-  its depth cancels its methods, although `encoding/json` then writes it
-  as one field keyed by its type name. Two fields of one key at the
-  shallowest depth that key reaches, both tagged or both untagged
-  (properties included), which `encoding/json` both drops, keep the first.
+  Marshaler. Exclude the embed with `json:"-"` to silence the warning. Two
+  fields of one key at the shallowest depth that key reaches, both tagged
+  or both untagged (properties included), which `encoding/json` both
+  drops, keep the first.
 - A named type that contains itself through a slice or map
   (`type Tree map[string]Tree`), or that nests more than nine named types
   deep, is documented down to the point where it recurs or the nine-deep cap
