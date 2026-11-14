@@ -283,7 +283,9 @@ nested Go module, is not.
   first named result only if the named error result is never assigned
   anything but the literal `nil` outside function literals. A write is
   dropped when the innermost block or `case` enclosing it that ends in a
-  `return` ends in one with a non-`nil` error; a write that reaches an error
+  `return` ends in one with a non-`nil` error, unless a `return …, nil` (or a
+  bare `return` that counts the named result) follows the write inside that
+  block, nested statements included; a write that reaches an error
   return by other control flow (`goto`, a loop exit) is still documented. A
   local map that is ever reassigned after its declaration (`h = …`)
   contributes nothing. They are documented on the

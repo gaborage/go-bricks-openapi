@@ -70,6 +70,40 @@ func TestExtractResponseHeadersErrorPathWrites(t *testing.T) {
 	}
 	func() { return }()
 	return res, nil`, []string{"Etag"}},
+		{"nil_return_reachable_before_error_return", `res := server.Result[Resp]{Headers: http.Header{"Location": {"/x"}}}
+	if req.ID != "" {
+		return res, nil
+	}
+	return res, server.NewNotFoundError("x")`, []string{"Location"}},
+		{"nested_nil_return_after_write", `res := server.Result[Resp]{Headers: http.Header{}}
+	if req.ID == "" {
+		res.Headers.Set("Location", "/x")
+		for range 1 {
+			switch req.Name {
+			case "a":
+				return res, nil
+			}
+		}
+		return res, server.NewNotFoundError("x")
+	}
+	return res, nil`, []string{"Location"}},
+		{"nil_return_before_write_does_not_count", `res := server.Result[Resp]{Headers: http.Header{}}
+	if req.ID == "" {
+		if req.Name == "a" {
+			return res, nil
+		}
+		res.Headers.Set("Retry-After", "30")
+		return res, server.NewServiceUnavailableError("down")
+	}
+	return res, nil`, nil},
+		{"closure_nil_return_does_not_count", `res := server.Result[Resp]{Headers: http.Header{}}
+	if req.ID == "" {
+		res.Headers.Set("Retry-After", "30")
+		f := func() (server.Result[Resp], error) { return res, nil }
+		_ = f
+		return res, server.NewServiceUnavailableError("down")
+	}
+	return res, nil`, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -125,6 +159,25 @@ func TestExtractResponseHeadersBareReturnNamedError(t *testing.T) {
 	f := func() { e = server.NewNotFoundError("x") }
 	_ = f
 	return`, []string{"Location"}},
+		{"serving_bare_return_rescues_error_path_write", `other := server.Created(req)
+	if req.ID == "" {
+		other.Headers = http.Header{"Location": {"/x"}}
+		if req.Name == "a" {
+			return
+		}
+		return other, server.NewNotFoundError("x")
+	}
+	return other, nil`, []string{"Location"}},
+		{"non_serving_bare_return_does_not_rescue", `other := server.Created(req)
+	if req.ID == "" {
+		other.Headers = http.Header{"Location": {"/x"}}
+		if req.Name == "a" {
+			return
+		}
+		return other, server.NewNotFoundError("x")
+	}
+	e = server.NewNotFoundError("y")
+	return other, nil`, nil},
 		{"explicit_nil_return_still_counts", `res.Headers = http.Header{"Location": {"/x"}}
 	e = server.NewNotFoundError("x")
 	return res, nil`, []string{"Location"}},

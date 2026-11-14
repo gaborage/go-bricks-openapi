@@ -89,6 +89,10 @@ type headerCollector struct {
 	// anything but the literal nil: a bare return then counts nothing.
 	errResult   varDeclKey
 	errAssigned bool
+	// successReturns are the positions of the body's returns, outside
+	// function literals, that serve a result: a nil-error return, or a bare
+	// return when it counts the named result.
+	successReturns []token.Pos
 }
 
 // terminalBlock is one statement list (a block or a case clause body) whose
@@ -141,12 +145,16 @@ func (a *ProjectAnalyzer) extractResponseHeaders(funcDecl *ast.FuncDecl, serverA
 		errResult:     varDeclKey{name: secondNamedResult(funcDecl), from: funcDecl.Body.Pos()},
 	}
 	outer := funcTypeBindings(funcDecl.Type, receiverVarName(funcDecl.Recv), funcDecl.Body.Pos())
-	bare := false
-	walkScoped(funcDecl.Body, outer, func(n ast.Node, scopes constScopes) {
-		if c.inClosure(n) {
-			return
+	// The assignments go first: whether a bare return serves the named result
+	// (errAssigned) decides which returns rescue a write from an error path.
+	c.walk(funcDecl.Body, outer, func(n ast.Node) {
+		if assign, ok := n.(*ast.AssignStmt); ok {
+			c.noteAssignments(assign)
 		}
-		c.scopes = scopes
+	})
+	c.successReturns = successReturns(funcDecl.Body, !c.errAssigned)
+	bare := false
+	c.walk(funcDecl.Body, outer, func(n ast.Node) {
 		if ret, ok := n.(*ast.ReturnStmt); ok && len(ret.Results) == 0 {
 			bare = true
 		}
@@ -187,6 +195,37 @@ func secondNamedResult(funcDecl *ast.FuncDecl) string {
 	return names[1]
 }
 
+// walk visits every node of body outside function literals with the binding
+// chain in effect there set on the collector.
+func (c *headerCollector) walk(body *ast.BlockStmt, outer map[string]binding, visit func(ast.Node)) {
+	walkScoped(body, outer, func(n ast.Node, scopes constScopes) {
+		if c.inClosure(n) {
+			return
+		}
+		c.scopes = scopes
+		visit(n)
+	})
+}
+
+// successReturns returns the positions of body's returns, outside function
+// literals, that serve a result: those with the bare nil identifier as their
+// error, and bare returns when bareServes.
+func successReturns(body *ast.BlockStmt, bareServes bool) []token.Pos {
+	var out []token.Pos
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt:
+			if returnsNilError(s) || (bareServes && len(s.Results) == 0) {
+				out = append(out, s.Pos())
+			}
+		}
+		return true
+	})
+	return out
+}
+
 // terminalBlocks returns every statement list in body whose last
 // statement is a return. A function literal's lists are
 // included but harmless: no recorded write lies inside one.
@@ -221,10 +260,13 @@ func stmtList(n ast.Node) []ast.Stmt {
 }
 
 // onErrorPath reports whether the innermost statement list enclosing n that
-// ends in a return ends in one with a non-nil error: a write there sits on a
-// path go-bricks answers with an error, so it never reaches the success
-// response. A write that reaches an error return by other control flow (a
-// goto, a loop exit) is not detected.
+// ends in a return ends in one with a non-nil error, and no return serving a
+// result (successReturns) follows n inside that list, nested statements
+// included: every path from such a write ends in a response go-bricks
+// answers with the error, so it never reaches the success response. A write
+// that reaches an error return by other control flow (a goto, a loop exit)
+// is not detected. Any serving return rescues the write, whichever variable
+// it returns.
 func (c *headerCollector) onErrorPath(n ast.Node) bool {
 	var innermost *terminalBlock
 	for i := range c.terminals {
@@ -233,7 +275,15 @@ func (c *headerCollector) onErrorPath(n ast.Node) bool {
 			innermost = t
 		}
 	}
-	return innermost != nil && innermost.errorReturn
+	if innermost == nil || !innermost.errorReturn {
+		return false
+	}
+	for _, pos := range c.successReturns {
+		if n.End() <= pos && pos < innermost.to {
+			return false
+		}
+	}
+	return true
 }
 
 // inClosure reports whether n lies inside one of the body's function literals.
@@ -277,9 +327,6 @@ func (c *headerCollector) visit(n ast.Node) {
 		c.recordReturn(ret)
 		return
 	}
-	if assign, ok := n.(*ast.AssignStmt); ok {
-		c.noteAssignments(assign)
-	}
 	if c.onErrorPath(n) {
 		return
 	}
@@ -293,7 +340,8 @@ func (c *headerCollector) visit(n ast.Node) {
 	}
 }
 
-// noteAssignments records, wherever the statement sits, which existing
+// noteAssignments records, in a first walk and wherever the statement sits,
+// which existing
 // variables it assigns (reassigned) and whether it gives the named error
 // result anything but the literal nil (errAssigned). A name the statement
 // itself declares enters scope at its end; any other resolves to an earlier

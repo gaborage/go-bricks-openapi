@@ -64,6 +64,18 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.POST(hr, r, "/inner-shadow", m.innerShadow)
 	server.POST(hr, r, "/before-error", m.beforeError)
 	server.POST(hr, r, "/named-bare-error", m.namedBareError)
+	server.POST(hr, r, "/nil-before-error", m.nilBeforeError)
+}
+
+// nilBeforeError sets Location, then returns the result with a nil error on
+// one path before the block's terminal error return -> Location on 201.
+func (m *Module) nilBeforeError(req ItemReq, ctx server.HandlerContext) (server.Result[Item], server.IAPIError) {
+	res := server.Created(Item{ID: req.Name})
+	res.Headers = http.Header{"Location": {"/items/1"}}
+	if req.Name != "" {
+		return res, nil
+	}
+	return res, server.NewNotFoundError("item")
 }
 
 // beforeError writes Retry-After only in a block that ends in an error
@@ -108,9 +120,11 @@ func (m *Module) errorOnly(req ItemReq, ctx server.HandlerContext) (server.Resul
 }
 
 // innerShadow writes a header on an inner-block variable that only shares
-// the returned one's name -> no headers key.
+// the returned one's name -> no headers key. The outer result is a plain
+// 200 literal so the row isolates header scoping from success-status
+// inference.
 func (m *Module) innerShadow(req ItemReq, ctx server.HandlerContext) (server.Result[Item], server.IAPIError) {
-	res := server.Created(Item{ID: req.Name})
+	res := server.Result[Item]{Data: Item{ID: req.Name}}
 	if req.Name != "" {
 		res := server.Result[Item]{}
 		res.Headers = http.Header{"X-Shadowed": {"1"}}
