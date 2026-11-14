@@ -472,9 +472,7 @@ nested Go module, is not.
 - A `,string`-tagged field whose type is a named pointer type
   (`type PI *int64`) keeps the unquoted schema of the scalar it points to,
   which matches the classic `encoding/json` (Go 1.26 and earlier) but not Go
-  1.27's default engine, which quotes it; an alias of a pointer type
-  (`type PA = *int64`) is documented the same way, although both engines
-  quote it.
+  1.27's default engine, which quotes it.
 - A response payload, the `T` of `server.Result[T]` /
   `server.ResultWithMeta[T]` or a bare handler return of type `T` (with or
   without `WithRawResponse()`), is documented exactly as a struct field of

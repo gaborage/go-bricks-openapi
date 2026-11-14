@@ -9,6 +9,30 @@ import (
 	"github.com/gaborage/go-bricks-openapi/internal/models"
 )
 
+// TestJSONStringOptionPointerAlias pins the PointerAlias bit (issue 154): a
+// field whose type is an alias chain ending at a *T literal (type PA =
+// *int64) is quoted by both encoding/json engines, so with one pointer level
+// it is a nullable string, like *int64 written in the field. The rule's
+// one-pointer cap still holds: an alias of *PI (type PAP = *PI) is two
+// levels and keeps its unquoted schema. Without the bit, PA is the named
+// pointer PI's unquoted integer.
+func TestJSONStringOptionPointerAlias(t *testing.T) {
+	gen := New(defaultTitle, defaultVersion, defaultDescription)
+	i64 := prim(goTypeInt64)
+	alias := quotedField(named("PA"), ptrOf(i64))
+	alias.PointerAlias = true
+	assert.Equal(t, &OpenAPIProperty{Type: typeString, Nullable: true}, gen.fieldInfoToProperty(alias))
+
+	twoLevels := quotedField(named("PAP"), ptrOf(ptrOf(i64)))
+	twoLevels.PointerAlias = true
+	plain := *twoLevels
+	plain.JSONString = false
+	assert.Equal(t, gen.fieldInfoToProperty(&plain), gen.fieldInfoToProperty(twoLevels))
+
+	unmarked := quotedField(named("PA"), ptrOf(i64))
+	assert.Equal(t, &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Nullable: true}, gen.fieldInfoToProperty(unmarked))
+}
+
 const (
 	jsCents = "Cents"
 	jsPI    = "PI"

@@ -369,6 +369,7 @@ type FieldInfo struct {
 	JSONName      string            // Parsed from `json:"name"` tag; "-" for `json:"-,"` too
 	JSONSkip      bool              // Only a bare `json:"-"`: encoding/json skips the field. Never decide skipping by JSONName
 	JSONString    bool              // The json tag carries the ",string" option (`json:"id,string"`)
+	PointerAlias  bool              // Set only with JSONString: the field's type is an alias chain, through aliases only, ending at a *T literal (type PA = *int64); unlike type PI *int64, both json engines quote it
 	ParamType     string            // "path", "query", "header", or "" for body fields
 	ParamName     string            // Parsed from `param:"name"`, `query:"name"`, or `header:"name"` tags
 	Required      bool              // Parsed from `validate:"required"` tag

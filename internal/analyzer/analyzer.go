@@ -4538,8 +4538,57 @@ func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field, astFile 
 	if field.Tag != nil {
 		a.parseFieldTags(&fieldInfo, field.Tag)
 	}
+	if fieldInfo.JSONString {
+		fieldInfo.PointerAlias = a.aliasesPointer(field.Type, astFile, filePath, 0)
+	}
 
 	return rankedField{FieldInfo: fieldInfo, decl: fieldDecl{field: field, file: astFile, path: filePath, depth: depth}}
+}
+
+// aliasesPointer reports whether expr, a type written in file (at path), names
+// an alias chain that ends at a *T type literal (issue 154): type PA = *int64,
+// type PAA = PA, type PC = *Cents, or an in-module b.PA. The chain is followed
+// through aliases only, each step in its declaring package, so a defined type
+// on the way (type PA2 = PI, with type PI *int64) makes it false. Every
+// declaration of a name must agree: build-tagged ones that disagree are false.
+// Parentheses are transparent at every step: type PA = (*int64) and
+// type PB = (PA) are such chains. depth caps a cyclic chain, which is invalid
+// Go but still parses.
+func (a *ProjectAnalyzer) aliasesPointer(expr ast.Expr, file *ast.File, path string, depth int) bool {
+	if depth > maxNamedResolutionDepth {
+		return false
+	}
+	decls := a.aliasCandidateDecls(expr, file, path)
+	if len(decls) == 0 {
+		return false
+	}
+	for _, d := range decls {
+		if !d.spec.Assign.IsValid() {
+			return false
+		}
+		if _, isPointer := ast.Unparen(d.spec.Type).(*ast.StarExpr); !isPointer && !a.aliasesPointer(d.spec.Type, d.file, d.path, depth+1) {
+			return false
+		}
+	}
+	return true
+}
+
+// aliasCandidateDecls returns the declarations of the named type expr writes
+// in file, inside any parentheses: a local name's in its package, an in-module
+// q.T's in q's package (inModuleTypeSite). Any other expression, and a name
+// with no declaration in the module, yields none.
+func (a *ProjectAnalyzer) aliasCandidateDecls(expr ast.Expr, file *ast.File, path string) []typeDecl {
+	switch t := ast.Unparen(expr).(type) {
+	case *ast.Ident:
+		return a.localTypeDecls(t.Name, file, path)
+	case *ast.SelectorExpr:
+		if x, ok := t.X.(*ast.Ident); ok {
+			if site, name, ok := a.inModuleTypeSite(x.Name+"."+t.Sel.Name, file); ok {
+				return a.localTypeDecls(name, site.file, site.path)
+			}
+		}
+	}
+	return nil
 }
 
 // warnUintptrField reports a field, declared at loc, whose type holds a
