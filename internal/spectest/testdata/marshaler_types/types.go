@@ -365,3 +365,58 @@ type IDReq struct {
 	uuid.UUID
 	ID string `param:"id"`
 }
+
+// JM is an interface declaring MarshalJSON: a field of it is written through
+// the held value's MarshalJSON, and a struct embedding it through the
+// promoted one.
+type JM interface{ MarshalJSON() ([]byte, error) }
+
+// JMb also declares MarshalJSON.
+type JMb interface {
+	MarshalJSON() ([]byte, error)
+}
+
+// JM2 embeds JM: its methods count at JM2's own depth.
+type JM2 interface {
+	JM
+	Name() string
+}
+
+// J2 is a defined type over JM: unlike a defined type over a struct, it
+// keeps the interface's methods.
+type J2 JM
+
+// BadJM's MarshalJSON has the wrong signature, so it does not count.
+type BadJM interface{ MarshalJSON() string }
+
+// NJM is written through the MarshalJSON its embedded JM promotes.
+type NJM struct {
+	JM
+	X int `json:"x"`
+}
+
+// NJM2 is written through the MarshalJSON its embedded JM2 promotes.
+type NJM2 struct {
+	JM2
+	Z int `json:"z"`
+}
+
+// ND is written through the MarshalJSON its embedded J2 promotes.
+type ND struct {
+	J2
+	V int `json:"v"`
+}
+
+// NBad is written from its fields: BadJM's MarshalJSON does not count.
+type NBad struct {
+	BadJM
+	W int `json:"w"`
+}
+
+// JMTie's embedded JM and JMb cancel each other's MarshalJSON, so it is
+// written from its fields, each through its own interface's MarshalJSON.
+type JMTie struct {
+	JM
+	JMb
+	C int `json:"c"`
+}

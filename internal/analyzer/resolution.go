@@ -58,6 +58,9 @@ const (
 const (
 	declsShapeCause = "no common container shape or scalar kind"
 	declsClashCause = "they reach two structs of one name in different packages"
+	// declsInterfaceCause: one declares an interface holding a marshal method,
+	// another no interface or one with other marshal methods (#179).
+	declsInterfaceCause = "not all of them declare an interface with the same marshal methods"
 )
 
 type resolveMode int
@@ -593,19 +596,29 @@ func fileBuildConstraint(f *ast.File) constraint.Expr {
 }
 
 // resolveLocal resolves a named type declared in c's package (the field's
-// own, or the package inModuleTypeSite found). A struct (or a chain ending at
+// own, or the package inModuleTypeSite found). Outside a parameter, a name
+// whose build-tagged declarations disagree on an interface's marshal methods
+// is an untyped object, noted (interfaceCopiesFallback). A struct (or a chain ending at
 // one) is a ref, recorded with the directory of the struct the chain reaches,
-// which may be another package's; a name already open, or one past the depth
-// cap, is cut; in identity mode a non-param Marshaler type is a Marshaler
-// leaf (marshalerLeaf); anything else resolves through its declarations.
+// which may be another package's; a non-param name whose chain ends at an
+// interface declaring one of the seven methods is a leaf of its method set
+// (interfaceMarshalerLeaf); a name already open, or one past the depth cap,
+// is cut; in identity mode a non-param Marshaler type is a Marshaler leaf
+// (marshalerLeaf); anything else resolves through its declarations.
 func (a *ProjectAnalyzer) resolveLocal(leaf models.TypeShape, c resolveCtx, mode resolveMode) models.TypeShape {
 	name := leaf.Name
+	if r, disagree := a.interfaceCopiesFallback(name, c); disagree {
+		return r
+	}
 	if _, _, _, structPath, ok := a.resolveTypeSpecChain(c.file, c.path, name); ok {
 		if r, isMarshaler := a.structMarshalerLeaf(name, c, mode); isMarshaler {
 			return r
 		}
 		c.recordRef(name, filepath.Dir(structPath))
 		return models.TypeShape{Kind: models.ShapeRef, Name: name}
+	}
+	if r, isMarshaler := a.interfaceMarshalerLeaf(name, c, mode); isMarshaler {
+		return r
 	}
 	if why := c.st.cut(c.typeKey(name)); why != fallbackNone {
 		c.st.note(fieldFallback{kind: why, typeName: c.display(name)})
@@ -646,8 +659,68 @@ func (a *ProjectAnalyzer) marshalerLeaf(name string, decls []typeDecl, c resolve
 	return models.TypeShape{Kind: models.ShapeMarshaler, Name: name, Elem: &under, Stated: stated}
 }
 
+// interfaceMarshalerLeaf resolves name when its chain of named types ends at
+// an interface literal (endsAtInterface) whose method set (methodSetOf: its
+// declared and embedded methods) holds one of the seven methods, as
+// structMarshalerLeaf does a struct's (#179); else ok is false. A defined type
+// over an interface keeps the interface's methods, so mode drops nothing
+// here. encoding/json v1 picks a field's encoder from the static interface
+// type, so the leaf follows the interface's methods, not the held value's.
+func (a *ProjectAnalyzer) interfaceMarshalerLeaf(name string, c resolveCtx, mode resolveMode) (models.TypeShape, bool) {
+	if c.st.param || !a.endsAtInterface(c.file, c.path, name, 0) {
+		return models.TypeShape{}, false
+	}
+	return a.structMarshalerLeaf(name, c, mode)
+}
+
+// endsAtInterface reports whether name, declared in file's package, is an
+// interface literal or a chain of local or in-module qualified named types
+// ending at one, within followChain's depth cap.
+func (a *ProjectAnalyzer) endsAtInterface(file *ast.File, path, name string, depth int) bool {
+	if depth >= maxNamedResolutionDepth {
+		return false
+	}
+	ts, tsFile, tsPath, ok := a.resolveLocalTypeSpec(file, path, name)
+	return ok && a.specEndsAtInterface(ts, tsFile, tsPath, depth)
+}
+
+// specEndsAtInterface is endsAtInterface for one declaration, ts in file.
+// A name further down the chain is read through its first declaration:
+// when that name's build-tagged copies disagree, its own resolution notes it
+// (interfaceCopiesFallback) and its method set is empty
+// (interfaceCopiesDisagree), whatever the file order.
+func (a *ProjectAnalyzer) specEndsAtInterface(ts *ast.TypeSpec, file *ast.File, path string, depth int) bool {
+	switch t := ast.Unparen(ts.Type).(type) {
+	case *ast.InterfaceType:
+		return true
+	case *ast.Ident:
+		return a.endsAtInterface(file, path, t.Name, depth+1)
+	case *ast.SelectorExpr:
+		site, target, inModule := a.inModuleTypeSite(a.typeShape(t).Name, file)
+		return inModule && a.endsAtInterface(site.file, site.path, target, depth+1)
+	default:
+		return false
+	}
+}
+
+// interfaceCopiesFallback resolves name, outside a parameter, when its
+// build-tagged declarations disagree on an interface's marshal methods
+// (interfaceCopiesDisagree): one declaring an interface that holds one of
+// the seven methods beside one that is no interface or holds other ones.
+// Which applies depends on the build, so name is an untyped object, noted
+// as a disagreement, in either file order (#179). A parameter is bound by
+// kind and never reads the methods, so it resolves as before.
+func (a *ProjectAnalyzer) interfaceCopiesFallback(name string, c resolveCtx) (models.TypeShape, bool) {
+	if c.st.param || !a.interfaceCopiesDisagree(name, c, nil) {
+		return models.TypeShape{}, false
+	}
+	c.st.note(fieldFallback{kind: fallbackDeclsDisagree, typeName: c.display(name), detail: declsInterfaceCause})
+	return models.TypeShape{Kind: models.ShapeNamed, Name: name}, true
+}
+
 // structMarshalerLeaf resolves name, a named type whose chain ends at a
-// struct, in a body position: a text leaf when its method set (declared and
+// struct (or, through interfaceMarshalerLeaf, at an interface), in a body
+// position: a text leaf when its method set (declared and
 // promoted: methodSetOf) makes it a string both ways, a noted Marshaler leaf
 // when it holds any other of the seven methods, else ok is false and it stays
 // a ref. In underlying mode name's declared methods are dropped. A parameter

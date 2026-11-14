@@ -314,7 +314,11 @@ nested Go module, is not.
   `AppendText`, `UnmarshalJSON`, `UnmarshalJSONFrom` or `UnmarshalText` method
   with the exact `encoding/json` signature, on the type or its pointer, or on a
   type it aliases, declared or promoted from an embedded field) is documented
-  from its method set, not from its fields or underlying type:
+  from its method set, not from its fields or underlying type. An in-module
+  interface's method set is the methods it declares plus those of the
+  interfaces it embeds, so a field of such an interface type, and a struct
+  embedding one, are Marshaler types too, as is a defined type over one
+  (`type J2 JM` keeps `JM`'s methods):
   - a type `encoding/json` writes and reads as text — `MarshalText` and
     `UnmarshalText`, declared or promoted, with no `MarshalJSON`,
     `MarshalJSONTo`, `UnmarshalJSON` or `UnmarshalJSONFrom` (`AppendText`
@@ -372,7 +376,15 @@ nested Go module, is not.
   in the jsonv2-backed `encoding/json` (the default build since Go 1.27),
   which writes a struct embedding it as a bare number, and the classic one
   as an object, so such a struct is `{}` with a warning, whatever the
-  embed's tag (`json:"-"` included: Go promotes the methods anyway). Methods in build-tagged files count (build constraints are
+  embed's tag (`json:"-"` included: Go promotes the methods anyway). An
+  interface-typed field is documented from the interface's declared methods,
+  as the classic `encoding/json` (`GOEXPERIMENT=nojsonv2`) writes it; the
+  default jsonv2-backed engine instead calls the held value's own methods,
+  so a field of a text interface is documented as a string even where that
+  engine writes the held value's `MarshalJSON` output. An in-module
+  interface that embeds an out-of-module one (`json.Marshaler`) contributes
+  only its own methods, silently; a struct embedding `json.Marshaler`
+  directly keeps the unresolvable-embed warning. Methods in build-tagged files count (build constraints are
   not evaluated). A Marshaler type's own fields are not read, so their tags
   and types are not checked and raise no warning; a Marshaler request's
   fields are still read to find its parameters, so a malformed tag on any of
@@ -666,7 +678,11 @@ nested Go module, is not.
   or `type W dw.Item` beside `type W lx.Item`), or that each reach a struct
   but not the same one (`type W dw.Item` beside `type W dw.Other`), are
   documented as an untyped object, with a warning naming which of those two
-  causes applies, and register no component. Each such copy is followed to
+  causes applies, and register no component. So are copies of which one
+  declares an interface holding a marshal method and another is no interface
+  or one with other marshal methods (`type BT interface{ MarshalJSON() ([]byte, error) }`
+  beside `type BT struct{...}`), outside a parameter, with their own cause;
+  such a type promotes nothing into a struct embedding it. Each such copy is followed to
   its struct through its own file's imports and any aliases or defined types
   on the way, in other packages too, so file order decides nothing. That holds
   wherever the type is used, whichever package of the module declares it,

@@ -28,3 +28,10 @@ func (a Amount) MarshalText() ([]byte, error) { return []byte("1 USD"), nil }
 
 // UnmarshalText reads the amount.
 func (a *Amount) UnmarshalText(b []byte) error { return nil }
+
+// TM is an interface declaring the text pair: a field or embed of it is
+// written and read as text, a string both ways.
+type TM interface {
+	MarshalText() ([]byte, error)
+	UnmarshalText(b []byte) error
+}
