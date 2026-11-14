@@ -131,7 +131,7 @@ exit "$status"
 ### Comment directives
 
 A directive is an `//openapi:<name>[ <args>]` comment, and each name has one
-placement. A **route directive** (`public`, `errors`) sits in a comment group
+placement. A **route directive** (`public`, `errors`, `meta`) sits in a comment group
 whose **last line sits directly above a route registration call**. A route
 directive anywhere else (inside the call, on the handler, above an enclosing
 `if`, separated from the call by a blank line, after code on the same line as
@@ -153,6 +153,10 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	// Orders conflict when the idempotency key is replayed.
 	//openapi:errors 404, 409
 	server.POST(hr, r, "/orders", createOrder)
+
+	// listOrders returns server.ResultWithMeta[[]Order] with total/limit/offset.
+	//openapi:meta PageMeta
+	server.GET(hr, r, "/orders", listOrders)
 }
 ```
 
@@ -160,6 +164,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 | --- | --- | --- |
 | `//openapi:public` | none | Emits `security: []` for that operation. By default every operation carries the tenant security scheme; a route that needs no auth (health checks, login, webhooks) opts out this way. go-bricks itself has no per-route tenant opt-out API as of v0.71.1. |
 | `//openapi:errors` | a single-line, comma-separated list of status codes (400–599); whitespace after commas is tolerated | Adds one error response per code, referencing the same error envelope the route's `400`/`500` use, described with the canonical HTTP status text. |
+| `//openapi:meta` | exactly one type name, `Name` or `pkg.Name`, resolved in the file holding the registration (its package, or its imports) to a struct declared in this module | Documents the meta keys a `server.ResultWithMeta[T]` handler supplies (go-bricks types its `Meta` as `map[string]any`). The struct is emitted as an ordinary component, and the success envelope's `meta` becomes `allOf: [<the framework's timestamp/traceId object>, {$ref: <Type>}]`; `data` is unchanged, and a route without the directive keeps the two-key `meta`. It is not applied, with a warning, when the type is generic, does not resolve to a struct of this module, or is a Marshaler type; when the handler does not return `server.ResultWithMeta[T]` or `*server.ResultWithMeta[T]` (a `Result[T]`, `NoContentResult`, bare payload, unresolvable handler or raw `Add` route); on a `WithRawResponse()` route or a `204` route, which send no envelope `meta`, and on a JOSE route, whose `meta` is sealed (not documented); and when the struct declares, directly or through an embedded struct, a property named `timestamp` or `traceId`, keys go-bricks always writes itself. Repeated lines naming one type collapse, the first line's spelling naming the component (an alias names the type it aliases; a defined type is a type of its own); lines naming two types warn and neither applies. A refused directive adds no component. |
 | `//openapi:schema` | a type, exactly `string`, `integer`, `number` or `boolean`, and an optional format token copied verbatim (`//openapi:schema string decimal`) | States the wire schema of a Marshaler type the project declares (a Stated schema). In every JSON body position (field, pointer field, slice item, map value, nested container, `Result[T]` payload, request body) the type is documented as exactly `{type: <type>}` plus `format` when given, inline with no component, instead of `{}`; a pointer field adds `nullable: true`, a `Result[*T]` payload does not. Its Marshaler warning is not raised, and its routes count as typed. `validate` keywords stay dropped (a slice's or map's cardinality and `required` are kept) and `example:` is converted to the stated type, dropped when it has no valid form in it. Path, query and header parameters and JOSE routes are unchanged. It has no effect, with a warning, on a type that is not a Marshaler type, on a generic type, on a plain alias (state it on the aliased type, whose Stated schema the alias uses), on a type with an encode-side method (`MarshalJSON`, `MarshalJSONTo`, `MarshalText`, `AppendText`) outside its value method set, and on a type that encodes as text both ways stated as anything but `string`. An alias that is itself a marshal-method receiver takes its own directive; a defined type over the type and a struct embedding it do not inherit it. Repeated identical lines collapse; lines that differ, in one doc comment or across build-tagged declarations of the type, warn and none applies. |
 
 Every operation keeps its unconditional `400`/`500` responses (plus `401`/`415`
@@ -205,10 +210,17 @@ Inference does not touch the success response. A 4xx/5xx returned as a non-error
 is a misuse the tool does not model: the operation keeps its `200` default.
 
 An unknown `//openapi:<name>`, an argument on `//openapi:public`, a
-malformed or out-of-range `errors` token, and missing, unknown or extra
-`schema` arguments each raise an analyzer warning naming the offender — so
+malformed or out-of-range `errors` token, missing, unknown or extra
+`schema` arguments, and a `meta` argument that is missing, generic or not one
+type name each raise an analyzer warning naming the offender — so
 they fail `generate --strict` with no artifact emitted. The remaining valid
-`errors` tokens are still applied. A recognised directive outside its
+`errors` tokens are still applied. A `meta` directive that is not applied
+raises exactly one warning, located at the directive and naming the first
+check it fails: its type does not resolve to a struct in this module, is
+generic or is a Marshaler type; its lines name conflicting types; it has no
+effect on the route (no `ResultWithMeta[T]` result, `WithRawResponse()`, a
+sealed JOSE envelope, a `204`); or its type declares a framework-managed meta
+key. A recognised directive outside its
 placement (a Detached directive) raises the same kind of warning, once per
 comment group and located at its first recognised directive:
 `mod/module.go:12: directive public has no effect — it is not directly above an analyzed route registration`,
@@ -252,7 +264,8 @@ nested Go module, is not.
   since neither is evaluated. "First" means source order within a module and
   lexical file-path order (the directory walk) across modules, not
   `app.RegisterModule` order. A dropped cross-module registration's payload
-  components stay emitted, unreferenced.
+  components stay emitted, unreferenced; its `//openapi:meta` type is not
+  registered.
 - Error-response inference walks the handler's own body only. A constructor
   called from a helper, a service layer, or middleware is invisible to it — no
   call is followed, even within the same package. Declare those statuses with

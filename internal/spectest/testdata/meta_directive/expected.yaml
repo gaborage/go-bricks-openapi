@@ -1,0 +1,261 @@
+openapi: 3.0.1
+info:
+  title: Metadirective API
+  version: 1.0.0
+  description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
+paths:
+  /items:
+    get:
+      operationId: catalogListItems
+      summary: GET /items
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
+                  meta:
+                    allOf:
+                      - type: object
+                        properties:
+                          timestamp:
+                            type: string
+                            format: date-time
+                            description: RFC3339 response timestamp
+                          traceId:
+                            type: string
+                            description: W3C trace identifier for the request
+                      - $ref: '#/components/schemas/PageMeta'
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /items/all:
+    get:
+      operationId: catalogAllItems
+      summary: GET /items/all
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /items/cursor:
+    get:
+      operationId: catalogCursorItems
+      summary: GET /items/cursor
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
+                  meta:
+                    allOf:
+                      - type: object
+                        properties:
+                          timestamp:
+                            type: string
+                            format: date-time
+                            description: RFC3339 response timestamp
+                          traceId:
+                            type: string
+                            description: W3C trace identifier for the request
+                      - $ref: '#/components/schemas/Meta'
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /items/recent:
+    get:
+      operationId: catalogRecentItems
+      summary: GET /items/recent
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
+                  meta:
+                    allOf:
+                      - type: object
+                        properties:
+                          timestamp:
+                            type: string
+                            format: date-time
+                            description: RFC3339 response timestamp
+                          traceId:
+                            type: string
+                            description: W3C trace identifier for the request
+                      - $ref: '#/components/schemas/WindowMeta'
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code (e.g. BAD_REQUEST, NOT_FOUND, INTERNAL_ERROR, or a custom business code)
+            details:
+              type: object
+              properties:
+                validationErrors:
+                  type: array
+                  description: Per-field validation failures (400 validation errors)
+                  items:
+                    type: object
+                    properties:
+                      field:
+                        type: string
+                        description: Field that failed validation
+                      message:
+                        type: string
+                        description: Violated validation rule
+                  maxItems: 100
+              description: Contextual error payload, sent only when app.debug is enabled in a development environment
+            message:
+              type: string
+              description: Human-readable error message
+          description: Error details
+        meta:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+              description: RFC3339 response timestamp
+            traceId:
+              type: string
+              description: W3C trace identifier for the request
+      required:
+        - error
+    Item:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+    Meta:
+      type: object
+      properties:
+        next:
+          type: string
+        prev:
+          type: string
+    PageMeta:
+      type: object
+      properties:
+        limit:
+          type: integer
+          format: int64
+        offset:
+          type: integer
+          format: int64
+        total:
+          type: integer
+          format: int64
+    Window:
+      type: object
+      properties:
+        from:
+          type: string
+        to:
+          type: string
+    WindowMeta:
+      type: object
+      properties:
+        count:
+          type: integer
+          format: int64
+        window:
+          $ref: '#/components/schemas/Window'
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+      description: Tenant identifier. Enforced only when the service runs with multitenancy enabled and a header-based tenant resolver; a missing or invalid tenant yields HTTP 400. Deployments resolving the tenant from the subdomain or URL path do not read this header.
+security:
+  - TenantID: []

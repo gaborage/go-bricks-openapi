@@ -74,7 +74,32 @@ type Route struct {
 	SourcePath string
 	NodeKey    string
 	Site       string
+	// ResultWrapper is the framework result wrapper the handler's declared
+	// first result is, written by value or behind one pointer:
+	// server.Result[T], server.ResultWithMeta[T], or neither (a bare payload,
+	// server.NoContentResult, a raw Add route, or a handler the analyzer could
+	// not resolve). It lives on the route, not on Response, which is nil for
+	// an unresolved payload.
+	ResultWrapper ResultWrapper
+	// Meta is the struct an `//openapi:meta <Type>` Directive documents the
+	// handler-supplied meta keys with, registered as a component; nil unless
+	// the directive applied. The generator adds it to the success envelope's
+	// meta beside the framework's timestamp and traceId.
+	Meta *TypeInfo
 }
+
+// ResultWrapper names the framework result wrapper a handler returns.
+type ResultWrapper int
+
+// The framework result wrappers a handler's first result can be.
+const (
+	// ResultWrapperNone is any first result that is not a Result wrapper.
+	ResultWrapperNone ResultWrapper = iota
+	// ResultWrapperResult is server.Result[T].
+	ResultWrapperResult
+	// ResultWrapperResultWithMeta is server.ResultWithMeta[T].
+	ResultWrapperResultWithMeta
+)
 
 // UnresolvedRoute is one route registration the analysis found but could not
 // reduce to a path — see CONTEXT.md, "Unresolved route". It is a diagnostic

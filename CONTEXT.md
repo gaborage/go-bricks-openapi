@@ -37,7 +37,7 @@ A route whose registration the Survey found but whose path expression it could n
 _Avoid_: dropped route, skipped route, missing route
 
 **Directive**:
-An `//openapi:<name>` comment that overrides or supplements what the Survey infers. One parser, one namespace; each directive name has exactly one placement. A route directive (`public`, `errors` (`meta` once issue 69 lands)) is attached to a route registration and applies to that route — marking it public, naming its error statuses (and, with `meta`, the type of the meta keys its handler supplies). A type directive (`schema`) sits in a package-level type declaration's doc comment and applies to that type — stating its wire schema.
+An `//openapi:<name>` comment that overrides or supplements what the Survey infers. One parser, one namespace; each directive name has exactly one placement. A route directive (`public`, `errors`, `meta`) is attached to a route registration and applies to that route — marking it public, naming its error statuses, or naming the type of the meta keys its handler supplies. A type directive (`schema`) sits in a package-level type declaration's doc comment and applies to that type — stating its wire schema.
 _Avoid_: annotation, pragma, marker comment
 
 **Detached directive**:

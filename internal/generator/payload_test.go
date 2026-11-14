@@ -50,7 +50,7 @@ func TestResponsePayloadSchemaResolution(t *testing.T) {
 // object is annotated: a map or array schema is not the bare-object fallback.
 func TestSuccessEnvelopeAnnotatesOnlyBareObject(t *testing.T) {
 	data := func(ti *models.TypeInfo) *OpenAPIProperty {
-		return successEnvelopeSchema(ti).Properties[propNameData]
+		return successEnvelopeSchema(ti, nil).Properties[propNameData]
 	}
 	decimal := named("decimal.Decimal")
 	assert.Equal(t, responseDataDescription, data(resolvedPayloadOf(prim(goTypeUintptr))).Description)
