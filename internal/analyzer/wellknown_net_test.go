@@ -211,3 +211,85 @@ func TestWellKnownMarshalerEmbedDefined(t *testing.T) {
 		assert.Equal(t, embedNonStruct, wellKnownMarshalerEmbed(name, true).class, name)
 	}
 }
+
+// netByteDecls are the named types the net byte-slice rows use.
+const netByteDecls = `
+type MACA = net.HardwareAddr
+type MyMAC net.HardwareAddr
+type MyMask net.IPMask
+`
+
+// TestNetByteSlicesResolve pins net.HardwareAddr and net.IPMask, named
+// []byte types with no marshal methods that encoding/json writes as base64
+// (issue 149): every position resolves to what []byte does there, with no
+// warning and no pointer-to-slice distinction. net.IPNet is a struct and
+// keeps the untyped warning.
+func TestNetByteSlicesResolve(t *testing.T) {
+	rows := []resolveRow{
+		{"hw", "net.HardwareAddr", "[]byte"},
+		{"mask", "net.IPMask", "[]byte"},
+		{"phw", "*net.HardwareAddr", "*[]byte"},
+		{"hws", "[]net.HardwareAddr", "[][]byte"},
+		{"masks", "map[string]net.IPMask", "map[string][]byte"},
+		{"maca", "MACA", "[]byte"},
+		{"mine", "MyMAC", "[]byte"},
+		{"mineMask", "MyMask", "[]byte"},
+		{"viaAlias", "n.HardwareAddr", "[]byte"},
+		{"ipnet", "net.IPNet", "net.IPNet"},
+	}
+	a, got := analyzeRows(t, netImports+"\tn \"net\"\n", netByteDecls, rowsBody(rows))
+	for _, r := range rows {
+		assert.Equal(t, r.want, got[r.json], r.json)
+	}
+	warnings := a.Warnings(t.Context())
+	assert.Len(t, warnings, 1, "%v", warnings)
+	assert.Len(t, matching(warnings, "net.IPNet"), 1, "%v", warnings)
+}
+
+// TestNetByteSlicesKindBacked pins that a defined chain ends in []byte for
+// both names, and that neither is a well-known leaf nor a builtin-kind row.
+func TestNetByteSlicesKindBacked(t *testing.T) {
+	a := New(t.TempDir())
+	file := importsFile(t, "net")
+	for _, name := range []string{"net.HardwareAddr", "net.IPMask"} {
+		got, ok := a.kindBackedUnderlying(name, file)
+		if assert.True(t, ok, name) {
+			assert.Equal(t, "[]byte", renderShape(got), name)
+		}
+		assert.True(t, spelledLikeWellKnown(name), name)
+		assert.False(t, models.WellKnownTypeNames[name], name)
+		assert.NotContains(t, knownUnderlyingBuiltins, name)
+	}
+	_, ok := a.kindBackedUnderlying("net.IPNet", file)
+	assert.False(t, ok)
+}
+
+// TestNetByteSlicesInModulePackage pins that a project package named net
+// declaring HardwareAddr is resolved from source, not read as the stdlib one.
+func TestNetByteSlicesInModulePackage(t *testing.T) {
+	a := analyzeDirectiveProject(t, map[string]string{
+		"go.mod":        resolveGoMod,
+		"net/hw.go":     "package net\n\ntype HardwareAddr struct {\n\tID int `json:\"id\"`\n}\n",
+		"mod/module.go": rowsModule("\t\"github.com/example/app/net\"\n", "", "\tHW net.HardwareAddr `json:\"hw\"`\n"),
+	})
+	assert.Equal(t, map[string]string{"hw": "$HardwareAddr"}, renders(t, a.typeRegistry["Rows"]))
+}
+
+// TestNetByteSliceEmbeds pins an embedded net.HardwareAddr or *net.IPMask:
+// a named []byte with no promoted marshaler is one base64 property keyed by
+// its type name, beside other fields, with no warning.
+func TestNetByteSliceEmbeds(t *testing.T) {
+	decls := `
+type EmbHW struct {
+	net.HardwareAddr
+	*net.IPMask
+	N int ` + "`json:\"n\"`" + `
+}
+`
+	a := analyzeDirectiveProject(t, map[string]string{
+		"go.mod":        resolveGoMod,
+		"mod/module.go": rowsModule("\t\"net\"\n", decls, "\tE EmbHW `json:\"e\"`\n"),
+	})
+	assert.Equal(t, map[string]string{"HardwareAddr": "[]byte", "IPMask": "*[]byte", "n": goTypeInt}, renders(t, a.typeRegistry["EmbHW"]))
+	assert.Empty(t, a.Warnings(t.Context()))
+}

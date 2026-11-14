@@ -4418,6 +4418,26 @@ var knownUnderlyingBuiltins = map[string]string{
 	stdFSFileMode:                goTypeUint32,
 }
 
+// knownByteSlices holds the qualified stdlib types that are a named []byte
+// with no marshal methods: net.HardwareAddr and net.IPMask. encoding/json
+// writes them as base64 exactly as it does a plain []byte, so every position
+// resolves them to a []byte shape (byteSliceShape) and they emit what []byte
+// emits there ({type: string, format: byte}, no nullable on a pointer).
+// They are not well-known leaves (models.WellKnownTypeNames, which would
+// give a pointer nullable) and not in knownUnderlyingBuiltins (which maps
+// only to builtin names). net.IP must stay out: it is a text type. net.IPNet
+// must stay out too: it is a struct and keeps its untyped warning.
+var knownByteSlices = map[string]bool{
+	"net.HardwareAddr": true,
+	"net.IPMask":       true,
+}
+
+// byteSliceShape is the []byte shape the knownByteSlices names resolve to.
+func byteSliceShape() models.TypeShape {
+	elem := models.TypeShape{Kind: models.ShapePrimitive, Name: goTypeByte}
+	return models.TypeShape{Kind: models.ShapeSlice, Elem: &elem}
+}
+
 // The two spellings of the stdlib file mode type, as the Shape decoder writes
 // them. They are kind-backed only (knownUnderlyingBuiltins), not well-known,
 // so they live here rather than beside models.WellKnownTypeNames' names.
@@ -4428,7 +4448,7 @@ const (
 
 // wellKnownPackages maps the import path of every package that declares a
 // key of the well-known tables (models.WellKnownTypeNames,
-// knownUnderlyingBuiltins, wellKnownMethodSets) to the package name the keys
+// knownUnderlyingBuiltins, knownByteSlices, wellKnownMethodSets) to the package name the keys
 // are spelled with. wellKnownName reads the tables through it, so an import of
 // one of these paths names their keys under an alias too (t.Time under
 // t "time" is time.Time). uuid.UUID has several owners, each library's UUID

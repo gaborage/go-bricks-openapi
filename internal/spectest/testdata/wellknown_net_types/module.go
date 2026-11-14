@@ -1,5 +1,6 @@
 // Package wellknownnettypes pins os.FileMode, fs.FileMode, net.IP,
-// netip.Addr, netip.Prefix and netip.AddrPort documented from their
+// netip.Addr, netip.Prefix and netip.AddrPort (and net.HardwareAddr and
+// net.IPMask, base64 []byte) documented from their
 // encoding/json wire form. Both FileMode spellings are a uint32 written as
 // its number; the four text types are a JSON string through their value
 // MarshalText, with no type-derived format, and a validate format, enum or
@@ -49,6 +50,34 @@ type MyAddr netip.Addr
 
 // MyPrefix is a defined type over netip.Prefix.
 type MyPrefix netip.Prefix
+
+// MACA is an alias of net.HardwareAddr.
+type MACA = net.HardwareAddr
+
+// MyMAC is a defined type over net.HardwareAddr: it has no marshal methods
+// to drop, so it is still base64 bytes.
+type MyMAC net.HardwareAddr
+
+// Links holds the net.HardwareAddr and net.IPMask rows: named []byte types
+// with no marshal methods, written by encoding/json as base64 exactly like
+// []byte, so each is {string, byte} and a pointer gets no nullable.
+type Links struct {
+	HW    net.HardwareAddr      `json:"hw" validate:"max=16" example:"AQIDBAUG"` // -> {string, byte, example}, no maxLength
+	Mask  net.IPMask            `json:"mask"`                                    // -> {string, byte}
+	PHW   *net.HardwareAddr     `json:"phw"`                                     // -> {string, byte}, no nullable
+	HWs   []net.HardwareAddr    `json:"hws"`                                     // -> items {string, byte}
+	Mask2 map[string]net.IPMask `json:"masks"`                                   // -> additionalProperties {string, byte}
+	Alias MACA                  `json:"alias"`                                   // -> {string, byte}
+	Mine  MyMAC                 `json:"mine"`                                    // -> {string, byte}
+}
+
+// EmbHW embeds net.HardwareAddr and *net.IPMask, named []byte types with no
+// methods that matter: each is one base64 property keyed by its type name.
+type EmbHW struct {
+	net.HardwareAddr
+	*net.IPMask
+	N int `json:"n"`
+}
 
 // Modes holds the FileMode field rows.
 type Modes struct {
@@ -147,6 +176,8 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.GET(hr, r, "/modes/:pmode", m.modes)
 	server.GET(hr, r, "/addrs", m.addrs)
 	server.GET(hr, r, "/embeds", m.embeds)
+	server.GET(hr, r, "/links", m.links)
+	server.GET(hr, r, "/emb-hw", m.embHW)
 
 	server.GET(hr, r, "/payload/mode", m.payloadMode)
 	server.GET(hr, r, "/payload/fs-mode", m.payloadFSMode)
@@ -168,6 +199,10 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.GET(hr, r, "/payload/my-ip", m.payloadMyIP)
 	server.GET(hr, r, "/payload/my-addr", m.payloadMyAddr)
 	server.GET(hr, r, "/payload/emb-ip", m.payloadEmbIP)
+
+	server.GET(hr, r, "/payload/hw", m.payloadHW)
+	server.GET(hr, r, "/payload/masks", m.payloadMasks)
+	server.GET(hr, r, "/payload/my-mac", m.payloadMyMAC)
 }
 
 func (m *Module) modes(req ModeReq, ctx server.HandlerContext) (server.Result[Modes], server.IAPIError) {
@@ -256,4 +291,24 @@ func (m *Module) payloadMyAddr(ctx server.HandlerContext) (server.Result[MyAddr]
 
 func (m *Module) payloadEmbIP(ctx server.HandlerContext) (server.Result[EmbIP], server.IAPIError) {
 	return server.Result[EmbIP]{}, nil
+}
+
+func (m *Module) links(ctx server.HandlerContext) (server.Result[Links], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Links{}), nil
+}
+
+func (m *Module) payloadHW(ctx server.HandlerContext) (server.Result[net.HardwareAddr], server.IAPIError) {
+	return server.Result[net.HardwareAddr]{}, nil
+}
+
+func (m *Module) payloadMasks(ctx server.HandlerContext) (server.Result[[]net.IPMask], server.IAPIError) {
+	return server.Result[[]net.IPMask]{}, nil
+}
+
+func (m *Module) payloadMyMAC(ctx server.HandlerContext) (server.Result[MyMAC], server.IAPIError) {
+	return server.Result[MyMAC]{}, nil
+}
+
+func (m *Module) embHW(ctx server.HandlerContext) (server.Result[EmbHW], server.IAPIError) {
+	return server.NewResult(http.StatusOK, EmbHW{}), nil
 }

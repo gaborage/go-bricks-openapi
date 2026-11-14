@@ -43,6 +43,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /emb-hw:
+    get:
+      operationId: wellknownnettypesEmbHW
+      summary: GET /emb-hw
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/EmbHW'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /embeds:
     get:
       operationId: wellknownnettypesEmbeds
@@ -57,6 +93,42 @@ paths:
                 properties:
                   data:
                     $ref: '#/components/schemas/Embeds'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /links:
+    get:
+      operationId: wellknownnettypesLinks
+      summary: GET /links
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Links'
                   meta:
                     type: object
                     properties:
@@ -295,6 +367,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /payload/hw:
+    get:
+      operationId: wellknownnettypesPayloadHW
+      summary: GET /payload/hw
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+                    format: byte
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /payload/ip:
     get:
       operationId: wellknownnettypesPayloadIP
@@ -383,6 +492,45 @@ paths:
                     type: array
                     items:
                       type: string
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /payload/masks:
+    get:
+      operationId: wellknownnettypesPayloadMasks
+      summary: GET /payload/masks
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: string
+                      format: byte
                   meta:
                     type: object
                     properties:
@@ -603,6 +751,43 @@ paths:
     get:
       operationId: wellknownnettypesPayloadMyIP
       summary: GET /payload/my-ip
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+                    format: byte
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /payload/my-mac:
+    get:
+      operationId: wellknownnettypesPayloadMyMAC
+      summary: GET /payload/my-mac
       responses:
         "200":
           description: Successful response
@@ -945,6 +1130,18 @@ components:
         "n":
           type: integer
           format: int64
+    EmbHW:
+      type: object
+      properties:
+        HardwareAddr:
+          type: string
+          format: byte
+        IPMask:
+          type: string
+          format: byte
+        "n":
+          type: integer
+          format: int64
     EmbMode:
       type: object
       properties:
@@ -1013,6 +1210,35 @@ components:
               description: W3C trace identifier for the request
       required:
         - error
+    Links:
+      type: object
+      properties:
+        alias:
+          type: string
+          format: byte
+        hw:
+          type: string
+          format: byte
+          example: AQIDBAUG
+        hws:
+          type: array
+          items:
+            type: string
+            format: byte
+        mask:
+          type: string
+          format: byte
+        masks:
+          type: object
+          additionalProperties:
+            type: string
+            format: byte
+        mine:
+          type: string
+          format: byte
+        phw:
+          type: string
+          format: byte
     Modes:
       type: object
       properties:

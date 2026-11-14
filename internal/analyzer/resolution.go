@@ -366,6 +366,9 @@ func (a *ProjectAnalyzer) resolveQualified(leaf models.TypeShape, c resolveCtx) 
 		if b, kindBacked := knownUnderlyingBuiltins[name]; kindBacked {
 			return models.TypeShape{Kind: models.ShapePrimitive, Name: b}
 		}
+		if knownByteSlices[name] {
+			return byteSliceShape()
+		}
 		return models.TypeShape{Kind: models.ShapeNamed, Name: name}
 	}
 	if site, name, ok := a.inModuleTypeSite(leaf.Name, c.file); ok {
@@ -399,11 +402,11 @@ func (a *ProjectAnalyzer) wellKnownName(qualified string, file *ast.File) (strin
 }
 
 // spelledLikeWellKnown reports whether name is a key of the well-known tables:
-// models.WellKnownTypeNames or knownUnderlyingBuiltins, which together hold
-// every key of wellKnownMethodSets and kindBackedUnderlying.
+// models.WellKnownTypeNames, knownUnderlyingBuiltins or knownByteSlices, which
+// together hold every key of wellKnownMethodSets and kindBackedUnderlying.
 func spelledLikeWellKnown(name string) bool {
 	_, kindBacked := knownUnderlyingBuiltins[name]
-	return kindBacked || models.WellKnownTypeNames[name]
+	return kindBacked || knownByteSlices[name] || models.WellKnownTypeNames[name]
 }
 
 // inModuleTypeSite finds the declaring file of a qualified named type
@@ -791,8 +794,8 @@ func (a *ProjectAnalyzer) resolveUnderlying(name string, rhs ast.Expr, c resolve
 
 // kindBackedUnderlying returns the underlying type of a qualified well-known
 // type a defined chain may end in, written in file (wellKnownName): the
-// knownUnderlyingBuiltins, plus json.RawMessage and net.IP ([]byte) and
-// json.Number (string). The last three apply only at the end of a defined
+// knownUnderlyingBuiltins, knownByteSlices (net.HardwareAddr, net.IPMask:
+// []byte), plus json.RawMessage and net.IP ([]byte) and json.Number (string). The last three apply only at the end of a defined
 // chain, which drops their methods; used directly they stay well-known
 // leaves. The netip structs have no kind to fall back to: a defined type over
 // one keeps the defined-type warning.
@@ -804,10 +807,12 @@ func (a *ProjectAnalyzer) kindBackedUnderlying(qualified string, file *ast.File)
 	if b, ok := knownUnderlyingBuiltins[name]; ok {
 		return models.TypeShape{Kind: models.ShapePrimitive, Name: b}, true
 	}
+	if knownByteSlices[name] {
+		return byteSliceShape(), true
+	}
 	switch name {
 	case models.WellKnownRawMessage, models.WellKnownNetIP:
-		elem := models.TypeShape{Kind: models.ShapePrimitive, Name: goTypeByte}
-		return models.TypeShape{Kind: models.ShapeSlice, Elem: &elem}, true
+		return byteSliceShape(), true
 	case models.WellKnownJSONNumber:
 		return models.TypeShape{Kind: models.ShapePrimitive, Name: goTypeString}, true
 	}
