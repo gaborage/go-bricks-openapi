@@ -17,8 +17,10 @@ import (
 // struct reached through two packages' own declarations (wa.Wrap, wb.Wrap,
 // both []c.Item) is one struct, so the copies merge. A local alias or defined
 // type over the qualified struct (type Item = item.Item, type W []Item) is
-// judged by the struct it reaches, not by its own directory, so it clashes
-// and merges the same way.
+// judged by the struct it reaches, not by its own directory, so it merges
+// the same way; over two packages it is itself the type whose copies reach
+// two structs of one name, so W is an array of it, an untyped object, and the
+// warning names Item.
 func TestBuildTaggedRefClashByDeclaringDir(t *testing.T) {
 	variant := func(constraint, importPath, decl string) string {
 		return "//go:build " + constraint + "\n\npackage mod\n\nimport " + importPath + "\n\n" + decl + "\n"
@@ -37,15 +39,14 @@ func TestBuildTaggedRefClashByDeclaringDir(t *testing.T) {
 		namedW = "type Item item.Item\n\ntype W []Item"
 	)
 	cases := []struct {
-		name, darwinImport, darwinDecl, linuxImport, linuxDecl, want string
-		warned                                                       bool
+		name, darwinImport, darwinDecl, linuxImport, linuxDecl, want, stop string
 	}{
-		{"one qualifier, two packages", itemDW, listW, itemLX, listW, "W", true},
-		{"one qualifier, one package", itemDW, listW, itemDW, listW, "[]$Item", false},
-		{"one struct through two packages", `"github.com/example/app/wa"`, "type W wa.Wrap", `"github.com/example/app/wb"`, "type W wb.Wrap", "[]$Item", false},
-		{"local alias, two packages", itemDW, aliasW, itemLX, aliasW, "W", true},
-		{"local alias, one package", itemDW, aliasW, itemDW, aliasW, "[]$Item", false},
-		{"local defined type, two packages", itemDW, namedW, itemLX, namedW, "W", true},
+		{"one qualifier, two packages", itemDW, listW, itemLX, listW, "W", "W"},
+		{"one qualifier, one package", itemDW, listW, itemDW, listW, "[]$Item", ""},
+		{"one struct through two packages", `"github.com/example/app/wa"`, "type W wa.Wrap", `"github.com/example/app/wb"`, "type W wb.Wrap", "[]$Item", ""},
+		{"local alias, two packages", itemDW, aliasW, itemLX, aliasW, "[]Item", "Item"},
+		{"local alias, one package", itemDW, aliasW, itemDW, aliasW, "[]$Item", ""},
+		{"local defined type, two packages", itemDW, namedW, itemLX, namedW, "[]Item", "Item"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -62,12 +63,12 @@ func TestBuildTaggedRefClashByDeclaringDir(t *testing.T) {
 			})
 			assert.Equal(t, c.want, renders(t, a.typeRegistry["Rows"])["w"])
 			w := fieldWarnings(a, "W")
-			if !c.warned {
+			if c.stop == "" {
 				assert.Empty(t, w)
 				return
 			}
 			if assert.Len(t, w, 1) {
-				assert.Contains(t, w[0], "has type W: W's build-tagged declarations disagree on shape")
+				assert.Contains(t, w[0], "has type W: "+c.stop+"'s build-tagged declarations disagree on shape ("+declsClashCause)
 			}
 		})
 	}

@@ -214,7 +214,7 @@ func (ec embedClassifier) local(file *ast.File, path, name string, depth int, de
 	if depth >= maxNamedResolutionDepth {
 		return embedTarget{class: embedNonStruct}
 	}
-	if st, pkg, f, p, ok := ec.a.resolveTypeSpecChain(file, path, name, 0); ok {
+	if st, pkg, f, p, ok := ec.a.resolveTypeSpecChain(file, path, name); ok {
 		return embedTarget{class: embedStruct, site: structSite{st: st, pkg: pkg, file: f, path: p}}
 	}
 	ts, tsFile, tsPath, ok := ec.a.resolveLocalTypeSpec(file, path, name)

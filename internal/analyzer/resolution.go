@@ -22,7 +22,7 @@ import (
 // stamps with its final component name.
 
 // maxNamedResolutionDepth bounds how many named types may be open at once in
-// one field's resolution: nine, the hops resolveTypeSpecChain's `depth > 8`
+// one field's resolution: nine, the hops followChain's `depth > 8`
 // cap allows. A deeper chain is cut like a recursion.
 const maxNamedResolutionDepth = 9
 
@@ -40,8 +40,8 @@ const (
 		"and whose first one by name has another package clause, or a name with no declaration in its package) — emitting an untyped object"
 	definedOverQualifiedFieldWarning = "field %s at %s has type %s: %s is a defined type over %s, which resolves to no schema " +
 		"(a defined type drops its target's methods, and a type from outside the module is not resolved) — emitting an untyped object"
-	declsDisagreeFieldWarning = "field %s at %s has type %s: %s's build-tagged declarations disagree on shape (no common " +
-		"container or scalar kind; build constraints are not evaluated) — emitting an untyped object"
+	declsDisagreeFieldWarning = "field %s at %s has type %s: %s's build-tagged declarations disagree on shape (%s; build " +
+		"constraints are not evaluated) — emitting an untyped object"
 	untypedBuiltinFieldWarning = "field %s at %s has type %s, which holds the builtin %s, a Go type with no JSON schema " +
 		"— emitting an untyped object"
 	unregisteredRefFieldWarning = "field %s at %s has type %s: struct %s could not be registered as a component " +
@@ -49,6 +49,13 @@ const (
 	unknownFieldPosition          = "unknown position"
 	marshalerPromotedFieldWarning = "field %s at %s has type %s: %s has the %s method promoted from its embedded %s, which " +
 		"encoding/json uses instead of its fields — emitting an untyped schema ({}); parameters are typed by kind and unaffected"
+)
+
+// The two causes a fallbackDeclsDisagree names (fieldFallback.detail), in the
+// parenthetical of its field, payload and request warnings.
+const (
+	declsShapeCause = "no common container shape or scalar kind"
+	declsClashCause = "they reach two structs of one name in different packages"
 )
 
 type resolveMode int
@@ -79,9 +86,15 @@ type fieldFallback struct {
 	typeName string // the named type where resolution stopped
 	// detail is the Marshaler method (fallbackMarshaler), the qualified
 	// underlying (fallbackDefinedOverQualified), the builtin
-	// (fallbackUntypedBuiltin), or the generic type of the Instantiation, as
-	// written (fallbackGeneric, whose typeName is the whole Instantiation).
+	// (fallbackUntypedBuiltin), the generic type of the Instantiation, as
+	// written (fallbackGeneric, whose typeName is the whole Instantiation), or
+	// the cause the declarations disagree (fallbackDeclsDisagree:
+	// declsShapeCause or declsClashCause).
 	detail string
+	// structCopies marks a fallbackDeclsDisagree whose declarations each
+	// reach a struct, but not the same one (structCopiesVerdict): every build
+	// binds a struct, so a request of the type is no F26 non-struct.
+	structCopies bool
 	// via is the embedded field a promoted Marshaler method comes through
 	// (fallbackMarshalerPromoted), as written.
 	via string
@@ -523,6 +536,16 @@ func inPackage(path string, f *ast.File, clause string, sure bool) bool {
 	return !sure && !neverImportable(path, f) && !buildIgnored(f)
 }
 
+// buildExcluded reports whether no build compiles the file at path, whatever
+// its other tags: go/build skips a name starting with _ or . (editor and
+// temporary files), and a //go:build ignore file (buildIgnored). Unlike
+// neverImportable it says nothing about the package clause, so the files of
+// package main are not excluded.
+func buildExcluded(path string, f *ast.File) bool {
+	base := filepath.Base(path)
+	return strings.HasPrefix(base, "_") || strings.HasPrefix(base, ".") || buildIgnored(f)
+}
+
 // buildIgnored reports whether f's build constraint requires the ignore tag:
 // it holds with every tag set, but not once ignore alone is unset. Other
 // constraints are not evaluated (a //go:build !linux file is not ignored).
@@ -562,7 +585,7 @@ func fileBuildConstraint(f *ast.File) constraint.Expr {
 // leaf (marshalerLeaf); anything else resolves through its declarations.
 func (a *ProjectAnalyzer) resolveLocal(leaf models.TypeShape, c resolveCtx, mode resolveMode) models.TypeShape {
 	name := leaf.Name
-	if _, _, _, structPath, ok := a.resolveTypeSpecChain(c.file, c.path, name, 0); ok {
+	if _, _, _, structPath, ok := a.resolveTypeSpecChain(c.file, c.path, name); ok {
 		if r, isMarshaler := a.structMarshalerLeaf(name, c, mode); isMarshaler {
 			return r
 		}
@@ -651,19 +674,39 @@ func methodSetLeaf(m marshalerMethods, fb fieldFallback, name string, stated *mo
 // name is unresolvable (a lone declaration that resolves always merges).
 // Variants that reach two structs of one short name in different directories
 // (type W dw.Items beside type W lx.Items) never merge leaf by leaf: their
-// equal ref names would document one struct for both.
+// equal ref names would document one struct for both. Variants that each
+// reach a struct, but not the same one (structCopiesDisagree: type W dw.Item
+// beside type W lx.Item), disagree before any is resolved, the cause taken
+// from the structs they reach. The disagreement's cause is noted with it: a
+// clash when the shapes merge but a ref name reaches two directories, else
+// the shapes.
 func (a *ProjectAnalyzer) resolveDecls(name string, decls []typeDecl, c resolveCtx, mode resolveMode) models.TypeShape {
+	if cause, disagree := a.structCopiesDisagree(decls, 0); disagree {
+		c.st.note(fieldFallback{kind: fallbackDeclsDisagree, typeName: c.display(name), detail: cause, structCopies: true})
+		return models.TypeShape{Kind: models.ShapeNamed, Name: name}
+	}
 	c.st.stack = append(c.st.stack, c.typeKey(name))
 	defer func() { c.st.stack = c.st.stack[:len(c.st.stack)-1] }()
 	results, clashed := a.resolveEachDecl(name, decls, c, mode)
-	if merged, ok := mergeDecls(results); ok && !clashed {
+	merged, ok := mergeDecls(results)
+	if ok && !clashed {
 		return merged
 	}
 	if kind := firstScalarKind(results); kind != "" {
 		return models.TypeShape{Kind: models.ShapeKindOnly, Name: kind}
 	}
-	c.st.note(fieldFallback{kind: fallbackDeclsDisagree, typeName: c.display(name)})
+	cause := declsShapeCause
+	if ok {
+		cause = declsClashCause
+	}
+	c.st.note(fieldFallback{kind: fallbackDeclsDisagree, typeName: c.display(name), detail: cause})
 	return models.TypeShape{Kind: models.ShapeNamed, Name: name}
+}
+
+// declsCause is the parenthetical cause of fb, a fallbackDeclsDisagree:
+// its detail, else the shapes.
+func declsCause(fb fieldFallback) string {
+	return cmp.Or(fb.detail, declsShapeCause)
 }
 
 // resolveEachDecl resolves each declaration of name with ref sites of its
@@ -912,11 +955,16 @@ func (a *ProjectAnalyzer) samePackageFiles(file *ast.File, path string) []pkgFil
 }
 
 // localTypeDecls returns every declaration of name in file's package, in
-// samePackageFiles order. Build constraints are not evaluated, so a type
-// declared in several build-tagged files has one entry per file.
+// samePackageFiles order. A file no build compiles (buildExcluded: a name
+// starting with _ or ., or //go:build ignore) is skipped, except file itself.
+// Other build constraints are not evaluated, so a type declared in several
+// build-tagged files has one entry per file.
 func (a *ProjectAnalyzer) localTypeDecls(name string, file *ast.File, path string) []typeDecl {
 	var decls []typeDecl
 	for _, pf := range a.samePackageFiles(file, path) {
+		if pf.path != path && buildExcluded(pf.path, pf.file) {
+			continue
+		}
 		if ts := typeSpecInFile(pf.file, name); ts != nil {
 			decls = append(decls, typeDecl{spec: ts, file: pf.file, path: pf.path})
 		}
@@ -1006,7 +1054,7 @@ func (a *ProjectAnalyzer) warnFieldFallback(f *models.FieldInfo, site *fieldSite
 	case fallbackDefinedOverQualified:
 		a.addWarningf(definedOverQualifiedFieldWarning, append(head, fb.typeName, fb.detail)...)
 	case fallbackDeclsDisagree:
-		a.addWarningf(declsDisagreeFieldWarning, append(head, fb.typeName)...)
+		a.addWarningf(declsDisagreeFieldWarning, append(head, fb.typeName, declsCause(fb))...)
 	case fallbackMarshalerPromoted:
 		a.addWarningf(marshalerPromotedFieldWarning, append(head, fb.typeName, fb.detail, fb.via)...)
 	case fallbackGeneric:

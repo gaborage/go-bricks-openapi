@@ -352,7 +352,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	assert.Equal(t, "[]BD", renderShape(*resp.Resolution))
 	assert.Equal(t, []string{
 		fmt.Sprintf(unbindableParamWarning, "Modes", filepath.FromSlash("mod/module.go")+":15:2", paramTypeQuery, "modes", "BD", reasonSliceElem),
-		fmt.Sprintf(declsDisagreePayloadWarning, "[]BD", "BD"),
+		fmt.Sprintf(declsDisagreePayloadWarning, "[]BD", "BD", declsShapeCause),
 	}, a.Warnings(t.Context()))
 }
 

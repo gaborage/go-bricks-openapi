@@ -35,8 +35,10 @@ const (
 // request warning, unless its generic type is declared as a non-struct type,
 // which go-bricks cannot bind (F26). A generic type the tool cannot locate
 // (outside the module, undeclared) gets the generic warning too: go-bricks
-// binds it if it is a struct, so a panic cannot be claimed. Every other
-// request gets F26.
+// binds it if it is a struct, so a panic cannot be claimed. A request whose
+// type's build-tagged declarations each reach a different struct gets the
+// build-tagged request warning (requestStructCopies). Every other request
+// gets F26.
 func (a *ProjectAnalyzer) warnNonStructRequest(h *handlerAnalysis, astFile *ast.File, filePath string) {
 	if anonymousStruct(h.requestExpr) != nil {
 		return
@@ -45,7 +47,28 @@ func (a *ProjectAnalyzer) warnNonStructRequest(h *handlerAnalysis, astFile *ast.
 		a.addWarningf(genericRequestWarning, h.requestType, inst)
 		return
 	}
+	if fb, ok := a.requestStructCopies(h.requestExpr, astFile, filePath); ok {
+		a.addWarningf(declsDisagreeRequestWarning, h.requestType, fb.typeName, declsCause(fb))
+		return
+	}
 	a.addWarningf(nonStructRequestWarning, h.requestType)
+}
+
+// requestStructCopies resolves a request's type, expr as written in astFile,
+// a pointer written in it shed, as requestInstantiation does, and returns the
+// disagreement its root stops at when that is a type whose build-tagged
+// declarations each reach a struct, but not the same one
+// (structCopiesDisagree). Every build binds such a type as a struct, so F26
+// would be false. Copies that disagree any other way (type Rows []A beside
+// type Rows []B) are non-structs in every build, and keep F26, as does a
+// container of such a type ([]W, type WS []W, type PW *W), whose root is no
+// struct in any build.
+func (a *ProjectAnalyzer) requestStructCopies(expr ast.Expr, astFile *ast.File, filePath string) (fieldFallback, bool) {
+	expr = pointee(expr)
+	c := newResolveCtx(astFile, filePath, false)
+	r := a.resolveUnderlying(types.ExprString(expr), expr, c)
+	fb := c.st.first
+	return fb, r.Kind == models.ShapeNamed && fb.kind == fallbackDeclsDisagree && fb.structCopies
 }
 
 // requestInstantiation resolves a request's type, expr as written in astFile,
