@@ -325,7 +325,8 @@ func lineOf(t *testing.T, src, needle string) int {
 
 // TestDuplicateRouteHelperCalledTwiceSites pins that a helper called twice
 // gives two distinguishable sites: the registration inside the helper, then
-// the outermost delegate call that reached it (also through a nested helper).
+// each delegate call that reached it, innermost first. A route registered one
+// delegate deep keeps the single "via" form.
 func TestDuplicateRouteHelperCalledTwiceSites(t *testing.T) {
 	rest := `
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
@@ -334,7 +335,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 
 func (m *Module) outer(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	m.helper(hr, r)
+	m.helper(hr, r) // nested
 }
 
 func (m *Module) helper(hr *server.HandlerRegistry, r server.RouteRegistrar) {
@@ -347,10 +348,43 @@ func (m *Module) helper(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	reg := lineOf(t, src, `"/h"`)
 	one := lineOf(t, src, "// call one")
 	two := lineOf(t, src, "// call two")
+	nested := lineOf(t, src, "// nested")
 	warnings := a.Warnings(t.Context())
 	require.Len(t, warnings, 1, "%v", warnings)
-	want := fmt.Sprintf("route GET /h at module.go:%d:2 via module.go:%d:2 is the same route node as GET /h at module.go:%d:2 via module.go:%d:2",
-		reg, two, reg, one)
+	want := fmt.Sprintf("route GET /h at module.go:%d:2 via module.go:%d:2 via module.go:%d:2 is the same route node as GET /h at module.go:%d:2 via module.go:%d:2",
+		reg, nested, two, reg, one)
+	assert.Contains(t, warnings[0], want)
+}
+
+// TestDuplicateRouteNestedHelperCalledTwiceSites pins that the whole delegate
+// call chain is named: one outer delegate calling a helper twice gives two
+// sites that differ in the inner call, though the outermost call is shared.
+func TestDuplicateRouteNestedHelperCalledTwiceSites(t *testing.T) {
+	rest := `
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	m.outer(hr, r) // outermost
+}
+
+func (m *Module) outer(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	m.helper(hr, r) // inner one
+	m.helper(hr, r) // inner two
+}
+
+func (m *Module) helper(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/h", m.first)
+}
+`
+	a, routes, _ := analyzeDupModule(t, rest)
+	require.Len(t, routes, 1)
+	src := dupModuleHeader + rest
+	reg := lineOf(t, src, `"/h"`)
+	top := lineOf(t, src, "// outermost")
+	one := lineOf(t, src, "// inner one")
+	two := lineOf(t, src, "// inner two")
+	warnings := a.Warnings(t.Context())
+	require.Len(t, warnings, 1, "%v", warnings)
+	want := fmt.Sprintf("route GET /h at module.go:%d:2 via module.go:%d:2 via module.go:%d:2 is the same route node as GET /h at module.go:%d:2 via module.go:%d:2 via module.go:%d:2",
+		reg, two, top, reg, one, top)
 	assert.Contains(t, warnings[0], want)
 }
 

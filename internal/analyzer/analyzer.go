@@ -859,9 +859,10 @@ type routeWalker struct {
 	// nodes is the owning module's route-node set, shared with every walker
 	// of the module (see routeNodes).
 	nodes routeNodes
-	// viaSite is the file:line:col of the outermost delegate call that led
-	// to this walker ("" for a RegisterRoutes body itself), so a helper
-	// called twice yields two distinguishable registration sites.
+	// viaSite is the chain of delegate calls that led to this walker, each a
+	// file:line:col, innermost first and joined by " via " ("" for a
+	// RegisterRoutes body itself), so a helper called twice, at any depth,
+	// yields two distinguishable registration sites.
 	viaSite string
 	routes  []models.Route
 }
@@ -1098,8 +1099,8 @@ func (w *routeWalker) baseRoute(call *ast.CallExpr, method, joined string) *mode
 	}
 }
 
-// site renders a registration call's position, followed by the outermost
-// delegate call that reached it when the call sits in a delegate.
+// site renders a call's position, followed by the delegate call chain that
+// reached it, innermost first, when the call sits in a delegate.
 func (w *routeWalker) site(call *ast.CallExpr) string {
 	if w.viaSite == "" {
 		return w.a.nodeLoc(call)
@@ -1108,12 +1109,10 @@ func (w *routeWalker) site(call *ast.CallExpr) string {
 }
 
 // delegateSite is the viaSite a child walker for the delegate call inherits:
-// this walker's own, or call itself when this walker is the outermost.
+// the call's own site, chain included, so two calls of one helper from the
+// same outer delegate stay distinguishable.
 func (w *routeWalker) delegateSite(call *ast.CallExpr) string {
-	if w.viaSite != "" {
-		return w.viaSite
-	}
-	return w.a.nodeLoc(call)
+	return w.site(call)
 }
 
 // addCallPrefix resolves a <registrar>.Add(...) call to its known group prefix.
