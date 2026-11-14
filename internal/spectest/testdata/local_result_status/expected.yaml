@@ -66,6 +66,10 @@ paths:
       responses:
         "202":
           description: Request accepted for processing
+          headers:
+            Location:
+              schema:
+                type: string
           content:
             application/json:
               schema:

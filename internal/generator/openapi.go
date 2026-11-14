@@ -265,8 +265,18 @@ type OpenAPIRequestBody struct {
 
 // OpenAPIResponse is a Response Object.
 type OpenAPIResponse struct {
-	Description string                       `yaml:"description"`
-	Content     map[string]*OpenAPIMediaType `yaml:"content,omitempty"`
+	Description string `yaml:"description"`
+	// Headers documents the response header names a handler writes to its
+	// result (models.Route.ResponseHeaders); set on the success response only.
+	Headers map[string]*OpenAPIHeader    `yaml:"headers,omitempty"`
+	Content map[string]*OpenAPIMediaType `yaml:"content,omitempty"`
+}
+
+// OpenAPIHeader is a Header Object. It carries only schema: kin-openapi
+// rejects a header with name or in, and one with both or neither of schema
+// and content.
+type OpenAPIHeader struct {
+	Schema *OpenAPIProperty `yaml:"schema"`
 }
 
 // OpenAPIMediaType is a Media Type Object (the value under a content-type key).
@@ -797,6 +807,7 @@ func (g *OpenAPIGenerator) buildResponses(route *models.Route) map[string]*OpenA
 	default:
 		success.Content = map[string]*OpenAPIMediaType{mediaJSON: {Schema: successEnvelopeSchema(route.Response, route.Meta)}}
 	}
+	success.Headers = responseHeaders(route.ResponseHeaders)
 
 	// Pre-trust failures on JOSE routes are plaintext minimal envelopes per the
 	// security model: when decrypt/verify fails the peer is unauthenticated and
@@ -830,6 +841,21 @@ func (g *OpenAPIGenerator) buildResponses(route *models.Route) map[string]*OpenA
 	// the documented success response rather than being clobbered by the 400 entry.
 	responses[successCode] = success
 	return responses
+}
+
+// responseHeaders documents each header name as a string-typed Header Object
+// with no description, example or required, or returns nil for none so the
+// response carries no headers key. go-bricks copies Result.Headers onto every
+// success flavor, a bodiless 204 included, and never onto an error response.
+func responseHeaders(names []string) map[string]*OpenAPIHeader {
+	if len(names) == 0 {
+		return nil
+	}
+	headers := make(map[string]*OpenAPIHeader, len(names))
+	for _, name := range names {
+		headers[name] = &OpenAPIHeader{Schema: &OpenAPIProperty{Type: typeString}}
+	}
+	return headers
 }
 
 // addDeclaredErrorResponses adds one response per status declared by the

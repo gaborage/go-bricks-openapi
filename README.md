@@ -272,6 +272,29 @@ nested Go module, is not.
   `//openapi:errors`.
 - Response trace headers (`traceparent`, `X-Request-ID`) are not modeled in
   the generated spec.
+- Response headers are inferred only from string-literal keys a handler
+  writes to `Result.Headers` / `ResultWithMeta.Headers` in its own body,
+  outside function literals (`res.Headers = http.Header{"Location": …}`,
+  `res.Headers.Set("Location", …)`, `.Add`, `res.Headers["Location"] = …`, a
+  `Headers:` element of a Result literal, or a local `h` given as `Headers: h`
+  / `res.Headers = h` and written with the same shapes). Only a result
+  returned with a literal `nil` error counts, matched by declaration, so a
+  same-named variable in an inner block is not it; a bare `return` counts the
+  first named result only if the named error result is never assigned
+  anything but the literal `nil` outside function literals. A write is
+  dropped when the innermost block or `case` enclosing it that ends in a
+  `return` ends in one with a non-`nil` error; a write that reaches an error
+  return by other control flow (`goto`, a loop exit) is still documented. A
+  local map that is ever reassigned after its declaration (`h = …`)
+  contributes nothing. They are documented on the
+  success response as optional string headers, under their canonical names,
+  with `Content-Type` and names that are not valid header tokens dropped.
+  Keys from constants (`echo.HeaderLocation`) or variables are not
+  documented, and neither are headers set in helpers, closures or middleware,
+  or through an alias of the field (`h := res.Headers`); issue #150 tracks an
+  escape hatch for those. Removal is not modeled: a name set and later
+  `Del`eted, or whose map is later reset (`res.Headers = nil`), is still
+  documented.
 - `server.WithMiddleware(...)` is intentionally ignored — middleware names
   carry no spec semantics.
 - Tenant enforcement is not derived from runtime config; the security scheme
