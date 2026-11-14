@@ -865,7 +865,8 @@ func mergeShapes(x, y models.TypeShape) (models.TypeShape, bool) {
 // mergeSameKind merges two shapes of one kind: containers by their elements,
 // primitives when they are one builtin, extracted anonymous structs when they
 // are written alike (the first's extraction is kept) and unextracted ones
-// always, other leaves when they are one name.
+// always, unmodelled leaves (a func, a chan) always, other leaves when they
+// are one name.
 func mergeSameKind(x, y models.TypeShape) (models.TypeShape, bool) {
 	switch x.Kind {
 	case models.ShapePointer, models.ShapeSlice, models.ShapeArray, models.ShapeMap:
@@ -881,6 +882,11 @@ func mergeSameKind(x, y models.TypeShape) (models.TypeShape, bool) {
 			return x, true
 		}
 		return x, sameLiteral(x.Struct, y.Struct)
+	case models.ShapeUnknown:
+		// Unmodelled leaves all emit an untyped object; a func or chan
+		// leaf's Name is diagnostic only (issue 158), so it never splits
+		// a common container shape.
+		return x, true
 	default:
 		return x, x.Name == y.Name
 	}

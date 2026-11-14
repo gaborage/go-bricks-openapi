@@ -193,3 +193,27 @@ func TestFuncChanBuildTagDisagree(t *testing.T) {
 	require.Len(t, w, 1, "%v", w)
 	assert.Contains(t, w[0], "has type D, which holds a func, a Go type encoding/json cannot marshal")
 }
+
+// TestFuncChanBuildTagContainersMerge pins that a func and a chan leaf still
+// merge as unmodelled leaves: build-tagged copies type S []func() and
+// type S []chan int keep their common array of untyped objects, and
+// type M map[string]func() beside type M map[string]chan int their common
+// map, each with the func-or-chan warning once. Only the leaves' Names
+// differ, and those are diagnostic.
+func TestFuncChanBuildTagContainersMerge(t *testing.T) {
+	a, _ := analyzeProjectRoutes(t, map[string]string{
+		"go.mod":                           resolveGoMod,
+		filepath.Join("mod", "s_linux.go"): "//go:build linux\n\npackage mod\n\ntype S []func()\n\ntype M map[string]func()\n",
+		filepath.Join("mod", "s_other.go"): "//go:build !linux\n\npackage mod\n\ntype S []chan int\n\ntype M map[string]chan int\n",
+		filepath.Join("mod", "module.go"): btagModule("\tSF S `json:\"sf\"`\n\tMF M `json:\"mf\"`\n",
+			[][2]string{{"/resp", "server.Result[Resp]"}}, ""),
+	})
+	got := renders(t, a.typeRegistry["Resp"])
+	assert.Equal(t, "[]unknown", got["sf"])
+	assert.Equal(t, "map[string]unknown", got["mf"])
+	for name, typ := range map[string]string{"SF": "S", "MF": "M"} {
+		w := fieldWarnings(a, name)
+		require.Len(t, w, 1, "%v", w)
+		assert.Contains(t, w[0], "has type "+typ+", which holds a func, a Go type encoding/json cannot marshal", name)
+	}
+}
