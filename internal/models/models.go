@@ -86,6 +86,12 @@ type Route struct {
 	// the directive applied. The generator adds it to the success envelope's
 	// meta beside the framework's timestamp and traceId.
 	Meta *TypeInfo
+	// ResponseHeaders are the header names the handler writes to its result's
+	// Headers field (Result.Headers, ResultWithMeta.Headers) with a
+	// string-literal key in its own body, canonicalized, deduplicated and
+	// sorted, Content-Type excluded. The analyzer stamps them; the generator
+	// documents each on the success response only. nil when there are none.
+	ResponseHeaders []string
 }
 
 // ResultWrapper names the framework result wrapper a handler returns.

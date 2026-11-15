@@ -1082,6 +1082,7 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, view bindingView) *model
 		// declared ones on top.
 		route.ErrorStatuses = handler.errorStatuses
 		route.ResultWrapper = handler.wrapper
+		route.ResponseHeaders = handler.headers
 	}
 	for i := shape.optsIdx(); i < len(call.Args); i++ {
 		w.a.extractRouteMetadata(call.Args[i], route, w.serverAliases)
@@ -1654,6 +1655,9 @@ type handlerAnalysis struct {
 	errorStatuses []int
 	// wrapper is the result wrapper the handler's first result is.
 	wrapper models.ResultWrapper
+	// headers are the response header names the handler writes to its
+	// result (extractResponseHeaders).
+	headers []string
 }
 
 // found reports whether the analysis came from a matched handler declaration.
@@ -3064,6 +3068,7 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 			successStatus: a.extractSuccessStatus(funcDecl, serverAliases),
 			errorStatuses: a.inferErrorStatuses(funcDecl, serverAliases),
 			wrapper:       a.resultWrapperKind(funcDecl.Type.Results, serverAliases),
+			headers:       a.extractResponseHeaders(funcDecl, serverAliases),
 		}
 		// Defensive, like warnGenericPayload's check: today a payload holding an
 		// Instantiation never resolves to a TypeInfo.

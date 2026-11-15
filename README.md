@@ -272,6 +272,38 @@ nested Go module, is not.
   `//openapi:errors`.
 - Response trace headers (`traceparent`, `X-Request-ID`) are not modeled in
   the generated spec.
+- Response headers are inferred only from string-literal keys a handler
+  writes to `Result.Headers` / `ResultWithMeta.Headers` in its own body,
+  outside function literals (`res.Headers = http.Header{"Location": …}`,
+  `res.Headers.Set("Location", …)`, `.Add`, `res.Headers["Location"] = …`, a
+  `Headers:` element of a Result literal, or a local `h` given as `Headers: h`
+  / `res.Headers = h` and written with the same shapes). A write counts only
+  when a return of the same variable with a literal `nil` error — matched by
+  declaration, so a same-named variable in an inner block is not it — can
+  run after it: a statement following it in an enclosing block, at any
+  depth, without leaving a block that ends in a `return`. Another `case` of
+  the same `switch`/`select`, the other arm of an `if`/`else`, statements
+  earlier in an enclosing loop and `goto` targets never count, so such a
+  write is not documented; a write in an `if`/`switch`/`for` initializer is
+  followed by every arm, and one in a `case` ending in `fallthrough` by the
+  clauses it falls into. A bare `return` returns the first named result,
+  and only when the named error result is never assigned anything but the
+  literal `nil` outside function literals. A write to a local map counts
+  when one such return can run after both the write and the assignment
+  giving the map to the returned result, and the two are one statement or
+  one of them can run after the other (in either order) — a write and an
+  assignment that connect only across loop iterations are not followed, so
+  that header is not documented — or when such a return gives a literal
+  holding the map; a map that is ever reassigned after its
+  declaration (`h = …`) contributes nothing. They are documented on the
+  success response as optional string headers, under their canonical names,
+  with `Content-Type` and names that are not valid header tokens dropped.
+  Keys from constants (`echo.HeaderLocation`) or variables are not
+  documented, and neither are headers set in helpers, closures or middleware,
+  or through an alias of the field (`h := res.Headers`); issue #150 tracks an
+  escape hatch for those. Removal is not modeled: a name set and later
+  `Del`eted, or whose map is later reset (`res.Headers = nil`), is still
+  documented.
 - `server.WithMiddleware(...)` is intentionally ignored — middleware names
   carry no spec semantics.
 - Tenant enforcement is not derived from runtime config; the security scheme

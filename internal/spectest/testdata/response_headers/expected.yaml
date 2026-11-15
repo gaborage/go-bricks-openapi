@@ -1,0 +1,1526 @@
+openapi: 3.0.1
+info:
+  title: Response_headers API
+  version: 1.0.0
+  description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
+paths:
+  /add:
+    post:
+      operationId: responseheadersAdd
+      summary: POST /add
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "202":
+          description: Request accepted for processing
+          headers:
+            Retry-After:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /aliased-net-http:
+    post:
+      operationId: responseheadersAliasedNetHTTP
+      summary: POST /aliased-net-http
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /before-error:
+    post:
+      operationId: responseheadersBeforeError
+      summary: POST /before-error
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "503":
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /bound-meta:
+    post:
+      operationId: responseheadersBoundMeta
+      summary: POST /bound-meta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /bound-result:
+    post:
+      operationId: responseheadersBoundResult
+      summary: POST /bound-result
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /closure:
+    post:
+      operationId: responseheadersClosure
+      summary: POST /closure
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /conditional:
+    get:
+      operationId: responseheadersConditional
+      summary: GET /conditional
+      responses:
+        "200":
+          description: Successful response
+          headers:
+            Etag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /constant-keys:
+    post:
+      operationId: responseheadersConstantKeys
+      summary: POST /constant-keys
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /content-type:
+    post:
+      operationId: responseheadersContentType
+      summary: POST /content-type
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /deferred:
+    post:
+      operationId: responseheadersDeferred
+      summary: POST /deferred
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /error-only:
+    post:
+      operationId: responseheadersErrorOnly
+      summary: POST /error-only
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /fallthrough:
+    post:
+      operationId: responseheadersFallthroughCase
+      summary: POST /fallthrough
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "200":
+          description: Successful response
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /index:
+    post:
+      operationId: responseheadersIndex
+      summary: POST /index
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /init-write:
+    post:
+      operationId: responseheadersInitWrite
+      summary: POST /init-write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "200":
+          description: Successful response
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /inner-shadow:
+    post:
+      operationId: responseheadersInnerShadow
+      summary: POST /inner-shadow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /literal:
+    post:
+      operationId: responseheadersLiteral
+      summary: POST /literal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /local-map:
+    post:
+      operationId: responseheadersLocalMap
+      summary: POST /local-map
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "200":
+          description: Successful response
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /lowercase:
+    post:
+      operationId: responseheadersLowercase
+      summary: POST /lowercase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /map-exclusive-arms:
+    post:
+      operationId: responseheadersMapExclusiveArms
+      summary: POST /map-exclusive-arms
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /map-literal:
+    post:
+      operationId: responseheadersMapLiteral
+      summary: POST /map-literal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /map-split-paths:
+    post:
+      operationId: responseheadersMapSplitPaths
+      summary: POST /map-split-paths
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /named-bare:
+    post:
+      operationId: responseheadersNamedBare
+      summary: POST /named-bare
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /named-bare-error:
+    post:
+      operationId: responseheadersNamedBareError
+      summary: POST /named-bare-error
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /nil-before-error:
+    post:
+      operationId: responseheadersNilBeforeError
+      summary: POST /nil-before-error
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /no-content:
+    delete:
+      operationId: responseheadersNoContent
+      summary: DELETE /no-content
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "204":
+          description: No Content
+          headers:
+            Location:
+              schema:
+                type: string
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /no-content-result:
+    delete:
+      operationId: responseheadersNoContentResult
+      summary: DELETE /no-content-result
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /none:
+    get:
+      operationId: responseheadersNone
+      summary: GET /none
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /pointer:
+    post:
+      operationId: responseheadersPointer
+      summary: POST /pointer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /raw:
+    post:
+      operationId: responseheadersRaw
+      summary: POST /raw
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Item'
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RawErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RawErrorResponse'
+  /returned-meta:
+    post:
+      operationId: responseheadersReturnedMeta
+      summary: POST /returned-meta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "202":
+          description: Request accepted for processing
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /returned-result:
+    post:
+      operationId: responseheadersReturnedResult
+      summary: POST /returned-result
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /set:
+    post:
+      operationId: responseheadersSet
+      summary: POST /set
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "201":
+          description: Resource created successfully
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /sibling-case:
+    post:
+      operationId: responseheadersSiblingCase
+      summary: POST /sibling-case
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemReq'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Item'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request — malformed request or failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code (e.g. BAD_REQUEST, NOT_FOUND, INTERNAL_ERROR, or a custom business code)
+            details:
+              type: object
+              properties:
+                validationErrors:
+                  type: array
+                  description: Per-field validation failures (400 validation errors)
+                  items:
+                    type: object
+                    properties:
+                      field:
+                        type: string
+                        description: Field that failed validation
+                      message:
+                        type: string
+                        description: Violated validation rule
+                  maxItems: 100
+              description: Contextual error payload, sent only when app.debug is enabled in a development environment
+            message:
+              type: string
+              description: Human-readable error message
+          description: Error details
+        meta:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+              description: RFC3339 response timestamp
+            traceId:
+              type: string
+              description: W3C trace identifier for the request
+      required:
+        - error
+    Item:
+      type: object
+      properties:
+        id:
+          type: string
+    ItemReq:
+      type: object
+      properties:
+        name:
+          type: string
+    RawErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code
+        message:
+          type: string
+          description: Human-readable error message
+      required:
+        - code
+        - message
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+      description: Tenant identifier. Enforced only when the service runs with multitenancy enabled and a header-based tenant resolver; a missing or invalid tenant yields HTTP 400. Deployments resolving the tenant from the subdomain or URL path do not read this header.
+security:
+  - TenantID: []
