@@ -3974,7 +3974,7 @@ func (a *ProjectAnalyzer) followChain(astFile *ast.File, filePath, name string, 
 	// copy reaches it through another package's alias (type QU lx.U, with
 	// type U = dw.T, beside type QU dw.T).
 	if ends := a.copyEnds(a.localTypeDecls(name, astFile, filePath), depth); ends != nil {
-		if _, disagree := structEndsCause(ends); disagree {
+		if _, disagree := a.structEndsCause(ends); disagree {
 			return chainEnd{}, false
 		}
 		return ends[0], true
@@ -4085,7 +4085,7 @@ func (a *ProjectAnalyzer) structCopiesDisagree(decls []typeDecl, depth int) (cau
 	if ends == nil {
 		return "", false
 	}
-	return structEndsCause(ends)
+	return a.structEndsCause(ends)
 }
 
 // copyEnds returns the struct each of decls, every declaration of one name,
@@ -4107,18 +4107,22 @@ func (a *ProjectAnalyzer) copyEnds(decls []typeDecl, depth int) []chainEnd {
 }
 
 // structEndsCause reports whether ends, the structs a type's copies reach,
-// are not all one declaration, and why (structCopiesDisagree).
-func structEndsCause(ends []chainEnd) (cause string, disagree bool) {
+// are not all one declaration under one binding, and why
+// (structCopiesDisagree). Copies reaching one generic struct under different
+// type arguments (type W Page[A] beside type W Page[B]) disagree on shape.
+func (a *ProjectAnalyzer) structEndsCause(ends []chainEnd) (cause string, disagree bool) {
 	first := ends[0]
-	sameName, sameDecl := true, true
+	bound := a.envIdentity(first.env)
+	sameName, sameDecl, sameEnv := true, true, true
 	for _, e := range ends[1:] {
 		sameName = sameName && e.name == first.name
 		sameDecl = sameDecl && e.name == first.name && filepath.Dir(e.path) == filepath.Dir(first.path)
+		sameEnv = sameEnv && a.envIdentity(e.env) == bound
 	}
 	switch {
-	case sameDecl:
+	case sameDecl && sameEnv:
 		return "", false
-	case sameName:
+	case sameName && !sameDecl:
 		return declsClashCause, true
 	default:
 		return declsShapeCause, true

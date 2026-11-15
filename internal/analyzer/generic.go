@@ -35,7 +35,9 @@ const (
 // their substituted types, which warn first if go-bricks cannot bind them.
 // One whose generic type holds a marshal method is documented as a struct
 // Marshaler request (#111) is: its body is the leaf, and only its
-// parameters are kept. It reports false for any other request.
+// parameters are kept. One inlined for an anonymous struct argument is
+// documented as an anonymous struct request is. It reports false for any
+// other request.
 func (a *ProjectAnalyzer) populateInstantiationRequest(h *handlerAnalysis, astFile *ast.File, filePath string) bool {
 	if h.requestExpr == nil || isMultiPointer(h.requestExpr) {
 		return false
@@ -53,7 +55,24 @@ func (a *ProjectAnalyzer) populateInstantiationRequest(h *handlerAnalysis, astFi
 		adoptRegisteredType(h.request, ti)
 		return true
 	}
+	if r.Kind == models.ShapeStruct {
+		return a.populateInlineInstantiationRequest(h, astFile, filePath)
+	}
 	return a.populateGenericMarshalerRequest(h, r, c.st.first, astFile, filePath)
+}
+
+// populateInlineInstantiationRequest documents a request whose
+// Instantiation is inlined, an argument being an anonymous struct
+// (Box[struct{ X int }], ADR 0003), as an anonymous struct request is
+// (inlineRequest): no component, no warning.
+func (a *ProjectAnalyzer) populateInlineInstantiationRequest(h *handlerAnalysis, astFile *ast.File, filePath string) bool {
+	ec := embedClassifier{a: a, home: filepath.Dir(filePath)}
+	site, ok := ec.genericStruct(pointee(h.requestExpr), astFile, filePath, nil, 0)
+	if !ok {
+		return false
+	}
+	h.request = a.inlineRequest(site, h.requestType)
+	return true
 }
 
 // populateGenericMarshalerRequest documents a request whose type is an

@@ -3,7 +3,9 @@ package analyzer
 import (
 	"cmp"
 	"go/ast"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -67,6 +69,11 @@ const anyArgName = "any"
 // whose cut is an Instantiation.
 const instCutDetail = "instantiation"
 
+// identityCap stands for the part of an argument's identity past
+// maxNamedResolutionDepth named steps; an Instantiation whose identity holds
+// it is cut (instCut), never shared.
+const identityCap = "\x00cap"
+
 // resolveNamed resolves a ShapeNamed leaf: a type parameter bound in c's
 // declaration as its argument, a qualified name as resolveQualified does,
 // and any other name as a local type.
@@ -122,13 +129,11 @@ func (a *ProjectAnalyzer) resolveInstantiationAs(s models.TypeShape, c resolveCt
 	}
 	env := g.bind(s.Inst.Args, c)
 	key := a.instIdentity(g, env, 0)
-	if why := c.st.cut(key); why != fallbackNone {
-		shown := cmp.Or(c.st.openInsts[key], s.Inst.Written)
-		c.st.note(fieldFallback{kind: why, typeName: shown, detail: instCutDetail})
-		return models.TypeShape{Kind: models.ShapeRecursive, Name: shown}
+	if cut, isCut := instCut(key, s.Inst.Written, c); isCut {
+		return cut
 	}
 	if methods {
-		if r, isMarshaler := a.genericMarshalerLeaf(g, s.Inst.Written, c); isMarshaler {
+		if r, isMarshaler := a.genericMarshalerLeaf(g, env, key, s.Inst.Written, c); isMarshaler {
 			return r
 		}
 	}
@@ -137,6 +142,23 @@ func (a *ProjectAnalyzer) resolveInstantiationAs(s models.TypeShape, c resolveCt
 		return models.TypeShape{Kind: models.ShapeUnknown, Name: kind}
 	}
 	return a.expandInstantiation(g, env, key, s.Inst.Written, c, methods)
+}
+
+// instCut cuts the Instantiation identified by key, written as written,
+// like a recursion when it is already open in c, and like the depth cap when
+// its identity was capped (identityCap): two capped identities may be two
+// different types, so neither is documented as the other.
+func instCut(key, written string, c resolveCtx) (models.TypeShape, bool) {
+	why := c.st.cut(key)
+	if why == fallbackNone && strings.Contains(key, identityCap) {
+		why = fallbackDepthCap
+	}
+	if why == fallbackNone {
+		return models.TypeShape{}, false
+	}
+	shown := cmp.Or(c.st.openInsts[key], written)
+	c.st.note(fieldFallback{kind: why, typeName: shown, detail: instCutDetail})
+	return models.TypeShape{Kind: models.ShapeRecursive, Name: shown}, true
 }
 
 // expandInstantiation resolves g's declaration under env: a generic struct
@@ -258,7 +280,7 @@ func (g genericDecl) bind(args []models.TypeShape, c resolveCtx) typeEnv {
 // it is a string both ways, else a noted Marshaler leaf, named as written. A
 // generic type takes no Stated schema (#117 refuses the directive on one),
 // so the leaf carries none.
-func (a *ProjectAnalyzer) genericMarshalerLeaf(g genericDecl, written string, c resolveCtx) (models.TypeShape, bool) {
+func (a *ProjectAnalyzer) genericMarshalerLeaf(g genericDecl, env typeEnv, key, written string, c resolveCtx) (models.TypeShape, bool) {
 	if c.st.param {
 		return models.TypeShape{}, false
 	}
@@ -266,6 +288,13 @@ func (a *ProjectAnalyzer) genericMarshalerLeaf(g genericDecl, written string, c 
 	m, fb := a.methodSetOf(g.spec.Name.Name, dc, true, nil).marshaler(dc.display(g.spec.Name.Name))
 	if !m.found() {
 		return models.TypeShape{}, false
+	}
+	// As marshalerLeaf: a byte-kind type with only decode-side methods is a
+	// plain byte as a slice element, so the slice stays base64 (#97).
+	if c.byteElem && !m.encode {
+		if under := a.expandInstantiation(g, env, key, written, c.quiet(), false); isBytePrimitive(&under) {
+			return under, true
+		}
 	}
 	return methodSetLeaf(m, fb, written, nil, c), true
 }
@@ -329,13 +358,15 @@ func (a *ProjectAnalyzer) instIdentity(g genericDecl, env typeEnv, depth int) st
 // name, and an Instantiation by its own identity.
 func (a *ProjectAnalyzer) argIdentity(s models.TypeShape, at pkgFile, env typeEnv, depth int) string {
 	if depth > maxNamedResolutionDepth {
-		return "…"
+		return identityCap
 	}
+	// A composite level is finite syntax, so it spends no depth: only named
+	// steps (a parameter, an alias, an Instantiation) can loop.
 	elem := func(e *models.TypeShape) string {
 		if e == nil {
 			return ""
 		}
-		return a.argIdentity(*e, at, env, depth+1)
+		return a.argIdentity(*e, at, env, depth)
 	}
 	switch s.Kind {
 	case models.ShapePrimitive:
@@ -354,7 +385,7 @@ func (a *ProjectAnalyzer) argIdentity(s models.TypeShape, at pkgFile, env typeEn
 		c := newResolveCtx(at.file, at.path, false)
 		c.env = env
 		if g, ok := a.genericDeclOf(s.Inst, c); ok {
-			return a.instIdentity(g, g.bind(s.Inst.Args, c), depth+1)
+			return a.boundInstIdentity(g, g.bind(s.Inst.Args, c), depth+1)
 		}
 		return filepath.Dir(at.path) + "\x00" + s.Inst.Written
 	case models.ShapeStruct:
@@ -364,6 +395,29 @@ func (a *ProjectAnalyzer) argIdentity(s models.TypeShape, at pkgFile, env typeEn
 	default:
 	}
 	return string(s.Kind) + ":" + s.Name
+}
+
+// boundInstIdentity is instIdentity for an argument's Instantiation of g
+// under env, except that a generic alias (type Alias[T any] = Box[T]) is
+// identified by its target under env, since Go treats Box[Alias[int]] and
+// Box[Box[int]] as one type.
+func (a *ProjectAnalyzer) boundInstIdentity(g genericDecl, env typeEnv, depth int) string {
+	if g.spec.Assign.IsValid() {
+		return a.argIdentity(a.typeShape(g.spec.Type), g.site, env, depth)
+	}
+	return a.instIdentity(g, env, depth)
+}
+
+// envIdentity identifies the bindings env holds, by each parameter's name
+// and its argument's identity, in name order; "" for no bindings.
+func (a *ProjectAnalyzer) envIdentity(env typeEnv) string {
+	names := slices.Sorted(maps.Keys(env))
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		arg := env[name]
+		parts = append(parts, name+"="+a.argIdentity(arg.shape, arg.site, arg.env, 0))
+	}
+	return strings.Join(parts, ",")
 }
 
 // primitiveArgName spells a builtin type argument: interface{} as any, the

@@ -265,7 +265,7 @@ func TestInstantiationIdentity(t *testing.T) {
 	assert.Equal(t, "map[string]int", id("map[string]int"))
 	assert.Equal(t, "Undeclared[int]", id("Undeclared[int]")[len(id("Undeclared[int]"))-len("Undeclared[int]"):])
 	assert.Equal(t, "q.Unknown", id("q.Unknown"), "a qualifier no import binds keeps its spelling")
-	assert.Equal(t, "…", a.argIdentity(a.typeShape(mustParse(t, "int")), at, nil, maxNamedResolutionDepth+1))
+	assert.Equal(t, identityCap, a.argIdentity(a.typeShape(mustParse(t, "int")), at, nil, maxNamedResolutionDepth+1))
 	assert.Equal(t, "unknown:func", id("func()"))
 	bound := typeEnv{"T": {shape: a.typeShape(mustParse(t, "t.Time")), site: at}}
 	assert.Equal(t, id("time.Time"), a.argIdentity(a.typeShape(mustParse(t, "T")), at, bound, 0), "a type parameter is its argument")
@@ -504,4 +504,202 @@ func TestInstantiationFuncChanArgRefused(t *testing.T) {
 	} {
 		assert.Len(t, matching(warnings, want), 1, "%q in %v", want, warnings)
 	}
+}
+
+// instReviewSrc holds the review rows of issue 114: a decode-only byte-kind
+// generic as a slice element, identities past the depth cap, a generic alias
+// argument, one literal under two bindings, build-tagged copies of one
+// generic struct under different arguments (W, in w_a.go and w_b.go) and a
+// parenthesized pointer receiver.
+const instReviewSrc = `package mod
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                    { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error                 { return nil }
+
+type Box[T any] struct {
+	V T ` + "`json:\"v\"`" + `
+}
+
+type A struct {
+	X int ` + "`json:\"x\"`" + `
+}
+
+type B struct {
+	Y string ` + "`json:\"y\"`" + `
+}
+
+type Page[T any] struct {
+	Items []T ` + "`json:\"items\"`" + `
+}
+
+type BY[T any] byte
+
+func (b *BY[T]) UnmarshalJSON([]byte) error { return nil }
+
+type BE[T any] byte
+
+func (b BE[T]) MarshalJSON() ([]byte, error) { return nil, nil }
+
+type Alias[T any] = Box[T]
+
+type List[T any] []struct {
+	Value T ` + "`json:\"value\"`" + `
+}
+
+type PT[X any] struct {
+	V X ` + "`json:\"v\"`" + `
+}
+
+func (r (*PT[X])) MarshalText() ([]byte, error) { return nil, nil }
+func (r *PT[X]) UnmarshalText([]byte) error    { return nil }
+
+type VT[X any] struct {
+	V X ` + "`json:\"v\"`" + `
+}
+
+func (r (VT[X])) MarshalText() ([]byte, error) { return nil, nil }
+func (r *VT[X]) UnmarshalText([]byte) error    { return nil }
+
+type Rows struct {
+	BY []BY[int]                        ` + "`json:\"by\"`" + `
+	BE []BE[int]                        ` + "`json:\"be\"`" + `
+	D1 Box[[][][][][][][][][][]int]     ` + "`json:\"d1\"`" + `
+	D2 Box[[][][][][][][][][][]string]  ` + "`json:\"d2\"`" + `
+	AB Box[Alias[int]]                  ` + "`json:\"ab\"`" + `
+	BB Box[Box[int]]                    ` + "`json:\"bb\"`" + `
+	LL List[List[int]]                  ` + "`json:\"ll\"`" + `
+	W  W                                ` + "`json:\"w\"`" + `
+	PT PT[int]                          ` + "`json:\"pt\"`" + `
+	VT VT[int]                          ` + "`json:\"vt\"`" + `
+}
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/rows", m.rows)
+}
+
+func (m *Module) rows(ctx server.HandlerContext) (server.Result[Rows], server.IAPIError) {
+	return server.Result[Rows]{}, nil
+}
+`
+
+// analyzeInstReview analyzes instReviewSrc with W's two build-tagged copies.
+func analyzeInstReview(t *testing.T) (a *ProjectAnalyzer, rows map[string]string) {
+	t.Helper()
+	a, routes := analyzeProjectRoutes(t, map[string]string{
+		"go.mod":                          resolveGoMod,
+		filepath.Join("mod", "module.go"): instReviewSrc,
+		filepath.Join("mod", "w_a.go"):    "//go:build linux\n\npackage mod\n\ntype W Page[A]\n",
+		filepath.Join("mod", "w_b.go"):    "//go:build !linux\n\npackage mod\n\ntype W Page[B]\n",
+	})
+	require.Len(t, routes, 1)
+	rows = renders(t, a.typeRegistry["Rows"])
+	return a, rows
+}
+
+// TestInstantiationByteElemDecodeOnly pins that a byte-kind generic type with
+// only decode-side methods is a plain byte as a slice element, so the slice
+// stays base64 (#97), as a non-generic one is, while one with an encode-side
+// method stays a Marshaler element.
+func TestInstantiationByteElemDecodeOnly(t *testing.T) {
+	a, rows := analyzeInstReview(t)
+	assert.Equal(t, "[]byte", rows["by"])
+	assert.Equal(t, "[]marshal:BE[int](unknown)", rows["be"])
+	assert.Empty(t, matching(a.Warnings(t.Context()), "UnmarshalJSON"), "%v", a.warnings)
+}
+
+// TestInstantiationIdentityPastDepthCap pins that composite levels spend no
+// identity depth, so two deep arguments that differ only at the leaf are two
+// Instantiations, and that a capped identity is cut, never shared.
+func TestInstantiationIdentityPastDepthCap(t *testing.T) {
+	a, rows := analyzeInstReview(t)
+	assert.NotEqual(t, rows["d1"], rows["d2"])
+	assert.Equal(t, "$Box-slice-slice-slice-slice-slice-slice-slice-slice-slice-slice-int", rows["d1"])
+
+	file, path := instReviewFile(t, a)
+	c := newResolveCtx(file, path, false)
+	shape, cut := instCut("Box["+identityCap+"]", "Box[deep]", c)
+	require.True(t, cut)
+	assert.Equal(t, models.ShapeRecursive, shape.Kind)
+	assert.Equal(t, fallbackDepthCap, c.st.first.kind)
+}
+
+// instReviewFile returns the parsed module file of an analyzeInstReview
+// project.
+func instReviewFile(t *testing.T, a *ProjectAnalyzer) (file *ast.File, path string) {
+	t.Helper()
+	for dir, files := range a.pkgCache {
+		if filepath.Base(dir) != "mod" {
+			continue
+		}
+		for p, f := range files {
+			if strings.HasSuffix(p, "module.go") {
+				return f, p
+			}
+		}
+	}
+	require.Fail(t, "module file not parsed")
+	return nil, ""
+}
+
+// TestInstantiationGenericAliasArgument pins that a generic alias argument is
+// identified by its target: Box[Alias[int]] and Box[Box[int]] are one Go type
+// and one component.
+func TestInstantiationGenericAliasArgument(t *testing.T) {
+	a, rows := analyzeInstReview(t)
+	assert.Equal(t, "$Box-Box-int", rows["ab"])
+	assert.Equal(t, "$Box-Box-int", rows["bb"])
+	for name := range a.typeRegistry {
+		assert.NotContains(t, name, "ModBox", "no collision copy")
+	}
+}
+
+// TestInstantiationLiteralUnderTwoBindings pins that one anonymous struct
+// literal reached under two bindings (List[List[int]]) is two types, not a
+// cycle: no recursion warning, both levels documented.
+func TestInstantiationLiteralUnderTwoBindings(t *testing.T) {
+	a, rows := analyzeInstReview(t)
+	assert.Equal(t, "[]struct{value []struct{value int}}", rows["ll"])
+	assert.Empty(t, matching(a.Warnings(t.Context()), "contains itself"), "%v", a.warnings)
+}
+
+// TestBuildTaggedCopiesDifferentBindings pins that build-tagged copies of
+// one name reaching one generic struct under different type arguments
+// (type W Page[A] beside type W Page[B]) disagree on shape.
+func TestBuildTaggedCopiesDifferentBindings(t *testing.T) {
+	a, rows := analyzeInstReview(t)
+	assert.Equal(t, "W", rows["w"])
+	assert.Len(t, matching(a.Warnings(t.Context()), "W's build-tagged declarations disagree on shape (no common container shape"), 1, "%v", a.warnings)
+	_, registered := a.typeRegistry["W"]
+	assert.False(t, registered)
+}
+
+// TestGenericParenthesizedPointerReceiver pins that a parenthesized pointer
+// receiver (func (r (*PT[X])) MarshalText) is the pointer's method, so PT is
+// no text type both ways and stays a Marshaler, while a parenthesized value
+// receiver (VT) is a string.
+func TestGenericParenthesizedPointerReceiver(t *testing.T) {
+	a, rows := analyzeInstReview(t)
+	assert.Equal(t, "marshal:PT[int](unknown)", rows["pt"])
+	assert.Equal(t, "text:VT[int]", rows["vt"])
+	assert.Len(t, matching(a.Warnings(t.Context()), "PT has its own MarshalText"), 1, "%v", a.warnings)
+}
+
+// TestGenericInlineRequest pins that a request whose Instantiation is
+// inlined for an anonymous struct argument is documented as an anonymous
+// struct request: an inline body, no component, no warning.
+func TestGenericInlineRequest(t *testing.T) {
+	run := analyzeGenericRoute(t, "req Box[struct{ X int `json:\"x\"` }], ctx server.HandlerContext", "server.Result[Receipt]")
+	assert.Empty(t, run.warnings)
+	require.NotNil(t, run.route.Request)
+	assert.Empty(t, run.route.Request.Name)
+	assert.Equal(t, "struct{v struct{x int}}", renderShapePtr(run.route.Request.Resolution))
+	assertNoGenericComponent(t, run.a)
 }

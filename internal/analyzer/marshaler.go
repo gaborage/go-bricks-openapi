@@ -218,7 +218,7 @@ func (a *ProjectAnalyzer) visitMarshalerMethods(file *ast.File, name string, vis
 		if imports == nil {
 			imports = a.fileImports(file)
 		}
-		_, ptr := fd.Recv.List[0].Type.(*ast.StarExpr)
+		_, ptr := ast.Unparen(fd.Recv.List[0].Type).(*ast.StarExpr)
 		visit(fd.Name.Name, matchMarshalerSignature(fd, sig, imports), ptr)
 	}
 }
