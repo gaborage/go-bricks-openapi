@@ -65,8 +65,14 @@ func sourceFiles(dir string) ([]string, error) {
 // method declaration or function literal in path with a blank or unnamed
 // context.Context parameter.
 func blankContextParams(path string) ([]string, error) {
+	return blankContextParamsIn(path, nil)
+}
+
+// blankContextParamsIn is blankContextParams over src when src is non-nil,
+// and over the file at path otherwise.
+func blankContextParamsIn(path string, src any) ([]string, error) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	file, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +109,7 @@ func funcTypeOf(n ast.Node) *ast.FuncType {
 }
 
 // contextImportNames returns the local names under which file imports the
-// standard "context" package.
+// standard "context" package. A dot import is recorded as ".".
 func contextImportNames(file *ast.File) map[string]bool {
 	names := map[string]bool{}
 	for _, spec := range file.Imports {
@@ -123,12 +129,7 @@ func contextImportNames(file *ast.File) map[string]bool {
 // isBlankContextField reports whether field is a context.Context parameter
 // that is unnamed or named _.
 func isBlankContextField(field *ast.Field, aliases map[string]bool) bool {
-	sel, ok := field.Type.(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != "Context" {
-		return false
-	}
-	pkg, ok := sel.X.(*ast.Ident)
-	if !ok || !aliases[pkg.Name] {
+	if !isContextType(field.Type, aliases) {
 		return false
 	}
 	if len(field.Names) == 0 {
@@ -140,4 +141,90 @@ func isBlankContextField(field *ast.Field, aliases map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+// isContextType reports whether expr spells context.Context: qualified by one
+// of the file's import names for the package, or the bare Context that a dot
+// import exposes.
+func isContextType(expr ast.Expr, aliases map[string]bool) bool {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name == "Context" && aliases["."]
+	case *ast.SelectorExpr:
+		pkg, ok := t.X.(*ast.Ident)
+		return ok && t.Sel.Name == "Context" && aliases[pkg.Name]
+	}
+	return false
+}
+
+// TestBlankContextParams pins which spellings the repo check reports, by the
+// line of each offending parameter.
+func TestBlankContextParams(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{
+			name: "qualified",
+			src: `package p
+import "context"
+func blank(_ context.Context) {}
+func unnamed(context.Context) {}
+func used(ctx context.Context) error { return ctx.Err() }
+var lit = func(_ context.Context) {}
+type T struct{}
+func (T) method(_ context.Context, n int) {}
+`,
+			want: []string{"x.go:3", "x.go:4", "x.go:6", "x.go:8"},
+		},
+		{
+			name: "aliased",
+			src: `package p
+import ctxpkg "context"
+func blank(_ ctxpkg.Context) {}
+func used(ctx ctxpkg.Context) error { return ctx.Err() }
+`,
+			want: []string{"x.go:3"},
+		},
+		{
+			name: "dot import",
+			src: `package p
+import . "context"
+func blank(_ Context) {}
+func unnamed(Context) {}
+func used(ctx Context) error { return ctx.Err() }
+`,
+			want: []string{"x.go:3", "x.go:4"},
+		},
+		{
+			name: "other Context types",
+			src: `package p
+import "example.com/other"
+type Context struct{}
+func local(_ Context) {}
+func foreign(_ other.Context) {}
+`,
+		},
+		{
+			name: "bare Context without a dot import of context",
+			src: `package p
+import "context"
+type Context struct{}
+func local(_ Context) {}
+func used(ctx context.Context) error { return ctx.Err() }
+`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := blankContextParamsIn("x.go", tc.src)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
