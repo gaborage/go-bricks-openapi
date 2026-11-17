@@ -145,9 +145,9 @@ func isBlankContextField(field *ast.Field, aliases map[string]bool) bool {
 
 // isContextType reports whether expr spells context.Context: qualified by one
 // of the file's import names for the package, or the bare Context that a dot
-// import exposes.
+// import exposes. Parentheses around the type are ignored.
 func isContextType(expr ast.Expr, aliases map[string]bool) bool {
-	switch t := expr.(type) {
+	switch t := ast.Unparen(expr).(type) {
 	case *ast.Ident:
 		return t.Name == "Context" && aliases["."]
 	case *ast.SelectorExpr:
@@ -196,6 +196,25 @@ func unnamed(Context) {}
 func used(ctx Context) error { return ctx.Err() }
 `,
 			want: []string{"x.go:3", "x.go:4"},
+		},
+		{
+			name: "parenthesized",
+			src: `package p
+import "context"
+func blank(_ (context.Context)) {}
+func unnamed((context.Context)) {}
+func used(ctx (context.Context)) error { return ctx.Err() }
+`,
+			want: []string{"x.go:3", "x.go:4"},
+		},
+		{
+			name: "function types and interface methods are not checked",
+			src: `package p
+import "context"
+type F func(context.Context) error
+type I interface{ Do(_ context.Context) }
+func takes(f func(context.Context)) {}
+`,
 		},
 		{
 			name: "other Context types",
