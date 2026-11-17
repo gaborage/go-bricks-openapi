@@ -222,8 +222,8 @@ func (m *Module) createWidget(req CreateWidgetReq, ctx server.HandlerContext) (W
 		t.Fatalf("AnalyzeProject: %v", err)
 	}
 
-	warnings := tagWarnings(a.Warnings(t.Context()))
-	require.Len(t, warnings, 1, "expected exactly one malformed-tag warning, got: %v", a.Warnings(t.Context()))
+	warnings := tagWarnings(a.Warnings())
+	require.Len(t, warnings, 1, "expected exactly one malformed-tag warning, got: %v", a.Warnings())
 	assert.Contains(t, warnings[0], "Note")
 	assert.Contains(t, warnings[0], "validate")
 	assert.Contains(t, warnings[0], "go vet")
@@ -270,10 +270,10 @@ func (m *Module) createGadget(req CreateGadgetReq, ctx server.HandlerContext) (G
 		t.Fatalf("AnalyzeProject: %v", err)
 	}
 
-	warnings := tagWarnings(a.Warnings(t.Context()))
+	warnings := tagWarnings(a.Warnings())
 	require.Len(t, warnings, 1,
 		"explicit json name + malformed continuation must warn once, not twice (embeddedFields and parseFieldTags share the same *ast.BasicLit); got: %v",
-		a.Warnings(t.Context()))
+		a.Warnings())
 }
 
 // TestUnreadableTagKeysEmbeddedPromotionPath is Table 4, fixture shape 3: an
@@ -322,10 +322,10 @@ func (m *Module) createThing(req CreateThingReq, ctx server.HandlerContext) (Thi
 		t.Fatalf("AnalyzeProject: %v", err)
 	}
 
-	warnings := tagWarnings(a.Warnings(t.Context()))
+	warnings := tagWarnings(a.Warnings())
 	require.Len(t, warnings, 1,
 		"malformed tag hiding json itself on an embedded field must warn via embeddedFields (call site 3b); got: %v",
-		a.Warnings(t.Context()))
+		a.Warnings())
 	assert.Contains(t, warnings[0], "Base")
 	assert.Contains(t, warnings[0], "json")
 }
@@ -377,8 +377,8 @@ func (m *Module) createGizmo(req CreateGizmoReq, ctx server.HandlerContext) (Giz
 		t.Fatalf("AnalyzeProject: %v", err)
 	}
 
-	warnings := tagWarnings(a.Warnings(t.Context()))
-	require.Len(t, warnings, 1, "expected exactly one malformed-tag warning, got: %v", a.Warnings(t.Context()))
+	warnings := tagWarnings(a.Warnings())
+	require.Len(t, warnings, 1, "expected exactly one malformed-tag warning, got: %v", a.Warnings())
 	assert.Contains(t, warnings[0], "struct tag on field unknown at",
 		"an unmodeled embed must still be named \"unknown\" in the warning")
 	assert.Contains(t, warnings[0], "validate")

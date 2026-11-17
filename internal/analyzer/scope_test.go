@@ -199,16 +199,16 @@ func TestScopedConstRoutePaths(t *testing.T) {
 func TestUnresolvedRoutePathWarningNamesConcept(t *testing.T) {
 	a, routes := analyzeSingleModule(t, scopedModuleSrc("", "server.GET(hr, r, buildPath(), m.h)"))
 	assert.Empty(t, routes)
-	require.True(t, containsRawAddSubstr(a.Warnings(t.Context()), "unresolved route: skipping the server.GET registration"),
-		"expected a reworded server-verb warning, got: %v", a.Warnings(t.Context()))
+	require.True(t, containsRawAddSubstr(a.Warnings(), "unresolved route: skipping the server.GET registration"),
+		"expected a reworded server-verb warning, got: %v", a.Warnings())
 
 	dir := writeAnalyzerProject(t, "module.go", rawAddModuleSrc(
 		"r.Add(http.MethodGet, buildPath(), m.ping)"))
 	ra := New(dir)
 	_, err := ra.AnalyzeProject()
 	require.NoError(t, err)
-	require.True(t, containsRawAddSubstr(ra.Warnings(t.Context()), "unresolved route: skipping the r.Add registration"),
-		"expected a reworded .Add warning, got: %v", ra.Warnings(t.Context()))
+	require.True(t, containsRawAddSubstr(ra.Warnings(), "unresolved route: skipping the r.Add registration"),
+		"expected a reworded .Add warning, got: %v", ra.Warnings())
 }
 
 // TestUnresolvedGroupPrefixWarning pins the diagnostic for a route registered
@@ -218,18 +218,18 @@ func TestUnresolvedGroupPrefixWarning(t *testing.T) {
 	a, routes := analyzeSingleModule(t, scopedModuleSrc("",
 		"api := r.Group(compute())\n\tserver.GET(hr, api, \"/widgets\", m.h)"))
 	assert.Empty(t, routes, "a route on an unresolved group must be dropped")
-	require.True(t, containsRawAddSubstr(a.Warnings(t.Context()),
+	require.True(t, containsRawAddSubstr(a.Warnings(),
 		`unresolved route: skipping the server.GET registration on registrar "api"`),
-		"expected an unresolved-group-prefix warning, got: %v", a.Warnings(t.Context()))
+		"expected an unresolved-group-prefix warning, got: %v", a.Warnings())
 
 	dir := writeAnalyzerProject(t, "module.go", rawAddModuleSrc(
 		"api := r.Group(compute())\n\tapi.Add(http.MethodGet, \"/widgets\", m.ping)"))
 	ra := New(dir)
 	_, err := ra.AnalyzeProject()
 	require.NoError(t, err)
-	require.True(t, containsRawAddSubstr(ra.Warnings(t.Context()),
+	require.True(t, containsRawAddSubstr(ra.Warnings(),
 		`unresolved route: skipping the api.Add registration on registrar "api"`),
-		"expected an unresolved-group-prefix warning for .Add, got: %v", ra.Warnings(t.Context()))
+		"expected an unresolved-group-prefix warning for .Add, got: %v", ra.Warnings())
 }
 
 func TestConstScopesResolve(t *testing.T) {
@@ -551,8 +551,8 @@ func TestEmptyStringConstResolves(t *testing.T) {
 				got = append(got, routes[i].Path)
 			}
 			assert.Equal(t, tt.wantPaths, got)
-			assert.False(t, containsRawAddSubstr(a.Warnings(t.Context()), "unresolved route"),
-				"an empty string constant must not read as unresolved: %v", a.Warnings(t.Context()))
+			assert.False(t, containsRawAddSubstr(a.Warnings(), "unresolved route"),
+				"an empty string constant must not read as unresolved: %v", a.Warnings())
 		})
 	}
 }

@@ -23,7 +23,7 @@ func TestUnresolvedRoutesRecordServerVerb(t *testing.T) {
 	a, routes := analyzeSingleModule(t, scopedModuleSrc("", "server.GET(hr, r, buildPath(), m.h)"))
 	assert.Empty(t, routes)
 
-	unresolved := a.UnresolvedRoutes(t.Context())
+	unresolved := a.UnresolvedRoutes()
 	require.Len(t, unresolved, 1)
 	assert.Equal(t, "server.GET", unresolved[0].Form)
 	assert.Equal(t, modFileRel, filepath.ToSlash(unresolved[0].File))
@@ -41,7 +41,7 @@ func TestUnresolvedRoutesRecordAddForm(t *testing.T) {
 	_, err := a.AnalyzeProject()
 	require.NoError(t, err)
 
-	unresolved := a.UnresolvedRoutes(t.Context())
+	unresolved := a.UnresolvedRoutes()
 	require.Len(t, unresolved, 1)
 	assert.Equal(t, "r.Add", unresolved[0].Form)
 	assert.Equal(t, "module.go", filepath.ToSlash(unresolved[0].File))
@@ -56,7 +56,7 @@ func TestUnresolvedRoutesEmptyForResolvedRoutes(t *testing.T) {
 	a, routes := analyzeSingleModule(t, scopedModuleSrc(`const p = "/pkg"`,
 		"const local = \"/local\"\n\tserver.GET(hr, r, local, m.h)\n\tserver.POST(hr, r, p+\"/x\", m.h)"))
 	require.Len(t, routes, 2)
-	assert.Empty(t, a.UnresolvedRoutes(t.Context()))
+	assert.Empty(t, a.UnresolvedRoutes())
 }
 
 // TestUnresolvedRoutesOnePerDroppedGroupRoute proves a group whose own prefix
@@ -67,7 +67,7 @@ func TestUnresolvedRoutesOnePerDroppedGroupRoute(t *testing.T) {
 		"api := r.Group(compute())\n\tserver.GET(hr, api, \"/widgets\", m.h)\n\tserver.POST(hr, api, \"/widgets\", m.h)"))
 	assert.Empty(t, routes)
 
-	unresolved := a.UnresolvedRoutes(t.Context())
+	unresolved := a.UnresolvedRoutes()
 	require.Len(t, unresolved, 2)
 	assert.Equal(t, "server.GET", unresolved[0].Form)
 	assert.Equal(t, "server.POST", unresolved[1].Form)
@@ -87,31 +87,31 @@ func TestUnresolvedRoutesResetBetweenRuns(t *testing.T) {
 	a := New(dir)
 	_, err := a.AnalyzeProject()
 	require.NoError(t, err)
-	require.Len(t, a.UnresolvedRoutes(t.Context()), 1)
+	require.Len(t, a.UnresolvedRoutes(), 1)
 
 	_, err = a.AnalyzeProject()
 	require.NoError(t, err)
-	assert.Len(t, a.UnresolvedRoutes(t.Context()), 1, "records must be reset, not accumulated")
+	assert.Len(t, a.UnresolvedRoutes(), 1, "records must be reset, not accumulated")
 }
 
 // TestUnresolvedRoutesWarningTextUnchanged proves the structured record is
 // collected ALONGSIDE the existing warning, not in place of it.
 func TestUnresolvedRoutesWarningTextUnchanged(t *testing.T) {
 	a, _ := analyzeSingleModule(t, scopedModuleSrc("", "server.GET(hr, r, buildPath(), m.h)"))
-	require.Len(t, a.UnresolvedRoutes(t.Context()), 1)
-	assert.True(t, containsRawAddSubstr(a.Warnings(t.Context()),
+	require.Len(t, a.UnresolvedRoutes(), 1)
+	assert.True(t, containsRawAddSubstr(a.Warnings(),
 		"unresolved route: skipping the server.GET registration, whose path argument is not a string literal or a resolvable constant"),
-		"the warning text must be unchanged, got: %v", a.Warnings(t.Context()))
+		"the warning text must be unchanged, got: %v", a.Warnings())
 }
 
 // TestUnresolvedRoutesClonedSlice proves the accessor hands back a copy, so a
 // caller cannot mutate analyzer state (the Warnings contract).
 func TestUnresolvedRoutesClonedSlice(t *testing.T) {
 	a, _ := analyzeSingleModule(t, scopedModuleSrc("", "server.GET(hr, r, buildPath(), m.h)"))
-	got := a.UnresolvedRoutes(t.Context())
+	got := a.UnresolvedRoutes()
 	require.Len(t, got, 1)
 	got[0].Form = "mutated"
-	assert.Equal(t, "server.GET", a.UnresolvedRoutes(t.Context())[0].Form)
+	assert.Equal(t, "server.GET", a.UnresolvedRoutes()[0].Form)
 }
 
 // TestUnresolvedRoutesSortedBySourcePosition proves the accessor orders entries
@@ -126,7 +126,7 @@ func TestUnresolvedRoutesSortedBySourcePosition(t *testing.T) {
 		{Form: "a.early", File: "a/mod.go", Line: 3, Col: 9},
 	}
 
-	sorted := a.UnresolvedRoutes(t.Context())
+	sorted := a.UnresolvedRoutes()
 	forms := make([]string, 0, len(sorted))
 	for _, r := range sorted {
 		forms = append(forms, r.Form)

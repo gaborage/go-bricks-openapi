@@ -49,7 +49,7 @@ func TestRunGenerateDuplicateRoutesStrict(t *testing.T) {
 // and counts only the routes kept.
 func TestRunDoctorDuplicateRoutes(t *testing.T) {
 	stdout := testutil.CaptureStdout(t, func() {
-		_ = runDoctor(t.Context(), &DoctorOptions{ProjectRoot: duplicateRoutesFixture})
+		_ = runDoctor(&DoctorOptions{ProjectRoot: duplicateRoutesFixture})
 	})
 	assert.Contains(t, stdout, "Routes discovered: 7\n")
 	assert.Equal(t, 7, strings.Count(stdout, duplicateRouteMarker), stdout)

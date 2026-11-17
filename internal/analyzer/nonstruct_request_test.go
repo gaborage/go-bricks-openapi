@@ -91,7 +91,7 @@ func analyzeNonStructRequest(t *testing.T, params, result string) (route models.
 	t.Helper()
 	src := strings.NewReplacer("PARAMS", params, "RESULT", result).Replace(nonStructRequestModSrc)
 	a, routes := analyzeSingleModule(t, src)
-	return routeForPath(t, routes, nonStructRequestRouteKey), a.Warnings(t.Context())
+	return routeForPath(t, routes, nonStructRequestRouteKey), a.Warnings()
 }
 
 // wantNonStructRequestWarning is the one warning a non-struct request type T raises.
@@ -231,7 +231,7 @@ func TestNonStructRequestInSiblingFileWarnsOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, project.Modules, 1)
 	route := routeForPath(t, project.Modules[0].Routes, nonStructRequestRouteKey)
-	assert.Equal(t, []string{wantNonStructRequestWarning("*string")}, a.Warnings(t.Context()))
+	assert.Equal(t, []string{wantNonStructRequestWarning("*string")}, a.Warnings())
 	assertUntypedRequest(t, route.Request)
 	require.NotNil(t, route.Response)
 	assert.Equal(t, "Address", route.Response.Name)

@@ -637,13 +637,13 @@ func TestRegistrarPrefixIsPositional(t *testing.T) {
 				assert.Equal(t, tt.wantPaths, orderedRoutePaths(routes))
 			}
 
-			unresolved := a.UnresolvedRoutes(t.Context())
+			unresolved := a.UnresolvedRoutes()
 			require.Len(t, unresolved, len(tt.wantUnresolved), "unresolved: %+v", unresolved)
 			for i, reason := range tt.wantUnresolved {
 				assert.Equal(t, reason, unresolved[i].Reason)
 			}
-			assert.Len(t, a.Warnings(t.Context()), len(tt.wantUnresolved),
-				"every Unresolved route must raise exactly one warning: %v", a.Warnings(t.Context()))
+			assert.Len(t, a.Warnings(), len(tt.wantUnresolved),
+				"every Unresolved route must raise exactly one warning: %v", a.Warnings())
 		})
 	}
 }
@@ -655,9 +655,9 @@ func TestPathDependentPrefixWarning(t *testing.T) {
 	a, routes := analyzeSingleModule(t, scopedModuleSrc("",
 		"g := r.Group(\"/c\")\n\tif enabled {\n\t\tg = r.Group(\"/d\")\n\t}\n\tserver.GET(hr, g, \"/x\", m.h)"))
 	assert.Empty(t, routes)
-	require.True(t, containsRawAddSubstr(a.Warnings(t.Context()),
+	require.True(t, containsRawAddSubstr(a.Warnings(),
 		`unresolved route: skipping the server.GET registration on registrar "g", whose group prefix `+pathDependentReasonTail),
-		"expected a path-dependent group-prefix warning, got: %v", a.Warnings(t.Context()))
+		"expected a path-dependent group-prefix warning, got: %v", a.Warnings())
 
 	dir := writeAnalyzerProject(t, "module.go", rawAddModuleSrc(
 		"g := r.Group(\"/c\")\n\tfor i := 0; i < 2; i++ {\n\t\tg = r.Group(\"/d\")\n\t\tg.Add(http.MethodGet, \"/x\", m.ping)\n\t}"))
@@ -666,10 +666,10 @@ func TestPathDependentPrefixWarning(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, project.Modules, 1)
 	assert.Empty(t, project.Modules[0].Routes)
-	require.True(t, containsRawAddSubstr(ra.Warnings(t.Context()),
+	require.True(t, containsRawAddSubstr(ra.Warnings(),
 		`unresolved route: skipping the g.Add registration on registrar "g", whose group prefix `+pathDependentReasonTail),
-		"expected a path-dependent group-prefix warning for .Add, got: %v", ra.Warnings(t.Context()))
-	unresolved := ra.UnresolvedRoutes(t.Context())
+		"expected a path-dependent group-prefix warning for .Add, got: %v", ra.Warnings())
+	unresolved := ra.UnresolvedRoutes()
 	require.Len(t, unresolved, 1)
 	assert.Equal(t, "g.Add", unresolved[0].Form)
 }
@@ -689,7 +689,7 @@ func TestHelperSeesRegistrarBindingAtCallSite(t *testing.T) {
 	a, routes := analyzeSingleModule(t, scopedModuleSrc(helper,
 		"api := r.Group(\"/a\")\n\tif enabled {\n\t\tapi = r.Group(\"/b\")\n\t}\n\tm.sub(hr, api)"))
 	assert.Empty(t, routes)
-	unresolved := a.UnresolvedRoutes(t.Context())
+	unresolved := a.UnresolvedRoutes()
 	require.Len(t, unresolved, 1)
 	assert.Equal(t, `group prefix on registrar "r" `+pathDependentReasonTail, unresolved[0].Reason)
 }
@@ -700,8 +700,8 @@ func TestHelperSeesRegistrarBindingAtCallSite(t *testing.T) {
 func TestReassignedRegistrarStillWarnsWhenPassed(t *testing.T) {
 	a, _ := analyzeSingleModule(t, scopedModuleSrc("",
 		"api := r.Group(\"/a\")\n\tapi = r.Group(\"/b\")\n\tregisterElsewhere(hr, api)"))
-	assert.True(t, containsRawAddSubstr(a.Warnings(t.Context()), "skipping registerElsewhere(...): it receives a route registrar"),
-		"expected the passed-registrar warning, got: %v", a.Warnings(t.Context()))
+	assert.True(t, containsRawAddSubstr(a.Warnings(), "skipping registerElsewhere(...): it receives a route registrar"),
+		"expected the passed-registrar warning, got: %v", a.Warnings())
 }
 
 // TestGroupCallArg covers the expression shapes that open a group registrar
@@ -799,7 +799,7 @@ func TestRegistrarWriteTakesEffectAfterItsRightHandSide(t *testing.T) {
 	a, routes := analyzeSingleModule(t, scopedModuleSrc(helper,
 		"api := r.Group(\"/a\")\n\tapi = m.wrap(hr, api)\n\tserver.GET(hr, api, \"/after\", m.h)"))
 	assert.Equal(t, []string{"/a/wrapped"}, orderedRoutePaths(routes))
-	unresolved := a.UnresolvedRoutes(t.Context())
+	unresolved := a.UnresolvedRoutes()
 	require.Len(t, unresolved, 1)
 	assert.Equal(t, ut("api"), []string{unresolved[0].Reason})
 }
@@ -810,9 +810,9 @@ func TestUntracedPrefixWarning(t *testing.T) {
 	a, routes := analyzeSingleModule(t, scopedModuleSrc("",
 		"api := r.Group(\"/a\")\n\tapi = newGroup()\n\tserver.GET(hr, api, \"/x\", m.h)"))
 	assert.Empty(t, routes)
-	require.True(t, containsRawAddSubstr(a.Warnings(t.Context()),
+	require.True(t, containsRawAddSubstr(a.Warnings(),
 		`unresolved route: skipping the server.GET registration on registrar "api", whose group prefix `+untracedReasonTail),
-		"expected an untraced group-prefix warning, got: %v", a.Warnings(t.Context()))
+		"expected an untraced group-prefix warning, got: %v", a.Warnings())
 }
 
 // TestHiddenDeclarations pins which outer declarations an identifier's own

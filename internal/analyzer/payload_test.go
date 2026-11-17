@@ -45,7 +45,7 @@ func (m *Module) get(ctx server.HandlerContext) (server.Result[Resp], server.IAP
 }
 `,
 	})
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 	assert.Equal(t, "[]string", renderShape(fieldByJSON(t, a.typeRegistry["Resp"], "t").ResolvedShape()))
 }
 
@@ -91,7 +91,7 @@ func (m *Module) cents(ctx server.HandlerContext) (server.Result[Cents], server.
 // payload (Result[Cents]).
 func TestHandlerInRouteFileResolvesModuleFileTypes(t *testing.T) {
 	a, routes := analyzeProjectRoutes(t, seamAModule())
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 	assert.Equal(t, "[]string", renderShape(fieldByJSON(t, a.typeRegistry["Resp"], "t").ResolvedShape()))
 	cents := routeByPath(t, routes, "/cents").Response
 	require.NotNil(t, cents)

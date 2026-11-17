@@ -216,7 +216,7 @@ func analyzeGenericRoute(t *testing.T, params, result string) genericRun {
 		filepath.FromSlash(genericModFile): src,
 	})
 	require.Len(t, routes, 1)
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	return genericRun{a: a, route: routes[0], warnings: warnings, src: src}
 }
 
@@ -376,7 +376,7 @@ func TestGenericEmbedMalformedTagKeepsUnknown(t *testing.T) {
 		filepath.Join("pg", "pg.go"):       genericPgSrc,
 		filepath.FromSlash(genericModFile): src,
 	})
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 1, "%v", warnings)
 	assert.Len(t, matching(warnings, "struct tag on field unknown at "), 1)
 	require.Len(t, routes, 1)
@@ -567,7 +567,7 @@ func TestGenericOnlyHandlersAreFound(t *testing.T) {
 		assert.Equal(t, []int{404}, r.ErrorStatuses, r.Path)
 		assert.NotNil(t, r.Response, r.Path)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestPointerResultWrapperRequestLess pins that a request-less handler
@@ -594,12 +594,12 @@ func TestPointerResultWrapperRequestLess(t *testing.T) {
 		require.Len(t, routes, 1)
 		assert.Equal(t, []int{404}, routes[0].ErrorStatuses, result)
 		if warning == "" {
-			assert.Empty(t, a.Warnings(t.Context()), result)
+			assert.Empty(t, a.Warnings(), result)
 			require.NotNil(t, routes[0].Response, result)
 			assert.True(t, IsTypedPayload(routes[0].Response), result)
 			continue
 		}
-		assert.Equal(t, []string{warning}, a.Warnings(t.Context()), result)
+		assert.Equal(t, []string{warning}, a.Warnings(), result)
 		assert.Nil(t, routes[0].Response, result)
 	}
 }

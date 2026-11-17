@@ -34,7 +34,7 @@ func TestBuildTaggedAgreeingChainIsLinear(t *testing.T) {
 	a, routes := analyzeProjectRoutes(t, files)
 	assert.Less(t, time.Since(start), 10*time.Second)
 	assert.Equal(t, "$T0", renders(t, a.typeRegistry["Resp"])["t"])
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 	resp := routeByPath(t, routes, "/t").Response
 	require.NotNil(t, resp)
 	assert.Equal(t, "T0", resp.Name)
@@ -68,11 +68,11 @@ func TestBuildTaggedCopiesSkipExcludedFiles(t *testing.T) {
 			})
 			assert.Equal(t, c.want, renders(t, a.typeRegistry["Resp"])["i"])
 			if !c.warned {
-				assert.Empty(t, a.Warnings(t.Context()))
+				assert.Empty(t, a.Warnings())
 				assert.Contains(t, a.typeRegistry, "Item")
 				return
 			}
-			assert.Len(t, a.Warnings(t.Context()), 1)
+			assert.Len(t, a.Warnings(), 1)
 		})
 	}
 }

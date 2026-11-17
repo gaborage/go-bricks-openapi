@@ -61,7 +61,7 @@ func TestKeepFirstRoutesIgnoresUnkeyedRoutes(t *testing.T) {
 	routes := []models.Route{{Method: "GET", Path: "/x"}, {Method: "GET", Path: "/x"}}
 	got := a.keepFirstRoutes(routes, map[string]*models.Route{})
 	assert.Len(t, got, 2)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // duplicateRoutesFixture is the golden fixture covering every duplicate row.
@@ -75,7 +75,7 @@ func TestDuplicateRoutesFixture(t *testing.T) {
 	project, err := a.AnalyzeProject()
 	require.NoError(t, err)
 
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	want := []string{
 		"route GET /dup at module.go:74:2 is the same route node as GET /dup at module.go:73:2",
 		"route GET /u/:uid at module.go:76:2 is the same route node as GET /u/:id at module.go:75:2",
@@ -91,7 +91,7 @@ func TestDuplicateRoutesFixture(t *testing.T) {
 		assert.Contains(t, w, "documenting the first; the second is dropped from the spec")
 		assert.NotContains(t, w, "start", "the warning must not claim the service fails to start")
 	}
-	assert.Empty(t, a.UnresolvedRoutes(t.Context()), "a dropped duplicate is not an Unresolved route")
+	assert.Empty(t, a.UnresolvedRoutes(), "a dropped duplicate is not an Unresolved route")
 
 	var paths []string
 	for _, m := range project.Modules {
@@ -231,7 +231,7 @@ func (h *Handler) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegis
 			a, routes, names := analyzeDupModule(t, tt.rest)
 			require.Len(t, routes, 1)
 			assert.False(t, names[tt.gone], "the losing route's payload %s must not be registered", tt.gone)
-			warnings := a.Warnings(t.Context())
+			warnings := a.Warnings()
 			require.Len(t, warnings, 1, "%v", warnings)
 			assert.Contains(t, warnings[0], "route GET /x at module.go:")
 			assert.Contains(t, warnings[0], "is the same route node as GET /x at module.go:")
@@ -253,7 +253,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	require.Len(t, routes, 1)
 	assert.Equal(t, "/raw/{id}", routes[0].Path)
 	assert.False(t, names["Second"])
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 2, "%v", warnings)
 	assert.Contains(t, warnings[0], "route GET /raw/:key at module.go:")
 	assert.Contains(t, warnings[1], "route GET /raw/:other at module.go:")
@@ -273,7 +273,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 `)
 	assert.Len(t, routes, 2)
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 2, "%v", warnings)
 	assert.Contains(t, warnings[0], "route GET /api at module.go:")
 	assert.Contains(t, warnings[1], "route GET /twin at module.go:")
@@ -290,7 +290,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 `)
 	require.Len(t, routes, 1)
 	assert.Equal(t, "/m/a{x}", routes[0].Path)
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 1, "%v", warnings)
 	assert.Contains(t, warnings[0], "route GET /m/a:y at module.go:")
 	assert.Contains(t, warnings[0], "same route node as GET /m/a:x at module.go:")
@@ -308,7 +308,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 `)
 	assert.Len(t, routes, 4)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // lineOf returns the 1-based line of the first line of src containing needle.
@@ -349,7 +349,7 @@ func (m *Module) helper(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	one := lineOf(t, src, "// call one")
 	two := lineOf(t, src, "// call two")
 	nested := lineOf(t, src, "// nested")
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 1, "%v", warnings)
 	want := fmt.Sprintf("route GET /h at module.go:%d:2 via module.go:%d:2 via module.go:%d:2 is the same route node as GET /h at module.go:%d:2 via module.go:%d:2",
 		reg, nested, two, reg, one)
@@ -381,7 +381,7 @@ func (m *Module) helper(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	top := lineOf(t, src, "// outermost")
 	one := lineOf(t, src, "// inner one")
 	two := lineOf(t, src, "// inner two")
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 1, "%v", warnings)
 	want := fmt.Sprintf("route GET /h at module.go:%d:2 via module.go:%d:2 via module.go:%d:2 is the same route node as GET /h at module.go:%d:2 via module.go:%d:2 via module.go:%d:2",
 		reg, two, top, reg, one, top)
@@ -447,7 +447,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 		require.Len(t, project.Modules, 1)
 		require.Len(t, project.Modules[0].Routes, 1)
 		assert.Equal(t, "dev", project.Modules[0].Routes[0].HandlerName)
-		warnings := a.Warnings(t.Context())
+		warnings := a.Warnings()
 		require.Len(t, warnings, 1)
 		assert.Contains(t, warnings[0], "route GET /x at routes_prod.go:8:2 is the same route node as GET /x at routes_dev.go:8:2")
 	}

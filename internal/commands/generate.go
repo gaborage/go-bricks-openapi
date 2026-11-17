@@ -130,7 +130,7 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 		}
 	}
 
-	analyzerWarnings := projectAnalyzer.Warnings(ctx)
+	analyzerWarnings := projectAnalyzer.Warnings()
 	// Surface non-fatal analysis diagnostics on stderr so they don't corrupt the spec.
 	for _, w := range analyzerWarnings {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
@@ -151,7 +151,7 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 	// The Unresolved-routes slot: a count of the registrations the analysis
 	// found but could not reduce to a path. Printed only when there are any, so
 	// a clean run's stdout is unchanged; `doctor` lists them individually.
-	if line := unresolvedRouteCountLine(projectAnalyzer.UnresolvedRoutes(ctx)); line != "" {
+	if line := unresolvedRouteCountLine(projectAnalyzer.UnresolvedRoutes()); line != "" {
 		fmt.Println(line)
 	}
 

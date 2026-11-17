@@ -120,7 +120,7 @@ func (s *Sub) get(ctx server.HandlerContext) (string, server.IAPIError) { return
 		"GET /free",
 		"GET /sub",
 	}, routePaths(routes))
-	assert.Empty(t, a.UnresolvedRoutes(t.Context()))
+	assert.Empty(t, a.UnresolvedRoutes())
 }
 
 // TestDelegateConstantsDoNotLeakAcrossPackages pins that each package's
@@ -157,7 +157,7 @@ func (h *Handler) get(ctx server.HandlerContext) (string, server.IAPIError) { re
 	})
 
 	assert.ElementsMatch(t, []string{"GET /alpha-shared", "GET /module-shared"}, routePaths(routes))
-	unresolved := a.UnresolvedRoutes(t.Context())
+	unresolved := a.UnresolvedRoutes()
 	require.Len(t, unresolved, 2)
 	forms := []string{unresolved[0].Form, unresolved[1].Form}
 	assert.ElementsMatch(t, []string{"server.GET", "server.POST"}, forms)
@@ -184,7 +184,7 @@ func (h *Handler) get(ctx server.HandlerContext) (string, server.IAPIError) { re
 	})
 
 	assert.Empty(t, routes)
-	assert.Len(t, a.UnresolvedRoutes(t.Context()), 1)
+	assert.Len(t, a.UnresolvedRoutes(), 1)
 }
 
 // TestNestedDelegateResolvesItsOwnPackageConstants pins that a delegate's
@@ -230,7 +230,7 @@ func (h *Handler) get(ctx server.HandlerContext) (string, server.IAPIError) { re
 	})
 
 	assert.Equal(t, []string{"GET /beta", "GET /alpha"}, routePaths(routes))
-	assert.Empty(t, a.UnresolvedRoutes(t.Context()))
+	assert.Empty(t, a.UnresolvedRoutes())
 }
 
 // TestDelegateNonConstantPathStaysUnresolved pins that only constants
@@ -259,5 +259,5 @@ func (h *Handler) get(ctx server.HandlerContext) (string, server.IAPIError) { re
 	})
 
 	assert.Empty(t, routes)
-	assert.Len(t, a.UnresolvedRoutes(t.Context()), 2)
+	assert.Len(t, a.UnresolvedRoutes(), 2)
 }

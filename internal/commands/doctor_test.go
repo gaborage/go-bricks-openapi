@@ -325,7 +325,7 @@ require github.com/gaborage/go-bricks v1.0.0
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := runDoctor(t.Context(), tt.opts)
+			err := runDoctor(tt.opts)
 			assertError(t, err, tt.expectError)
 		})
 	}
@@ -648,7 +648,7 @@ func TestRunDoctorMissingGoMod(t *testing.T) {
 		Verbose:     false,
 	}
 
-	err := runDoctor(t.Context(), opts)
+	err := runDoctor(opts)
 	if err == nil {
 		t.Error("Expected error for missing go.mod, but got none")
 	}
@@ -716,7 +716,7 @@ require github.com/gaborage/go-bricks v1.0.0
 		GoVersion:   "go1.25.9",
 	}
 
-	out := testutil.CaptureStdout(t, func() { err = runDoctor(t.Context(), opts) })
+	out := testutil.CaptureStdout(t, func() { err = runDoctor(opts) })
 	assertError(t, err, true)
 	if !strings.Contains(out, "Go 1.26+ required") {
 		t.Errorf("expected the Go floor failure message, got:\n%s", out)
@@ -743,7 +743,7 @@ require github.com/spf13/cobra v1.8.0
 	}
 
 	// A missing go-bricks dependency is now a hard failure (PR13).
-	err = runDoctor(t.Context(), opts)
+	err = runDoctor(opts)
 	assertError(t, err, true)
 }
 
@@ -769,7 +769,7 @@ func TestRunDoctorZeroModulesIsCaveat(t *testing.T) {
 	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion}
 
 	var runErr error
-	out := testutil.CaptureStdout(t, func() { runErr = runDoctor(t.Context(), opts) })
+	out := testutil.CaptureStdout(t, func() { runErr = runDoctor(opts) })
 
 	if runErr != nil {
 		t.Errorf("zero modules should be a caveat, not a hard error: %v", runErr)
@@ -819,7 +819,7 @@ func TestRunDoctorModulesButNoRoutesIsCaveat(t *testing.T) {
 	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion}
 
 	var runErr error
-	out := testutil.CaptureStdout(t, func() { runErr = runDoctor(t.Context(), opts) })
+	out := testutil.CaptureStdout(t, func() { runErr = runDoctor(opts) })
 
 	if runErr != nil {
 		t.Errorf("modules-but-no-routes should be a caveat, not a hard error: %v", runErr)
@@ -845,7 +845,7 @@ func TestRunDoctorFailsBelowGoBricksFloor(t *testing.T) {
 	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion}
 
 	var runErr error
-	out := testutil.CaptureStdout(t, func() { runErr = runDoctor(t.Context(), opts) })
+	out := testutil.CaptureStdout(t, func() { runErr = runDoctor(opts) })
 
 	assertError(t, runErr, true)
 	if !strings.Contains(out, msgBelowMinimum) {

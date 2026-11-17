@@ -270,7 +270,7 @@ func TestEmbeddedNonStructBecomesProperty(t *testing.T) {
 		}
 		assert.Equal(t, want, renders(t, a.typeRegistry[r.typ]), r.typ)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestEmbeddedJSONNumberIsMarshaler pins an embedded json.Number as a
@@ -308,7 +308,7 @@ func TestEmbeddedJSONNumberIsMarshaler(t *testing.T) {
 	assert.Equal(t, "marshal:EJA(unknown)", rows["eja"])
 	assert.Equal(t, "marshal:ETagged(unknown)", rows["eTagged"])
 	assert.Equal(t, "marshal:ESkip(unknown)", rows["eSkip"])
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	assert.Len(t, warnings, 4, "%v", warnings)
 	assert.Len(t, matching(warnings, "has the MarshalJSONTo method promoted from its embedded json.Number"), 3, "%v", warnings)
 	assert.Empty(t, embedWarnings(a))
@@ -366,7 +366,7 @@ func TestEmbeddedJSONNameSkipsUnexportedNonStruct(t *testing.T) {
 		assert.Equal(t, want, renders(t, a.typeRegistry[r.typ]), r.typ)
 	}
 	assert.Empty(t, embedWarnings(a))
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	assert.Len(t, warnings, 4, "only the nested fields' own warnings: %v", warnings)
 	for _, name := range []string{"lt", "LT", "ltOf", "ns"} {
 		assert.Len(t, fieldWarnings(a, name), 1, "field %s: %v", name, warnings)
@@ -430,7 +430,7 @@ func TestEmbeddedGenericStructPromotes(t *testing.T) {
 		}
 		assert.Equal(t, want, renders(t, a.typeRegistry[r.typ]), r.typ)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestEmbeddedUnexpandableWarns pins issue 116's warned rows: an embed this
@@ -484,7 +484,7 @@ func TestEmbeddedUnexpandableWarns(t *testing.T) {
 	}
 	warnings := embedWarnings(a)
 	assert.Len(t, warnings, len(rows)-1, "one warning per dropped embed (Shared's once): %v", warnings)
-	assert.Len(t, a.Warnings(t.Context()), len(rows)-1, "no other warning")
+	assert.Len(t, a.Warnings(), len(rows)-1, "no other warning")
 	for _, want := range wants {
 		assert.Len(t, matching(warnings, want), 1, "%q in %v", want, warnings)
 	}
@@ -524,7 +524,7 @@ func TestEmbeddedPropertyCollisions(t *testing.T) {
 		assert.Equal(t, 1, count, "%s keeps one Cents", r.typ)
 		assert.Equal(t, r.want["Cents"], renders(t, ti)["Cents"], r.typ)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestEmbeddedPropertyTieKeepsFirst pins the residual: two properties of one
@@ -556,7 +556,7 @@ func TestEmbeddedPropertyNamedLikeAncestor(t *testing.T) {
 	assert.Equal(t, map[string]string{"Amount": goTypeInt64, "w": goTypeInt, "y": goTypeInt}, renders(t, a.typeRegistry["Amount"]))
 	assert.Equal(t, map[string]string{"Status": goTypeString, "code": goTypeInt, "detail": goTypeString, "y": goTypeInt},
 		renders(t, a.typeRegistry["EAnc"]))
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestUntaggedFieldShadowsPromoted pins that an untagged named field
@@ -593,7 +593,7 @@ func TestUntaggedFieldShadowsPromoted(t *testing.T) {
 		assert.Equal(t, r.typ == "EVRequired" || r.typ == "EVTie1", kept[0].Required, "%s keeps the winner's required flag", r.typ)
 	}
 	assert.Contains(t, renders(t, a.typeRegistry["EVAlias"]), "w", "the alias embed's other fields are still promoted")
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestKeyDominance pins encoding/json's dominance rule for every body key,
@@ -633,7 +633,7 @@ func TestKeyDominance(t *testing.T) {
 		assert.Equal(t, 1, count, "%s keeps one V", r.typ)
 		assert.Equal(t, r.want["V"], renders(t, ti)["V"], r.typ)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestDashNamedKeyDominance pins issue 155's dominance key: json:"-," names
@@ -664,7 +664,7 @@ func TestDashNamedKeyDominance(t *testing.T) {
 		assert.Equal(t, f.Name == "O", f.JSONSkip, f.Name)
 	}
 	assert.Equal(t, map[string]string{"D": "-", "O": "-"}, keys, "the promoted \"-\" survives a skipped outer field")
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestParameterKeys pins that a path, query or header parameter keeps the
@@ -710,7 +710,7 @@ func TestParameterKeys(t *testing.T) {
 		}
 		assert.ElementsMatch(t, r.want, got, r.typ)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // paramOrBody renders f as "Name in:param" for a parameter and as
@@ -740,7 +740,7 @@ func TestEmbeddedSelfThroughAliasOrDefined(t *testing.T) {
 		}
 		assert.ElementsMatch(t, []string{"ID", "Y"}, names, typ)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestEmbeddedParenthesizedStructPromotes pins that a struct reached through
@@ -757,7 +757,7 @@ func TestEmbeddedParenthesizedStructPromotes(t *testing.T) {
 	for _, r := range rows {
 		assert.Equal(t, r.want, renders(t, a.typeRegistry[r.typ]), r.typ)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestEmbeddedCycleTerminates pins that an invalid defined-type cycle, which
@@ -947,7 +947,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 `,
 	})
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestEmbeddedMarshalerRequestQuiet pins that a struct Marshaler request,
@@ -990,7 +990,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	warnings := embedWarnings(a)
 	require.Len(t, warnings, 1, "%v", warnings)
 	assert.Contains(t, warnings[0], "embedded field NullString at "+filepath.Join("mod", "module.go")+":20:", "Inner's, not MReq's")
-	assert.Len(t, a.Warnings(t.Context()), 2, "and MReq's promoted-Marshaler request warning")
+	assert.Len(t, a.Warnings(), 2, "and MReq's promoted-Marshaler request warning")
 }
 
 // matching returns the entries of ws that contain sub.
@@ -1076,7 +1076,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	l := routeByPath(t, routes, "/l/{id}").Request
 	require.NotNil(t, l.Resolution)
 	assert.Equal(t, "text:LReq", renderShape(*l.Resolution))
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	if assert.Len(t, warnings, 1) {
 		assert.Contains(t, warnings[0], "SReq has the MarshalText method promoted from its embedded StatusV")
 	}

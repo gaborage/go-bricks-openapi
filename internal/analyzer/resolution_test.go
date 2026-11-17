@@ -81,7 +81,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 		fieldByJSON(t, ti, "created") // the qualified embed is promoted
 	}
 	assert.Contains(t, a.typeRegistry, "Item")
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // rowsHandler is the handler and route set every rows module ends with: GET
@@ -464,7 +464,7 @@ func TestResolveRegistersRefLeavesAtDepth(t *testing.T) {
 		}
 		assert.Contains(t, a.typeRegistry, "User")
 		assert.Contains(t, a.typeRegistry, "Address")
-		assert.Empty(t, a.Warnings(t.Context()))
+		assert.Empty(t, a.Warnings())
 	})
 
 	t.Run("collision", func(t *testing.T) {
@@ -504,7 +504,7 @@ func TestResolveRegistersRefLeavesAtDepth(t *testing.T) {
 		assert.Equal(t, "map[string]$User", got["m"])
 		fieldByJSON(t, a.typeRegistry["User"], "name")
 		assert.Contains(t, a.typeRegistry, "Address")
-		assert.Empty(t, a.Warnings(t.Context()))
+		assert.Empty(t, a.Warnings())
 	})
 
 	t.Run("alias shadow", func(t *testing.T) {
@@ -512,7 +512,7 @@ func TestResolveRegistersRefLeavesAtDepth(t *testing.T) {
 		got := renders(t, a.typeRegistry["Rows"])
 		assert.Equal(t, "[]$User", got["users"])
 		fieldByJSON(t, a.typeRegistry["User"], "name") // types.go's domain, not api.go's
-		assert.Empty(t, a.Warnings(t.Context()))
+		assert.Empty(t, a.Warnings())
 	})
 }
 
@@ -531,7 +531,7 @@ func TestSiblingFileRefSites(t *testing.T) {
 		assert.Equal(t, "$Inner", got["in"])
 		assert.Equal(t, "[]$Inner", got["ins"])
 		fieldByJSON(t, a.typeRegistry["Inner"], "x")
-		assert.Empty(t, a.Warnings(t.Context()))
+		assert.Empty(t, a.Warnings())
 	})
 
 	t.Run("embedded sibling-file struct", func(t *testing.T) {
@@ -545,7 +545,7 @@ func TestSiblingFileRefSites(t *testing.T) {
 		got := renders(t, a.typeRegistry["Rows"])
 		assert.Equal(t, "[]$Item", got["items"])
 		assert.Contains(t, a.typeRegistry, "Item")
-		assert.Empty(t, a.Warnings(t.Context()))
+		assert.Empty(t, a.Warnings())
 	})
 }
 
@@ -916,7 +916,7 @@ func TestPromotedFieldIgnoresEmbeddingPackageNames(t *testing.T) {
 			assert.NotContains(t, []string{"v", "z"}, ti.Fields[i].JSONName, "%s registers the embedding package's struct", name)
 		}
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestResolveDegenerateShapes pins the resolver on inputs no decoder emits but

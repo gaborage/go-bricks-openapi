@@ -60,7 +60,7 @@ func TestBigTypesResolve(t *testing.T) {
 	for _, r := range rows {
 		assert.Equal(t, r.want, got[r.json], r.json)
 	}
-	ws := a.Warnings(t.Context())
+	ws := a.Warnings()
 	for _, w := range []struct{ field, written, name, method string }{
 		{"ValInt", "big.Int", "big.Int", methodMarshalJSON},
 		{"ValFloat", "big.Float", "big.Float", methodMarshalText},
@@ -101,7 +101,7 @@ func TestBigTypesAliasedImport(t *testing.T) {
 	for _, r := range rows {
 		assert.Equal(t, r.want, got[r.json], r.json)
 	}
-	ws := a.Warnings(t.Context())
+	ws := a.Warnings()
 	assert.Len(t, ws, 3, "%v", ws)
 	assert.Len(t, matching(ws, "big.Int has its own MarshalJSON method"), 1, "%v", ws)
 	assert.Len(t, matching(ws, "big.Float has its own MarshalText method"), 1, "%v", ws)
@@ -155,7 +155,7 @@ func TestBigTypesPayloads(t *testing.T) {
 		assert.Equal(t, p.res, renderShape(*resp.Resolution), p.result)
 		assert.Equal(t, i != len(payloads)-1, IsTypedPayload(resp), p.result)
 	}
-	ws := a.Warnings(t.Context())
+	ws := a.Warnings()
 	assert.Equal(t, []string{
 		fmt.Sprintf(marshalerPayloadWarning, models.WellKnownBigInt, models.WellKnownBigInt, methodMarshalJSON),
 	}, matching(ws, "response type "), "%v", ws)
@@ -292,7 +292,7 @@ type EmbBig struct {
 		assert.Nil(t, a.typeRegistry[typ], "%s registers no component", typ)
 	}
 	assert.Equal(t, map[string]string{"n": goTypeInt}, renders(t, a.typeRegistry["EmbBig"]))
-	ws := a.Warnings(t.Context())
+	ws := a.Warnings()
 	for field, w := range map[string]string{
 		"PtrInt": "EmbPtrInt has the MarshalJSON method promoted from its embedded big.Int",
 		"Int":    "EmbInt has the MarshalJSON method promoted from its embedded big.Int",

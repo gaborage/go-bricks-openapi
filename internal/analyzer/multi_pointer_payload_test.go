@@ -107,7 +107,7 @@ func (m *Module) addr(ctx server.HandlerContext) (server.Result[**Address], serv
 }
 `,
 	})
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 	assert.Contains(t, a.typeRegistry, mpAddress)
 	resp := routeByPath(t, routes, "/addr").Response
 	require.NotNil(t, resp)
@@ -164,7 +164,7 @@ func (m *Module) price(req GetReq, ctx server.HandlerContext) (server.Result[**d
 	require.NotNil(t, price)
 	assert.Empty(t, price.Name)
 	assert.Nil(t, price.Resolution)
-	assert.Equal(t, []string{fmt.Sprintf(unresolvablePayloadWarning, rowDecimal)}, a.Warnings(t.Context()))
+	assert.Equal(t, []string{fmt.Sprintf(unresolvablePayloadWarning, rowDecimal)}, a.Warnings())
 }
 
 // TestMultiPointerRequestlessPayloadKeepsStatuses pins the request-less half

@@ -2,7 +2,6 @@ package analyzer
 
 import (
 	"cmp"
-	"context"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -190,9 +189,8 @@ func (a *ProjectAnalyzer) addWarningf(format string, args ...any) {
 }
 
 // Warnings returns a copy of the non-fatal diagnostics collected during the last
-// analysis. ctx is accepted per the repo's context-first convention for exported
-// APIs; the returned slice is cloned so callers cannot mutate analyzer state.
-func (a *ProjectAnalyzer) Warnings(_ context.Context) []string {
+// analysis. The returned slice is cloned so callers cannot mutate analyzer state.
+func (a *ProjectAnalyzer) Warnings() []string {
 	return slices.Clone(a.warnings)
 }
 
@@ -200,9 +198,8 @@ func (a *ProjectAnalyzer) Warnings(_ context.Context) []string {
 // last analysis — the registrations the walk found but whose path it could not
 // reduce to a string (see CONTEXT.md, "Unresolved route"). Each entry has a
 // companion warning in Warnings; the count is derived from this list, never
-// stored. ctx is accepted per the repo's context-first convention for exported
-// APIs; the slice is cloned so callers cannot mutate analyzer state.
-func (a *ProjectAnalyzer) UnresolvedRoutes(_ context.Context) []models.UnresolvedRoute {
+// stored. The slice is cloned so callers cannot mutate analyzer state.
+func (a *ProjectAnalyzer) UnresolvedRoutes() []models.UnresolvedRoute {
 	out := slices.Clone(a.unresolvedRoutes)
 	// Sorted by source position so the rendered order is a property of the
 	// project's source, not of the directory/file walk order (which varies with

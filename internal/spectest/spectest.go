@@ -24,10 +24,8 @@ import (
 )
 
 // Generate runs the analyzer and generator over the project rooted at dir and
-// returns the emitted OpenAPI document as a string. ctx is the first parameter
-// per the repo's context-first convention; it is honoured for early
-// cancellation and will thread into the analyzer/generator once those become
-// context-aware.
+// returns the emitted OpenAPI document as a string. ctx is honoured for early
+// cancellation.
 func Generate(ctx context.Context, dir string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err

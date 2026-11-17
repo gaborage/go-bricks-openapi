@@ -135,7 +135,7 @@ func TestSchemaDirectiveArgumentWarnings(t *testing.T) {
 			// T is a Marshaler type no route reaches: only the line warns.
 			body := c.line + "\ntype T int\n\nfunc (T) MarshalJSON() ([]byte, error) { return nil, nil }\n\ntype Holder struct{}\n"
 			a := analyzeStated(t, body, nil)
-			assert.Equal(t, []string{statedLoc(t, body, c.line) + c.want}, a.Warnings(t.Context()))
+			assert.Equal(t, []string{statedLoc(t, body, c.line) + c.want}, a.Warnings())
 		})
 	}
 }
@@ -155,7 +155,7 @@ func TestSchemaDirectiveDetached(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			body := moneyDecl + moneyField + c.body
 			a := analyzeStated(t, body, nil)
-			warnings := a.Warnings(t.Context())
+			warnings := a.Warnings()
 			assert.Contains(t, warnings, statedLoc(t, body, c.marker)+detached)
 			assertStated(t, a, "m", models.ShapeMarshaler, nil)
 		})
@@ -184,7 +184,7 @@ func (m *Module) h(ctx server.HandlerContext) (server.Result[Holder], server.IAP
 	assert.True(t, routes[0].Public)
 	loc := fileLoc(t, filepath.Join("mod", statedModFile), src, "//openapi:public")
 	assert.Equal(t, []string{loc + "directive schema has no effect — it is not in the doc comment of a package-level type declaration"},
-		a.Warnings(t.Context()))
+		a.Warnings())
 }
 
 // TestSchemaDirectivePlacedBesidePublic pins per-name placement in a type's
@@ -193,7 +193,7 @@ func TestSchemaDirectivePlacedBesidePublic(t *testing.T) {
 	body := "//openapi:public\n" + stringDecimal + moneyDecl + moneyField
 	a := analyzeStated(t, body, nil)
 	assert.Equal(t, []string{statedLoc(t, body, "//openapi:public") +
-		"directive public has no effect — it is not directly above an analyzed route registration"}, a.Warnings(t.Context()))
+		"directive public has no effect — it is not directly above an analyzed route registration"}, a.Warnings())
 	assertStated(t, a, "m", models.ShapeMarshaler, &models.StatedSchema{Type: "string", Format: "decimal"})
 }
 
@@ -205,7 +205,7 @@ func TestSchemaDirectiveBothMisplaced(t *testing.T) {
 	a := analyzeStated(t, body, nil)
 	assert.Equal(t, []string{fmtMoneyWarning(t, body), statedLoc(t, body, "//openapi:public") + "directives public, errors, schema have no effect — " +
 		"public, errors are not directly above an analyzed route registration, and schema is not in the doc comment of a " +
-		"package-level type declaration"}, a.Warnings(t.Context()))
+		"package-level type declaration"}, a.Warnings())
 }
 
 // fmtMoneyWarning is the start of Holder.m's Marshaler warning: Money stays
@@ -242,7 +242,7 @@ func TestSchemaDirectiveAboveTypeGroup(t *testing.T) {
 		"type Holder struct {\n\tM Money `json:\"m\"`\n\tC Count `json:\"c\"`\n}\n"
 	a := analyzeStated(t, body, nil)
 	assert.Equal(t, []string{fmtMoneyWarning(t, body), statedLoc(t, body, "//openapi:schema string") + schemaAboveGroupMsg},
-		a.Warnings(t.Context()))
+		a.Warnings())
 	assertStated(t, a, "m", models.ShapeMarshaler, nil)
 	assertStated(t, a, "c", models.ShapeMarshaler, &models.StatedSchema{Type: "integer"})
 }
@@ -297,7 +297,7 @@ func TestSchemaDirectiveRefusals(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			body := c.decls + "type Holder struct {\n\tF " + c.field + " `json:\"f\"`\n}\n"
 			a := analyzeStated(t, body, nil)
-			warnings := a.Warnings(t.Context())
+			warnings := a.Warnings()
 			assert.Contains(t, warnings, statedLoc(t, body, "//openapi:schema")+c.want)
 			assert.Equal(t, c.marshalerWarns, hasWarningPrefix(warnings, "field F at "), "the Marshaler warning stays: %v", warnings)
 			assert.Len(t, warnings, map[bool]int{false: 1, true: 2}[c.marshalerWarns], "%v", warnings)
@@ -313,7 +313,7 @@ func TestSchemaDirectiveOnUnreachedType(t *testing.T) {
 	body := "//openapi:schema string\ntype Plain int\n\n" + stringDecimal + moneyDecl + "type Holder struct{}\n"
 	a := analyzeStated(t, body, nil)
 	assert.Equal(t, []string{statedLoc(t, body, "//openapi:schema string\n") +
-		"directive schema has no effect — Plain is not a Marshaler type, so it is documented from its declaration"}, a.Warnings(t.Context()))
+		"directive schema has no effect — Plain is not a Marshaler type, so it is documented from its declaration"}, a.Warnings())
 }
 
 // TestSchemaDirectiveOnGenericType pins that a directive on a generic type
@@ -324,7 +324,7 @@ func TestSchemaDirectiveOnGenericType(t *testing.T) {
 		"//openapi:schema string\ntype KBox[T any] struct{ V T }\n\nfunc (b KBox[T]) MarshalJSON() ([]byte, error) { return nil, nil }\n\n" +
 		"type Holder struct {\n\tK KBox[int] `json:\"k\"`\n}\n"
 	a := analyzeStated(t, body, nil)
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	assert.Contains(t, warnings, statedLoc(t, body, "//openapi:schema string\ntype JBox")+
 		"directive schema has no effect — JBox is a generic type, whose wire form usually depends on its type arguments")
 	assert.Contains(t, warnings, statedLoc(t, body, "//openapi:schema string\ntype KBox")+
@@ -347,20 +347,20 @@ func TestSchemaDirectiveRepeatedLines(t *testing.T) {
 	t.Run("identical", func(t *testing.T) {
 		body := stringDecimal + stringDecimal + moneyDecl + moneyField
 		a := analyzeStated(t, body, nil)
-		assert.Empty(t, a.Warnings(t.Context()))
+		assert.Empty(t, a.Warnings())
 		assertStated(t, a, "m", models.ShapeMarshaler, &models.StatedSchema{Type: "string", Format: "decimal"})
 	})
 	t.Run("different", func(t *testing.T) {
 		body := stringDecimal + "//openapi:schema integer\n" + moneyDecl + moneyField
 		a := analyzeStated(t, body, nil)
-		assert.Equal(t, []string{fmtMoneyWarning(t, body), statedLoc(t, body, "//openapi:schema") + schemaConflictMsg}, a.Warnings(t.Context()))
+		assert.Equal(t, []string{fmtMoneyWarning(t, body), statedLoc(t, body, "//openapi:schema") + schemaConflictMsg}, a.Warnings())
 		assertStated(t, a, "m", models.ShapeMarshaler, nil)
 	})
 	t.Run("invalid beside valid", func(t *testing.T) {
 		body := "//openapi:schema object\n" + stringDecimal + moneyDecl + moneyField
 		a := analyzeStated(t, body, nil)
 		assert.Equal(t, []string{statedLoc(t, body, "//openapi:schema object") +
-			`directive schema: ignoring "object" — expected string, integer, number or boolean`}, a.Warnings(t.Context()))
+			`directive schema: ignoring "object" — expected string, integer, number or boolean`}, a.Warnings())
 		assertStated(t, a, "m", models.ShapeMarshaler, &models.StatedSchema{Type: "string", Format: "decimal"})
 	})
 }
@@ -383,14 +383,14 @@ func TestSchemaDirectiveBuildTaggedDeclarations(t *testing.T) {
 			linux: variant("linux", "//openapi:schema integer\n"),
 			other: variant("!linux", ""),
 		})
-		assert.Empty(t, a.Warnings(t.Context()))
+		assert.Empty(t, a.Warnings())
 		assertStated(t, a, "c", models.ShapeMarshaler, &models.StatedSchema{Type: "integer"})
 	})
 	t.Run("different", func(t *testing.T) {
 		linuxSrc, otherSrc := variant("linux", "//openapi:schema integer\n"), variant("!linux", "//openapi:schema string\n")
 		a := analyzeStated(t, countMethod+countField, map[string]string{linux: linuxSrc, other: otherSrc})
 		const msg = "directive schema has no effect — the build-tagged declarations of Count state different schemas, so none applies"
-		warnings := a.Warnings(t.Context())
+		warnings := a.Warnings()
 		assert.Contains(t, warnings, fileLoc(t, linux, linuxSrc, "//openapi:schema")+msg)
 		assert.Contains(t, warnings, fileLoc(t, other, otherSrc, "//openapi:schema")+msg)
 		assert.True(t, hasWarningPrefix(warnings, "field C at "), "Count falls back with its Marshaler warning: %v", warnings)
@@ -408,7 +408,7 @@ func TestSchemaDirectiveNoInheritance(t *testing.T) {
 	assertStated(t, a, "m2", models.ShapeRef, nil)
 	assertStated(t, a, "w", models.ShapeMarshaler, nil)
 	assertStated(t, a, "ma", models.ShapeMarshaler, &models.StatedSchema{Type: "string", Format: "decimal"})
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 1, "only W's promoted-method warning: %v", warnings)
 	assert.Contains(t, warnings[0], "field W at ")
 }
@@ -418,7 +418,7 @@ func TestSchemaDirectiveNoInheritance(t *testing.T) {
 func TestSchemaDirectiveOnPromotingStruct(t *testing.T) {
 	body := moneyDecl + "//openapi:schema integer\ntype W struct{ Money }\n\ntype Holder struct {\n\tW W `json:\"w\"`\n}\n"
 	a := analyzeStated(t, body, nil)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 	assertStated(t, a, "w", models.ShapeMarshaler, &models.StatedSchema{Type: "integer"})
 }
 
@@ -428,7 +428,7 @@ func TestSchemaDirectiveAliasReceiver(t *testing.T) {
 	body := "type Status int\n\n//openapi:schema string\ntype SA = Status\n\nfunc (SA) MarshalJSON() ([]byte, error) { return nil, nil }\n\n" +
 		"type Holder struct {\n\tSA SA `json:\"sa\"`\n\tS Status `json:\"s\"`\n}\n"
 	a := analyzeStated(t, body, nil)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 	assertStated(t, a, "sa", models.ShapeMarshaler, &models.StatedSchema{Type: "string"})
 	assertStated(t, a, "s", models.ShapePrimitive, nil)
 }
@@ -445,7 +445,7 @@ func TestSchemaDirectiveQualifiedGroupedType(t *testing.T) {
 		filepath.Join("mod", statedModFile): src,
 		filepath.Join("ledger", "rate.go"):  ledgerSrc,
 	})
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 	want := &models.StatedSchema{Type: "number", Format: "double"}
 	assertStated(t, a, "r", models.ShapeMarshaler, want)
 	assertStated(t, a, "p", models.ShapeMarshaler, want)
@@ -469,7 +469,7 @@ func (m *Module) ptr(ctx server.HandlerContext) (server.Result[*Money], server.I
 }
 `
 	a, routes := analyzeSingleModule(t, src)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 	require.Len(t, routes, 2)
 	want := &models.StatedSchema{Type: "string", Format: "decimal"}
 	for _, r := range routes {
@@ -508,7 +508,7 @@ func (m *Module) count(req Count, ctx server.HandlerContext) (server.Result[Coun
 }
 `
 	a, routes := analyzeSingleModule(t, src)
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 1, "%v", warnings)
 	assert.True(t, strings.HasPrefix(warnings[0], "request type Count is not a struct"), warnings[0])
 	require.Len(t, routes, 1)
@@ -521,7 +521,7 @@ func TestStatedSpectestFixtureHasNoWarnings(t *testing.T) {
 	a := New(filepath.Join("..", "spectest", "testdata", "stated_schema"))
 	_, err := a.AnalyzeProject()
 	require.NoError(t, err)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 func TestMarshalerMethodsPtrEncode(t *testing.T) {

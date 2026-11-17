@@ -152,7 +152,7 @@ func TestDelegateFieldResolvedInDeclaringFile(t *testing.T) {
 			assert.Equal(t, "Order", routes[0].Response.Name)
 			assert.Equal(t, map[string]string{"id": goTypeString}, renders(t, a.typeRegistry["Order"]))
 			assert.NotContains(t, a.typeRegistry, "Legacy")
-			assert.Empty(t, a.Warnings(t.Context()))
+			assert.Empty(t, a.Warnings())
 		})
 	}
 }

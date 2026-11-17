@@ -57,7 +57,7 @@ func TestRunGenerateUnbindableParamFailsStrict(t *testing.T) {
 	a := analyzer.New(dir)
 	_, err := a.AnalyzeProject()
 	require.NoError(t, err)
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 1)
 	assert.True(t, strings.HasSuffix(warnings[0], `is the path parameter "id" of type uuid.UUID, which go-bricks cannot bind `+
 		"(an array), so a request that sends it gets a 400"), warnings[0])
@@ -88,7 +88,7 @@ func TestRunGenerateUnbindableParamFailsStrict(t *testing.T) {
 	assert.NoFileExists(t, strictOut)
 
 	doctorOut := testutil.CaptureStdout(t, func() {
-		runErr = runDoctor(t.Context(), &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion})
+		runErr = runDoctor(&DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion})
 	})
 	require.NoError(t, runErr, "an unbindable parameter is a caveat, not a hard error")
 	assert.Contains(t, doctorOut, "which go-bricks cannot bind (an array)")

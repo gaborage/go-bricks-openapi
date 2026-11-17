@@ -182,7 +182,7 @@ func TestWellKnownNetAndFileModeAreTyped(t *testing.T) {
 	assert.Equal(t, mode, schemas["X-Perm"], "so does a Perm header")
 
 	doctorOut := testutil.CaptureStdout(t, func() {
-		runErr = runDoctor(t.Context(), &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion})
+		runErr = runDoctor(&DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion})
 	})
 	require.NoError(t, runErr, doctorOut)
 	assert.Contains(t, doctorOut, "Typed routes: 13/13")

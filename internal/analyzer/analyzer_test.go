@@ -1,7 +1,6 @@
 package analyzer
 
 import (
-	"context"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -1002,7 +1001,7 @@ func (m *Module) RegisterRoutes() {}`) // missing (*server.HandlerRegistry, serv
 		t.Fatalf("AnalyzeProject: %v", err)
 	}
 
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	found := false
 	for _, w := range warnings {
 		if strings.Contains(w, "Module") && strings.Contains(w, moduleMethodRegisterRoutes) && strings.Contains(w, "module.go") {
@@ -1036,9 +1035,9 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	if _, err := a.AnalyzeProject(); err != nil {
 		t.Fatalf("AnalyzeProject: %v", err)
 	}
-	if hasRegisterRoutesWarning(a.Warnings(t.Context())) {
+	if hasRegisterRoutesWarning(a.Warnings()) {
 		t.Errorf("no near-miss warning expected when the package has a valid module, got: %v",
-			a.Warnings(t.Context()))
+			a.Warnings())
 	}
 }
 
@@ -1056,9 +1055,9 @@ func (m *Module) Shutdown() error { return nil }`)
 	if _, err := a.AnalyzeProject(); err != nil {
 		t.Fatalf("AnalyzeProject: %v", err)
 	}
-	if hasRegisterRoutesWarning(a.Warnings(t.Context())) {
+	if hasRegisterRoutesWarning(a.Warnings()) {
 		t.Errorf("expected no near-miss diagnostic for a struct lacking RegisterRoutes, got: %v",
-			a.Warnings(t.Context()))
+			a.Warnings())
 	}
 }
 
@@ -1150,7 +1149,7 @@ func invalid syntax {`
 	// The dropped file must not be silent: whatever module/routes it declared
 	// are now missing from the spec, so a warning naming it must be surfaced
 	// (so --strict can gate on the drop; PLAN009 defect 1).
-	warnings := tempAnalyzer.Warnings(t.Context())
+	warnings := tempAnalyzer.Warnings()
 	if len(warnings) == 0 {
 		t.Fatal("expected a warning for the unparsable file, got none")
 	}
@@ -1215,7 +1214,7 @@ func broken syntax here {`
 		t.Fatalf("expected the valid module's route to survive, got %d routes", len(modules[0].Routes))
 	}
 
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	found := false
 	for _, w := range warnings {
 		if strings.Contains(w, "broken.go") {
@@ -2709,7 +2708,7 @@ func (h *Handler) actualHandler() {}`,
 	}
 }
 
-// TestExtractRequestTypeContextFirst tests request type extraction with context-first signatures
+// TestExtractRequestTypeContextFirst tests request type extraction with a leading context.Context parameter
 // Addresses CodeRabbit issue: Request type extraction misses ctx-first signatures
 func TestExtractRequestTypeContextFirst(t *testing.T) {
 	analyzer := New("test")
@@ -3896,7 +3895,7 @@ func (m *Module) get(ctx server.HandlerContext) (server.Result[UserResp], server
 	}
 	assert.True(t, fieldNames["ID"], "alias must carry User's ID field")
 	assert.True(t, fieldNames["Name"], "alias must carry User's Name field")
-	assert.Empty(t, a.Warnings(t.Context()), "a struct-backed alias must not warn")
+	assert.Empty(t, a.Warnings(), "a struct-backed alias must not warn")
 }
 
 // TestDefinedTypeOverStructResolves verifies a defined type over a struct
@@ -3934,7 +3933,7 @@ func (m *Module) get(ctx server.HandlerContext) (server.Result[UserDefined], ser
 	}
 	assert.True(t, fieldNames["ID"])
 	assert.True(t, fieldNames["Name"])
-	assert.Empty(t, a.Warnings(t.Context()), "a struct-backed defined type must not warn")
+	assert.Empty(t, a.Warnings(), "a struct-backed defined type must not warn")
 }
 
 // TestChainedAliasResolves verifies a chain of named indirections (`type A = B;
@@ -3978,7 +3977,7 @@ func (m *Module) get(ctx server.HandlerContext) (server.Result[A], server.IAPIEr
 		fieldNames[f.Name] = true
 	}
 	assert.True(t, fieldNames["ID"], "A carries User's ID field via the B indirection")
-	assert.Empty(t, a.Warnings(t.Context()), "a fully-resolved chained alias must not warn")
+	assert.Empty(t, a.Warnings(), "a fully-resolved chained alias must not warn")
 }
 
 // TestAliasToQualifiedStructResolves verifies an alias to a cross-package
@@ -4043,7 +4042,7 @@ type Item struct {
 		fieldNames[f.Name] = true
 	}
 	assert.True(t, fieldNames["ID"])
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestQualifiedTypeNotShadowedByLocal verifies a qualified route response
@@ -4119,7 +4118,7 @@ type Item struct {
 	}
 	assert.True(t, fieldNames["ImportedField"], "the qualified types.Item's field must win")
 	assert.False(t, fieldNames["LocalField"], "the handler's own local Item must NOT shadow the qualified reference")
-	assert.Empty(t, a.Warnings(t.Context()), "a successfully-resolved qualified reference must not warn")
+	assert.Empty(t, a.Warnings(), "a successfully-resolved qualified reference must not warn")
 }
 
 // TestNamedSlicePayloadResolves verifies a named slice used as a route response
@@ -4152,7 +4151,7 @@ func (m *Module) list(ctx server.HandlerContext) (server.Result[UserList], serve
 	assert.Empty(t, route.Response.Name, "a named slice names no component")
 	require.NotNil(t, route.Response.Resolution)
 	assert.Equal(t, "[]$User", renderShape(*route.Response.Resolution))
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 
 	assert.NotContains(t, a.typeRegistry, "UserList", "the named slice itself must not be registered")
 	assert.Contains(t, a.typeRegistry, "User", "the element struct registers through the payload")
@@ -4186,7 +4185,7 @@ func (m *Module) list(ctx server.HandlerContext) (server.Result[[]Status], serve
 	assert.Equal(t, "[]Status", renderShape(*route.Response.Shape), "the Shape stays as written")
 	require.NotNil(t, route.Response.Resolution)
 	assert.Equal(t, "[]string", renderShape(*route.Response.Resolution))
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 	assert.NotContains(t, a.typeRegistry, "Status")
 }
 
@@ -4246,7 +4245,7 @@ func (m *Module) count(ctx server.HandlerContext) (server.Result[uint64], server
 func (m *Module) item(ctx server.HandlerContext) (server.Result[Item], server.IAPIError) { return server.Result[Item]{}, nil }
 `
 	a, routes := analyzeSingleModule(t, src)
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	warnedAbout := func(typeName string) bool {
 		for _, w := range warnings {
 			if strings.Contains(w, "response type "+typeName+" resolves to no schema component") {
@@ -4369,7 +4368,7 @@ func (m *Module) many(ctx server.HandlerContext) (server.Result[[]uuid.UUID], se
 	require.NotNil(t, many.Response.Shape, "a slice payload keeps its Shape")
 	assert.Equal(t, models.ShapeSlice, many.Response.Shape.Kind)
 	assert.Contains(t, project.Types, "UUID")
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestAliasChainDepthCapped verifies a chain of named indirections deeper than
@@ -4411,7 +4410,7 @@ func (m *Module) get(ctx server.HandlerContext) (server.Result[T0], server.IAPIE
 	assert.Empty(t, route.Response.Name, "a chain deeper than the depth cap does not register as T0")
 	require.NotNil(t, route.Response.Resolution)
 	assert.Equal(t, "$T1", renderShape(*route.Response.Resolution))
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 	assert.Contains(t, a.typeRegistry, "T1")
 }
 
@@ -4462,7 +4461,7 @@ func hasDepthLimitWarning(warnings []string) bool {
 func TestDeepFieldRefChainIsBoundedAndWarns(t *testing.T) {
 	src := deepChainModuleSrc("type T%d struct { Next *T%d }\n", 1100)
 	a, _ := analyzeSingleModule(t, src)
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.True(t, hasDepthLimitWarning(warnings),
 		"deep field-ref chain (Cycle A) must warn once; got %v", warnings)
 }
@@ -4475,7 +4474,7 @@ func TestDeepFieldRefChainIsBoundedAndWarns(t *testing.T) {
 func TestDeepEmbeddedChainIsBoundedAndWarns(t *testing.T) {
 	src := deepChainModuleSrc("type T%d struct { T%d }\n", 1100)
 	a, _ := analyzeSingleModule(t, src)
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.True(t, hasDepthLimitWarning(warnings),
 		"deep embedded-promotion chain (Cycle B) must warn once; got %v", warnings)
 }
@@ -4521,7 +4520,7 @@ func (m *Module) get(ctx server.HandlerContext) (server.Result[sub.T0], server.I
 	a := New(dir)
 	_, err := a.AnalyzeProject()
 	require.NoError(t, err)
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.True(t, hasDepthLimitWarning(warnings),
 		"deep cross-package chain (route 2) must warn once; got %v", warnings)
 }
@@ -4534,7 +4533,7 @@ func TestModestDepthChainRegistersFully(t *testing.T) {
 	src := deepChainModuleSrc("type T%d struct { Next *T%d }\n", n)
 	a, _ := analyzeSingleModule(t, src)
 
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.False(t, hasDepthLimitWarning(warnings),
 		"a modest depth-%d chain must NOT trip the cap; got %v", n, warnings)
 
@@ -4701,7 +4700,7 @@ func (m *Module) h(ctx server.HandlerContext) (server.Result[int], server.IAPIEr
 	a, routes := analyzeSingleModule(t, src)
 	require.Len(t, routes, 1, "the route with an unresolvable path must be dropped")
 	assert.Equal(t, "/ok", routes[0].Path)
-	assert.NotEmpty(t, a.Warnings(t.Context()), "a warning should be recorded for the dropped route")
+	assert.NotEmpty(t, a.Warnings(), "a warning should be recorded for the dropped route")
 }
 
 func TestReceiverVarName(t *testing.T) {
@@ -4847,7 +4846,7 @@ func handleGet(ctx server.HandlerContext) (server.Result[int], server.IAPIError)
 	for _, want := range []string{"GET /ping", "POST /users", "GET /users/{id}"} {
 		assert.True(t, got[want], "expected route %q; got %v", want, got)
 	}
-	assert.Empty(t, a.Warnings(t.Context()), "a fully-resolved package-level helper must not warn")
+	assert.Empty(t, a.Warnings(), "a fully-resolved package-level helper must not warn")
 }
 
 // TestPackageHelperInSiblingFileDiscovered verifies findPackageFuncDecl's
@@ -4896,7 +4895,7 @@ func handleGet(ctx server.HandlerContext) (server.Result[int], server.IAPIError)
 	for _, want := range []string{"GET /ping", "POST /users", "GET /users/{id}"} {
 		assert.True(t, got[want], "expected route %q; got %v", want, got)
 	}
-	assert.Empty(t, a.Warnings(t.Context()), "a fully-resolved sibling-file helper must not warn")
+	assert.Empty(t, a.Warnings(), "a fully-resolved sibling-file helper must not warn")
 }
 
 // TestPackageHelperSiblingFileDifferentAlias verifies registrar detection and
@@ -4943,7 +4942,7 @@ func handleList(ctx srv.HandlerContext) (srv.Result[int], srv.IAPIError) { retur
 	}
 	got := routePathSet(routes)
 	assert.True(t, got["GET /users"], "expected /users discovered across a file-alias boundary; got %v", got)
-	assert.Empty(t, a.Warnings(t.Context()), "a fully-resolved helper must not warn even under a divergent sibling-file alias")
+	assert.Empty(t, a.Warnings(), "a fully-resolved helper must not warn even under a divergent sibling-file alias")
 }
 
 // TestPackageHelperWithGroupPrefix verifies seedFromCall threads the caller's
@@ -4970,7 +4969,7 @@ func handleList(ctx server.HandlerContext) (server.Result[int], server.IAPIError
 	a, routes := analyzeSingleModule(t, src)
 	got := routePathSet(routes)
 	assert.True(t, got["GET /api/users"], "expected the /api group prefix threaded through the helper; got %v", got)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestPackageHelperWithoutRegistrarNotWalked verifies the registrar-parameter
@@ -5003,7 +5002,7 @@ func handleMetrics(ctx server.HandlerContext) (server.Result[int], server.IAPIEr
 	assert.True(t, got["GET /ping"])
 	assert.False(t, got["GET /metrics"], "initMetrics takes no registrar and must not be walked")
 	assert.Len(t, routes, 1, "only the direct route should be discovered")
-	assert.Empty(t, a.Warnings(t.Context()), "a bare call passing no registrar argument must not warn")
+	assert.Empty(t, a.Warnings(), "a bare call passing no registrar argument must not warn")
 }
 
 // TestUnresolvableBareCallWithRegistrarWarns verifies the fail-loud contract
@@ -5037,7 +5036,7 @@ func handleDropped(ctx server.HandlerContext) (server.Result[int], server.IAPIEr
 	got := routePathSet(routes)
 	assert.True(t, got["GET /ping"])
 	assert.False(t, got["GET /dropped"], "f is a package-level var, not a func decl, and must not be walked")
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "f")
 }
@@ -5072,7 +5071,7 @@ func handle(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { 
 	assert.True(t, got["GET /a"])
 	assert.True(t, got["GET /b"])
 	assert.Len(t, routes, 2, "each helper walked exactly once despite the mutual-recursion cycle")
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestPackageHelperShadowedByLocalNotWalked verifies a bare call to a locally
@@ -5108,7 +5107,7 @@ func ping(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { re
 	assert.True(t, got["GET /from-local"], "the local closure's own route must be discovered")
 	assert.False(t, got["GET /from-package"], "a local shadow must not resolve to the package-level function of the same name")
 	assert.Len(t, routes, 1, "only the local closure's route, not the shadowed package function's")
-	assert.Empty(t, a.Warnings(t.Context()), "the shadowed case must not warn: the spec is already complete via the inline closure walk")
+	assert.Empty(t, a.Warnings(), "the shadowed case must not warn: the spec is already complete via the inline closure walk")
 }
 
 func TestRegistrationWalkHandlesAliasedServerImport(t *testing.T) {
@@ -6085,7 +6084,7 @@ func (m *Module) ok(ctx server.HandlerContext) (server.Result[Thing], server.IAP
 	a, routes := analyzeSingleModule(t, src)
 	require.Len(t, routes, 1)
 
-	warnings := a.Warnings(context.Background())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 1, "exactly one warning: the dropped delegation, not the Print call")
 	assert.Contains(t, warnings[0], "mystery")
 	assert.Contains(t, warnings[0], "RegisterRoutes")
@@ -6127,7 +6126,7 @@ var someVar = "PUT"
 	create := routeForPath(t, routes, "POST /things")
 	require.NotNil(t, create.Request)
 
-	warnings := a.Warnings(context.Background())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "RegisterHandler")
 }
@@ -6337,7 +6336,7 @@ func TestRawAddNonRegistrarIgnored(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, project.Modules, 1)
 	assert.Empty(t, project.Modules[0].Routes, "a .Add on a non-registrar must not be discovered")
-	for _, w := range a.Warnings(t.Context()) {
+	for _, w := range a.Warnings() {
 		assert.NotContains(t, w, ".Add", "a non-registrar .Add must be dropped silently")
 	}
 }
@@ -6353,8 +6352,8 @@ func TestRawAddNonStaticMethodSkipped(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, project.Modules, 1)
 	assert.Empty(t, project.Modules[0].Routes)
-	require.True(t, containsRawAddSubstr(a.Warnings(t.Context()), "r.Add route: its method argument is not a static HTTP method"),
-		"expected a non-static-method warning, got: %v", a.Warnings(t.Context()))
+	require.True(t, containsRawAddSubstr(a.Warnings(), "r.Add route: its method argument is not a static HTTP method"),
+		"expected a non-static-method warning, got: %v", a.Warnings())
 }
 
 // TestRawAddUnresolvedPathSkipped verifies an .Add whose path arg cannot be
@@ -6368,8 +6367,8 @@ func TestRawAddUnresolvedPathSkipped(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, project.Modules, 1)
 	assert.Empty(t, project.Modules[0].Routes)
-	require.True(t, containsRawAddSubstr(a.Warnings(t.Context()), "unresolved route: skipping the r.Add registration"),
-		"expected an unresolved-path warning, got: %v", a.Warnings(t.Context()))
+	require.True(t, containsRawAddSubstr(a.Warnings(), "unresolved route: skipping the r.Add registration"),
+		"expected an unresolved-path warning, got: %v", a.Warnings())
 }
 
 // containsRawAddSubstr reports whether any string in ss contains sub.
@@ -6407,8 +6406,8 @@ func TestRawAddTooFewArgsWarns(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, project.Modules, 1)
 	assert.Empty(t, project.Modules[0].Routes)
-	require.True(t, containsRawAddSubstr(a.Warnings(t.Context()), "r.Add route: expected at least 3 arguments"),
-		"expected a too-few-arguments warning, got: %v", a.Warnings(t.Context()))
+	require.True(t, containsRawAddSubstr(a.Warnings(), "r.Add route: expected at least 3 arguments"),
+		"expected a too-few-arguments warning, got: %v", a.Warnings())
 }
 
 // TestAnalyzeProjectRelativeDotRoot verifies that New(".") and New("./") — the
@@ -7002,12 +7001,12 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 `
 	a, _ := analyzeSingleModule(t, src)
 	var hits []string
-	for _, w := range a.Warnings(t.Context()) {
+	for _, w := range a.Warnings() {
 		if strings.Contains(w, "uintptr") {
 			hits = append(hits, w)
 		}
 	}
-	require.Len(t, hits, 2, "one diagnostic per uintptr field: %v", a.Warnings(t.Context()))
+	require.Len(t, hits, 2, "one diagnostic per uintptr field: %v", a.Warnings())
 	assert.Contains(t, hits[0], "Addr")
 	assert.Contains(t, hits[1], "Addrs")
 	for _, w := range hits {
@@ -7043,7 +7042,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 		t.Helper()
 		a, _ := analyzeSingleModule(t, src)
 		n := 0
-		for _, w := range a.Warnings(t.Context()) {
+		for _, w := range a.Warnings() {
 			if strings.Contains(w, "uintptr") {
 				n++
 			}

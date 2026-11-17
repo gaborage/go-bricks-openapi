@@ -155,7 +155,7 @@ func TestRunGenerateFixedArrayFields(t *testing.T) {
 	a := analyzer.New(dir)
 	_, err := a.AnalyzeProject()
 	require.NoError(t, err)
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 2)
 	assert.Contains(t, warnings[0], `the query parameter "prefix" of type [4]byte, which go-bricks cannot bind (an array)`)
 	assert.Contains(t, warnings[1], "holds a uintptr")
