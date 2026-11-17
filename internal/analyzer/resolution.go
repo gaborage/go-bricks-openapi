@@ -93,9 +93,11 @@ type fieldFallback struct {
 	// detail is the Marshaler method (fallbackMarshaler), the qualified
 	// underlying (fallbackDefinedOverQualified), the builtin
 	// (fallbackUntypedBuiltin), func or chan (fallbackFuncChan), the generic type of the Instantiation, as
-	// written (fallbackGeneric, whose typeName is the whole Instantiation), or
+	// written (fallbackGeneric, whose typeName is the whole Instantiation),
 	// the cause the declarations disagree (fallbackDeclsDisagree:
-	// declsShapeCause or declsClashCause).
+	// declsShapeCause or declsClashCause), or instCutDetail on a
+	// fallbackRecursive or fallbackDepthCap whose cut is an Instantiation
+	// (issue 114), which a request keeps the generic request warning for.
 	detail string
 	// structCopies marks a fallbackDeclsDisagree whose declarations each
 	// reach a struct, but not the same one (structCopiesVerdict): every build
@@ -125,6 +127,9 @@ type resolveState struct {
 	first    fieldFallback      // the first fallback noted, which picks the warning
 	refSites map[string]pkgFile // ShapeRef leaf name -> file it was written in (registered there), first wins
 	refDirs  map[string]string  // ShapeRef leaf name -> directory declaring the struct it reaches, recorded with refSites
+	// openInsts maps the identity of each Instantiation on the stack to the
+	// Instantiation as written where it was opened (resolveState.open).
+	openInsts map[string]string
 }
 
 // note records fb unless an earlier fallback was already noted.
@@ -181,7 +186,11 @@ type resolveCtx struct {
 	// written through them (pointerOnlyWellKnownLeaf). Slice, array and map
 	// nodes clear it.
 	ptrElem bool
-	st      *resolveState
+	// env binds the type parameters of the generic declaration being
+	// resolved to an Instantiation's arguments (issue 114); nil outside one.
+	// resolveDecl clears it on entering any other declaration.
+	env typeEnv
+	st  *resolveState
 }
 
 // pkgFile is one parsed file of a package and its path.
@@ -243,6 +252,7 @@ func (c resolveCtx) in(file *ast.File, path string) resolveCtx {
 func (c resolveCtx) quiet() resolveCtx {
 	c.st = &resolveState{
 		param: c.st.param, home: c.st.home, stack: slices.Clone(c.st.stack), refSites: map[string]pkgFile{}, refDirs: map[string]string{},
+		openInsts: maps.Clone(c.st.openInsts),
 	}
 	return c
 }
@@ -266,12 +276,14 @@ func (c resolveCtx) recordRef(name, dir string) {
 // (warnResolvedField). A json:"-" body field is skipped. depth is the
 // registration depth of the struct declaring the field, which an anonymous
 // struct in a body field's type shares; while requestParamFields reads a
-// Marshaler request (quietEmbeds), none is extracted.
-func (a *ProjectAnalyzer) resolveField(f *models.FieldInfo, field *ast.Field, astFile *ast.File, filePath string, depth int) {
+// Marshaler request (quietEmbeds), none is extracted. env binds the type
+// parameters of the generic struct declaring the field (nil for any other).
+func (a *ProjectAnalyzer) resolveField(f *models.FieldInfo, field *ast.Field, astFile *ast.File, filePath string, depth int, env typeEnv) {
 	if isJSONExcluded(f) {
 		return
 	}
 	c := newResolveCtx(astFile, filePath, f.ParamType != "")
+	c.env = env
 	c.st.inline, c.st.depth = f.ParamType == "" && !a.quietEmbeds, depth
 	r := a.resolveShape(f.Shape, c)
 	f.Resolution = &r
@@ -311,14 +323,11 @@ func (a *ProjectAnalyzer) resolveShape(s models.TypeShape, c resolveCtx) models.
 		c.ptrElem = false
 		s.Elem = a.resolveSliceElem(s.Elem, c)
 	case models.ShapeNamed:
-		if strings.Contains(s.Name, ".") {
-			return a.resolveQualified(s, c)
-		}
-		return a.resolveLocal(s, c, identityMode)
+		return a.resolveNamed(s, c)
 	case models.ShapePrimitive:
 		noteUntypedBuiltin(s.Name, c)
 	case models.ShapeInstantiation:
-		noteInstantiation(s.Inst, c)
+		return a.resolveInstantiation(s, c)
 	case models.ShapeStruct:
 		return a.resolveStruct(s, c)
 	default:
@@ -336,8 +345,9 @@ func noteFuncChan(s models.TypeShape, c resolveCtx) {
 	}
 }
 
-// noteInstantiation notes an Instantiation, which is not resolved (#114),
-// with the file it was written in.
+// noteInstantiation notes an Instantiation whose generic type the tool
+// cannot read (outside the module, undeclared, or with another number of
+// type parameters), so it is not resolved, with the file it was written in.
 func noteInstantiation(inst *models.Instantiation, c resolveCtx) {
 	if inst != nil {
 		c.st.note(fieldFallback{kind: fallbackGeneric, typeName: inst.Written, detail: inst.Base, site: &pkgFile{file: c.file, path: c.path}})
@@ -917,6 +927,7 @@ func foldRefSites(intoSites map[string]pkgFile, intoDirs map[string]string, site
 // met in identity mode opens a new underlying chain it is the definer of.
 func (a *ProjectAnalyzer) resolveDecl(name string, d typeDecl, c resolveCtx, mode resolveMode) models.TypeShape {
 	dc := c.in(d.file, d.path)
+	dc.env = nil // a type parameter is bound only inside its own declaration
 	if mode == identityMode {
 		if d.spec.Assign.IsValid() {
 			return a.resolveShape(a.typeShape(d.spec.Type), dc)
@@ -936,6 +947,9 @@ func (a *ProjectAnalyzer) resolveDecl(name string, d typeDecl, c resolveCtx, mod
 // resolution started in underlying mode).
 func (a *ProjectAnalyzer) resolveUnderlying(name string, rhs ast.Expr, c resolveCtx) models.TypeShape {
 	s := a.typeShape(rhs)
+	if s.Kind == models.ShapeInstantiation {
+		return a.underlyingInstantiation(s, c)
+	}
 	if s.Kind != models.ShapeNamed {
 		return a.resolveShape(s, c)
 	}
@@ -1246,6 +1260,9 @@ func (a *ProjectAnalyzer) warnFieldFallback(f *models.FieldInfo, site *fieldSite
 // that cannot register is demoted to a named leaf (it emits object); the
 // caller warns.
 func (a *ProjectAnalyzer) registerLeafAt(leaf *models.TypeShape, site pkgFile, depth int) bool {
+	if handled, ok := a.registerInstanceLeaf(leaf, depth); handled {
+		return ok
+	}
 	if reg := a.registerTypeAt(leaf.Name, site.file.Name.Name, site.file, site.path, depth); reg != nil {
 		leaf.Name = reg.Name
 		return true

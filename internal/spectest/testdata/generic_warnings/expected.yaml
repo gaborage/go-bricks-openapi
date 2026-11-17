@@ -106,22 +106,26 @@ paths:
           in: query
           required: false
           schema:
-            type: object
+            type: array
+            items:
+              type: string
         - name: id
           in: path
           required: true
           schema:
-            type: object
+            type: string
         - name: X-Tags
           in: header
           required: false
           schema:
-            type: object
+            type: array
+            items:
+              type: string
         - name: b
           in: query
           required: false
           schema:
-            type: object
+            $ref: '#/components/schemas/Box-int'
       responses:
         "200":
           description: Successful response
@@ -175,8 +179,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    $ref: '#/components/schemas/AddrPage'
                   meta:
                     type: object
                     properties:
@@ -220,8 +223,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    $ref: '#/components/schemas/Page-Address'
                   meta:
                     type: object
                     properties:
@@ -265,8 +267,9 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Address'
                   meta:
                     type: object
                     properties:
@@ -310,8 +313,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    $ref: '#/components/schemas/Page-Address'
                   meta:
                     type: object
                     properties:
@@ -355,8 +357,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    $ref: '#/components/schemas/Page-Address'
                   meta:
                     type: object
                     properties:
@@ -400,8 +401,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    $ref: '#/components/schemas/Pair-string-int'
                   meta:
                     type: object
                     properties:
@@ -445,8 +445,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    $ref: '#/components/schemas/Box-Address'
                   meta:
                     type: object
                     properties:
@@ -490,8 +489,9 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Address'
                   meta:
                     type: object
                     properties:
@@ -535,8 +535,9 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Page-Address'
                   meta:
                     type: object
                     properties:
@@ -626,7 +627,8 @@ paths:
                 properties:
                   data:
                     type: object
-                    description: Response data
+                    additionalProperties:
+                      $ref: '#/components/schemas/Page-Address'
                   meta:
                     type: object
                     properties:
@@ -670,8 +672,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    $ref: '#/components/schemas/Page-Address'
                   meta:
                     type: object
                     properties:
@@ -715,8 +716,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    $ref: '#/components/schemas/Page-Address'
                   meta:
                     type: object
                     properties:
@@ -760,8 +760,9 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Page-Address'
                   meta:
                     type: object
                     properties:
@@ -805,8 +806,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    $ref: '#/components/schemas/Page-Address'
                   meta:
                     type: object
                     properties:
@@ -850,8 +850,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    $ref: '#/components/schemas/Pair-string-int'
                   meta:
                     type: object
                     properties:
@@ -895,8 +894,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    $ref: '#/components/schemas/PgPage-Address'
                   meta:
                     type: object
                     properties:
@@ -925,6 +923,12 @@ paths:
       summary: POST /req/addr-page
       tags:
         - generic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddrPage'
       responses:
         "200":
           description: Successful response
@@ -1039,6 +1043,12 @@ paths:
       summary: POST /req/alias-page
       tags:
         - generic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Page-Address'
       responses:
         "200":
           description: Successful response
@@ -1077,6 +1087,12 @@ paths:
       summary: POST /req/box
       tags:
         - generic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Box-Address'
       responses:
         "200":
           description: Successful response
@@ -1115,6 +1131,12 @@ paths:
       summary: POST /req/box-ptr
       tags:
         - generic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Box-Address'
       responses:
         "200":
           description: Successful response
@@ -1305,6 +1327,12 @@ paths:
       summary: POST /req/pair
       tags:
         - generic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Pair-string-int'
       responses:
         "200":
           description: Successful response
@@ -1381,6 +1409,12 @@ paths:
       summary: POST /req/pg-page
       tags:
         - generic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PgPage-Address'
       responses:
         "200":
           description: Successful response
@@ -1533,6 +1567,12 @@ paths:
       summary: POST /untyped/box-page
       tags:
         - generic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Box-Address'
       responses:
         "200":
           description: Successful response
@@ -1542,8 +1582,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    $ref: '#/components/schemas/Page-Address'
                   meta:
                     type: object
                     properties:
@@ -1581,8 +1620,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    description: Response data
+                    $ref: '#/components/schemas/Page-Address'
                   meta:
                     type: object
                     properties:
@@ -1607,6 +1645,32 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
   schemas:
+    AddrPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
+        total:
+          type: integer
+          format: int64
+    Address:
+      type: object
+      properties:
+        city:
+          type: string
+    Box-Address:
+      type: object
+      properties:
+        v:
+          $ref: '#/components/schemas/Address'
+    Box-int:
+      type: object
+      properties:
+        v:
+          type: integer
+          format: int64
     Controls:
       type: object
       properties:
@@ -1620,11 +1684,18 @@ components:
           type: object
         fn:
           type: object
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
         note:
           type: string
         nt:
           type: object
           additionalProperties: {}
+        total:
+          type: integer
+          format: int64
         x:
           type: object
     ErrorResponse:
@@ -1673,50 +1744,83 @@ components:
       type: object
       properties:
         aap:
-          type: object
+          $ref: '#/components/schemas/Page-Address'
         al:
-          type: object
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
         ap:
-          type: object
+          $ref: '#/components/schemas/AddrPage'
         b:
-          type: object
-        jb:
-          type: object
+          $ref: '#/components/schemas/Box-int'
+        jb: {}
         l:
-          type: object
+          type: array
+          items:
+            type: string
         lp:
           type: array
           items:
-            type: object
+            $ref: '#/components/schemas/Page-Address'
         mb:
           type: object
           additionalProperties:
-            type: object
+            $ref: '#/components/schemas/Box-int'
         mo:
           type: object
         p:
-          type: object
+          $ref: '#/components/schemas/Page-Address'
         page:
-          type: object
+          $ref: '#/components/schemas/Page-Address'
         pb:
           type: object
+          allOf:
+            - $ref: '#/components/schemas/Box-Address'
           nullable: true
         pgl:
-          type: object
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
         pgp:
-          type: object
+          $ref: '#/components/schemas/PgPage-Address'
         pr:
-          type: object
+          $ref: '#/components/schemas/Pair-string-int'
         sb:
           type: array
           items:
-            type: object
+            $ref: '#/components/schemas/Box-Address'
         tb:
-          type: object
+          type: string
         tr:
           type: object
+          additionalProperties: {}
         ud:
           type: object
+    Page-Address:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
+        total:
+          type: integer
+          format: int64
+    Pair-string-int:
+      type: object
+      properties:
+        key:
+          type: string
+        val:
+          type: integer
+          format: int64
+    PgPage-Address:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
     Receipt:
       type: object
       properties:

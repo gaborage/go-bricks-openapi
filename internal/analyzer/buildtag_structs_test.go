@@ -308,7 +308,7 @@ func TestStructEndsCause(t *testing.T) {
 		{[]chainEnd{end("dw", "Item"), end("lx", "Item"), end("dw", "Other")}, declsShapeCause, true},
 	}
 	for _, c := range cases {
-		cause, disagree := structEndsCause(c.ends)
+		cause, disagree := (&ProjectAnalyzer{}).structEndsCause(c.ends)
 		assert.Equal(t, c.cause, cause)
 		assert.Equal(t, c.disagree, disagree)
 	}

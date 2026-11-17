@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"cmp"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -232,73 +233,76 @@ func genericLoc(t *testing.T, src, needle string) string {
 	return ""
 }
 
-// genericFieldRows are the body fields of Fields: Go name, declared type and
-// the instantiation the warning names.
-var genericFieldRows = []struct{ name, declared, inst string }{
-	{"L", "List[string]", "List[string]"},
-	{"B", "Box[int]", "Box[int]"},
-	{"P", "Page[Address]", "Page[Address]"},
-	{"PR", "Pair[string, int]", "Pair[string, int]"},
-	{"AP", "AddrPage", "Page[Address]"},
-	{"AAP", "AliasPage", "Page[Address]"},
-	{"ALF", "AL", "List[Address]"},
-	{"JB", "JBox[int]", "JBox[int]"},
-	{"TB", "TBox[int]", "TBox[int]"},
-	{"TR", "Tree[int]", "Tree[int]"},
-	{"PGP", "pg.Page[Address]", "pg.Page[Address]"},
-	{"PGL", "pg.List[Address]", "pg.List[Address]"},
-	{"MO", "mo.Option[Address]", "mo.Option[Address]"},
-	{"UD", "Undeclared[Address]", "Undeclared[Address]"},
-	{"PB", "*Box[Address]", "Box[Address]"},
-	{"SB", "[]Box[Address]", "Box[Address]"},
-	{"LPF", "LP", "Page[Address]"},
-	{"MB", "map[string]Box[int]", "Box[int]"},
-	{"NB", "Box[Page[Address]]", "Box[Page[Address]]"},
-	{"Page", "Page[Address]", "Page[Address]"},
-	{"pg.List", "*pg.List[Address]", "pg.List[Address]"},
+// genericFieldRows are the body fields of Fields (issue 114): Go name and
+// the expected rendered Resolution. A generic struct is a ref to its
+// Instantiation's component, a generic named composite is inlined, and the
+// leftovers (an out-of-module or undeclared generic type) stay unresolved.
+var genericFieldRows = []struct{ name, want string }{
+	{"L", "[]string"},
+	{"B", "$Box-int"},
+	{"P", "$Page-Address"},
+	{"PR", "$Pair-string-int"},
+	{"AP", "$AddrPage"},
+	{"AAP", "$Page-Address"},
+	{"ALF", "[]$Address"},
+	{"JB", "marshal:JBox[int](unknown)"},
+	{"TB", "text:TBox[int]"},
+	{"TR", "map[string]cycle:Tree[int]"},
+	{"PGP", "$PgPage-Address"},
+	{"PGL", "[]$Address"},
+	{"MO", "inst:mo.Option[Address]"},
+	{"UD", "inst:Undeclared[Address]"},
+	{"PB", "*$Box-Address"},
+	{"SB", "[]$Box-Address"},
+	{"LPF", "[]$Page-Address"},
+	{"MB", "map[string]$Box-int"},
+	{"NB", "$Box-Page-Address"},
+	{"Page", "$Page-Address"},
+	{"pg.List", "*[]$Address"},
 }
 
-// TestGenericBodyFieldsWarnOnce pins table 1: each generic body field raises
-// exactly one warning, the generic field text, even though Fields is both the
-// request body and the payload. A json-tagged generic embed is a field named
-// by its generic type as written, never "unknown".
-func TestGenericBodyFieldsWarnOnce(t *testing.T) {
+// TestGenericBodyFieldsResolve pins issue 114's body fields: each generic
+// field documents its substituted type, and only the leftovers warn: the
+// Marshaler JBox[int] (its MarshalJSON is on a generic receiver), the
+// recursive Tree[int], and the two generic types the tool cannot read, which
+// keep issue 138's warning. Fields is both the request body and the payload,
+// and still warns once per field. A json-tagged generic embed is a field
+// named by its generic type as written, never "unknown".
+func TestGenericBodyFieldsResolve(t *testing.T) {
 	run := analyzeGenericRoute(t, "req Fields, ctx server.HandlerContext", "server.Result[Fields]")
 	a, route, warnings, src := run.a, run.route, run.warnings, run.src
-	require.Len(t, warnings, len(genericFieldRows), "one warning per generic field, no other: %v", warnings)
+	require.NotNil(t, route.Request)
+	assert.Equal(t, "Fields", route.Request.Name)
+	byName := map[string]*models.FieldInfo{}
+	for i := range route.Request.Fields {
+		byName[route.Request.Fields[i].Name] = &route.Request.Fields[i]
+	}
 	for _, r := range genericFieldRows {
-		w := fieldWarnings(a, r.name)
-		if assert.Len(t, w, 1, r.name) {
-			assert.True(t, strings.HasSuffix(w[0], genericFieldTail(r.declared, r.inst)), "%s: %s", r.name, w[0])
+		if assert.Contains(t, byName, r.name) {
+			assert.Equal(t, r.want, renderShape(byName[r.name].ResolvedShape()), r.name)
 		}
 	}
-	loc := genericLoc(t, src, "MB  map")
-	assert.Contains(t, warnings, "field MB at "+loc+" has type map[string]Box[int]: Box[int] is a generic type instantiation, "+
-		"which is not resolved — emitting an untyped object")
-	assert.Equal(t, "field Page at "+genericLoc(t, src, "Page[Address] `json:\"page\"`")+" has type Page[Address]: Page[Address] "+
-		"is a generic type instantiation, which is not resolved — emitting an untyped object", fieldWarnings(a, "Page")[0])
+	assert.Equal(t, []string{
+		"field JB at " + genericLoc(t, src, "JB  JBox") + " has type JBox[int]: JBox has its own MarshalJSON method, which " +
+			"encoding/json uses instead of its underlying type — emitting an untyped schema ({}); parameters are typed by kind and unaffected",
+		"field TR at " + genericLoc(t, src, "TR  Tree") + " has type Tree[int]: Tree[int] contains itself — the recursion is cut to an untyped schema ({})",
+		"field MO at " + genericLoc(t, src, "MO  mo.") + genericFieldTail("mo.Option[Address]", "mo.Option[Address]"),
+		"field UD at " + genericLoc(t, src, "UD  Undeclared") + genericFieldTail("Undeclared[Address]", "Undeclared[Address]"),
+	}, warnings)
 	for _, w := range warnings {
 		assert.NotContains(t, w, "field unknown at")
 	}
-
-	require.NotNil(t, route.Request)
-	assert.Equal(t, "Fields", route.Request.Name)
-	byJSON := map[string]*models.FieldInfo{}
-	for i := range route.Request.Fields {
-		byJSON[route.Request.Fields[i].JSONName] = &route.Request.Fields[i]
+	assert.Equal(t, "page", byName["Page"].JSONName)
+	assert.Equal(t, "pgEmbed", byName["pg.List"].JSONName)
+	for _, name := range []string{"Box-int", "Box-Address", "Page-Address", "Pair-string-int", "PgPage-Address", "Box-Page-Address", "AddrPage"} {
+		assert.Contains(t, a.typeRegistry, name)
 	}
-	require.Contains(t, byJSON, "page")
-	require.Contains(t, byJSON, "pgEmbed")
-	assert.Equal(t, "Page", byJSON["page"].Name)
-	assert.Equal(t, "pg.List", byJSON["pgEmbed"].Name)
-	assert.Equal(t, "inst:Box[int]", renderShape(byJSON["b"].ResolvedShape()))
-	assert.Equal(t, "*inst:Box[Address]", renderShape(byJSON["pb"].ResolvedShape()))
-	assert.Equal(t, "[]inst:Page[Address]", renderShape(byJSON["lp"].ResolvedShape()))
 	assertNoGenericComponent(t, a)
 }
 
 // assertNoGenericComponent asserts no generic base was registered as a
-// component: an Instantiation never reaches a consumer as its bare base.
+// component under its bare name: an Instantiation never reaches a consumer
+// as its bare base.
 func assertNoGenericComponent(t *testing.T, a *ProjectAnalyzer) {
 	t.Helper()
 	for _, name := range []string{"Page", "Box", "Pair", "List", "JBox", "TBox", "Tree", "PgPage", "PgList"} {
@@ -306,48 +310,45 @@ func assertNoGenericComponent(t *testing.T, a *ProjectAnalyzer) {
 	}
 }
 
-// TestGenericParamFieldsWarnOnce pins table 2: a generic path, query or
-// header parameter raises the generic field warning once, and its parameter
-// is still an untyped object.
-func TestGenericParamFieldsWarnOnce(t *testing.T) {
+// TestGenericParamFieldsResolve pins issue 114's parameter rows: a generic
+// path, query or header parameter documents its substituted kind (query
+// List[string] is an array of string, path ID[int] a string), with no
+// warning, and the binding rule (#121) applies to the substituted type: a
+// query Box[int] is a struct go-bricks cannot bind.
+func TestGenericParamFieldsResolve(t *testing.T) {
 	run := analyzeGenericRoute(t, "req Params, ctx server.HandlerContext", "server.Result[Receipt]")
-	a, route, warnings := run.a, run.route, run.warnings
-	rows := []struct{ name, declared string }{
-		{"IDs", "List[string]"}, {"ID", "ID[int]"}, {"Tags", "List[string]"}, {"BQ", "Box[int]"},
-	}
-	require.Len(t, warnings, len(rows), "%v", warnings)
-	for _, r := range rows {
-		w := fieldWarnings(a, r.name)
-		if assert.Len(t, w, 1, r.name) {
-			assert.True(t, strings.HasSuffix(w[0], genericFieldTail(r.declared, r.declared)), w[0])
-		}
-	}
+	route := run.route
 	require.NotNil(t, route.Request)
-	require.Len(t, route.Request.Fields, len(rows))
+	want := map[string]string{"IDs": "[]string", "ID": goTypeString, "Tags": "[]string", "BQ": "$Box-int"}
+	require.Len(t, route.Request.Fields, len(want))
 	for i := range route.Request.Fields {
 		f := &route.Request.Fields[i]
 		assert.NotEmpty(t, f.ParamType, f.Name)
-		assert.Equal(t, models.ShapeInstantiation, f.ResolvedShape().Kind, f.Name)
+		assert.Equal(t, want[f.Name], renderShape(f.ResolvedShape()), f.Name)
+	}
+	if assert.Len(t, run.warnings, 1, "%v", run.warnings) {
+		assert.Contains(t, run.warnings[0], `field BQ at `)
+		assert.Contains(t, run.warnings[0], `is the query parameter "b" of type Box[int], which go-bricks cannot bind (a struct other than time.Time)`)
 	}
 }
 
-// TestGenericControlsUnchanged pins table 5: an untagged generic embed keeps
-// issue 116's dropped-embed warning and gets no second one, an untagged named
-// slice of an instantiation is a property with the generic field warning,
-// an undeclared bare type, a recursive map, anonymous struct and json:"-"
-// fields keep what they had, and chan and func fields raise issue 158's
-// func-or-chan warning.
-func TestGenericControlsUnchanged(t *testing.T) {
+// TestGenericControls pins the shapes around issue 114's: an untagged
+// generic struct embed promotes its substituted fields with no warning
+// (issue 116's interim dropped-embed warning no longer fires), an untagged
+// named slice of an instantiation is a property, while an undeclared bare
+// type, a recursive map, anonymous struct and json:"-" fields keep what they
+// had, and chan and func fields raise issue 158's func-or-chan warning.
+func TestGenericControls(t *testing.T) {
 	run := analyzeGenericRoute(t, "req IDReq, ctx server.HandlerContext", "server.Result[Controls]")
 	a, warnings := run.a, run.warnings
-	assert.Len(t, warnings, 6, "%v", warnings)
-	assert.Len(t, matching(warnings, "embedded field Page at "), 1)
-	assert.Len(t, matching(warnings, "has type Page[Address]: Page[Address] is a generic instantiation, which is not expanded"), 1)
-	if w := fieldWarnings(a, "LP"); assert.Len(t, w, 1) {
-		assert.True(t, strings.HasSuffix(w[0], genericFieldTail("LP", "Page[Address]")), w[0])
-	}
+	assert.Len(t, warnings, 4, "%v", warnings)
+	assert.Empty(t, embedWarnings(a))
+	controls := renders(t, a.typeRegistry["Controls"])
+	assert.Equal(t, "[]$Address", controls["items"])
+	assert.Equal(t, goTypeInt, controls["total"])
+	assert.Equal(t, "[]$Page-Address", controls["LP"])
 	if w := fieldWarnings(a, "X"); assert.Len(t, w, 1) {
-		assert.Contains(t, w[0], "T resolves to no schema")
+		assert.Contains(t, w[0], "T resolves to no schema", "a type parameter is bound only inside its own declaration")
 	}
 	if w := fieldWarnings(a, "NT"); assert.Len(t, w, 1) {
 		assert.Contains(t, w[0], "contains itself")
@@ -357,93 +358,112 @@ func TestGenericControlsUnchanged(t *testing.T) {
 			assert.Contains(t, w[0], "which holds a "+held+", a Go type encoding/json cannot marshal", name)
 		}
 	}
-	for _, name := range []string{"Anon", "Skip", "Note"} {
+	for _, name := range []string{"Anon", "Skip", "Note", "LP"} {
 		assert.Empty(t, fieldWarnings(a, name), name)
 	}
 }
 
 // TestGenericEmbedMalformedTagKeepsUnknown pins that a json-tagged generic
 // embed with a tag reflect cannot fully read keeps "unknown" in the
-// malformed-tag warning, while its field warning names it by its generic type.
+// malformed-tag warning, while its field is named by its generic type and
+// resolves to its Instantiation's component.
 func TestGenericEmbedMalformedTagKeepsUnknown(t *testing.T) {
 	src := strings.Replace(genericModSrc, "type Params struct {",
 		"type Odd struct {\n\tBox[int] \"json:\\\"box\\\"\\n\\tvalidate:\\\"required\\\"\"\n}\n\ntype Params struct {", 1)
 	src = strings.NewReplacer("PARAMS", "req Odd, ctx server.HandlerContext", "RESULT", "server.Result[Receipt]").Replace(src)
-	a, _ := analyzeProjectRoutes(t, map[string]string{
+	a, routes := analyzeProjectRoutes(t, map[string]string{
 		"go.mod":                           resolveGoMod,
 		filepath.Join("pg", "pg.go"):       genericPgSrc,
 		filepath.FromSlash(genericModFile): src,
 	})
 	warnings := a.Warnings(t.Context())
-	require.Len(t, warnings, 2, "%v", warnings)
+	require.Len(t, warnings, 1, "%v", warnings)
 	assert.Len(t, matching(warnings, "struct tag on field unknown at "), 1)
-	if w := fieldWarnings(a, "Box"); assert.Len(t, w, 1) {
-		assert.True(t, strings.HasPrefix(w[0], "field Box at "), w[0])
-		assert.True(t, strings.HasSuffix(w[0], genericFieldTail("Box[int]", "Box[int]")), w[0])
-	}
+	require.Len(t, routes, 1)
+	require.NotNil(t, routes[0].Request)
+	box := fieldByJSON(t, a.typeRegistry["Odd"], "box")
+	assert.Equal(t, "Box", box.Name)
+	assert.Equal(t, "$Box-int", renderShape(box.ResolvedShape()))
 }
 
-// genericRequestRows are the request types of table 3 and the one warning
-// each raises: the generic request text (a struct base, or one the tool
-// cannot locate) or F26 (a non-struct base). A type's own (un)marshaling
-// methods do not change its kind, so a Marshaler or text type declared over
-// a struct instantiation (MPage, UPage, TPage) is a generic request, and one
-// over a non-struct (ML) stays F26.
-func genericRequestRows() []struct{ typ, want string } {
+// genericRequestRows are the request types of table 3 and what each
+// documents (issue 114): the component its requestBody $refs, or the one
+// warning it raises. A struct Instantiation, directly, behind a pointer,
+// through an alias, a generic alias or a generic defined type, is its
+// component; a defined type over one (AddrPage) its own. A Marshaler or
+// text type declared over a struct Instantiation (MPage, UPage, TPage) is a
+// struct Marshaler request (#111). One over a non-struct generic type stays
+// F26, and a generic type the tool cannot read, or one cut by a cycle,
+// keeps issue 138's generic request warning.
+func genericRequestRows() []struct{ typ, name, want string } {
 	generic := func(typ, inst string) string { return fmt.Sprintf(genericRequestWarning, typ, inst) }
 	f26 := func(typ string) string { return fmt.Sprintf(nonStructRequestWarning, typ) }
-	return []struct{ typ, want string }{
-		{"Box[Address]", generic("Box[Address]", "Box[Address]")},
-		{"*Box[Address]", generic("*Box[Address]", "Box[Address]")},
-		{"Pair[string, int]", generic("Pair[string, int]", "Pair[string, int]")},
-		{"pg.Page[Address]", generic("pg.Page[Address]", "pg.Page[Address]")},
-		{"AddrPage", generic("AddrPage", "Page[Address]")},
-		{"*AddrPage", generic("*AddrPage", "Page[Address]")},
-		{"AliasPage", generic("AliasPage", "Page[Address]")},
-		{"pg.AddrPage", generic("pg.AddrPage", "Page[Addr]")},
-		{"MPage", generic("MPage", "Page[Address]")},
-		{"*MPage", generic("*MPage", "Page[Address]")},
-		{"UPage", generic("UPage", "Page[Address]")},
-		{"TPage", generic("TPage", "Page[Address]")},
-		{"AliasM", generic("AliasM", "Page[Address]")},
-		{"pg.MPage", generic("pg.MPage", "Page[Addr]")},
-		{"GA[Address]", generic("GA[Address]", "GA[Address]")},
-		{"GD[Address]", generic("GD[Address]", "GD[Address]")},
-		{"GP[Address]", generic("GP[Address]", "GP[Address]")},
-		{"GParen[Address]", generic("GParen[Address]", "GParen[Address]")},
-		{"Cyc1[Address]", generic("Cyc1[Address]", "Cyc1[Address]")},
-		{"mo.Option[Address]", generic("mo.Option[Address]", "mo.Option[Address]")},
-		{"Undeclared[Address]", generic("Undeclared[Address]", "Undeclared[Address]")},
-		{"List[Address]", f26("List[Address]")},
-		{"*List[Address]", f26("*List[Address]")},
-		{"pg.List[Address]", f26("pg.List[Address]")},
-		{"GL[Address]", f26("GL[Address]")},
-		{"GPL[Address]", f26("GPL[Address]")},
-		{"ID[int]", f26("ID[int]")},
-		{"Opt[Address]", f26("Opt[Address]")},
-		{"AL", f26("AL")},
-		{"ML", f26("ML")},
-		{"LP", f26("LP")},
-		{"[]Address", f26("[]Address")},
-		{"AddrSlice", f26("AddrSlice")},
-		{"Status", f26("Status")},
-		{"PP", f26("PP")},
-		{"PA", f26("PA")},
-		{"PtrBox[Address]", f26("PtrBox[Address]")},
+	marshaler := func(typ, owner, method string) string {
+		return fmt.Sprintf(marshalerRequestWarning, typ, owner, method)
+	}
+	return []struct{ typ, name, want string }{
+		{"Box[Address]", "Box-Address", ""},
+		{"*Box[Address]", "Box-Address", ""},
+		{"Pair[string, int]", "Pair-string-int", ""},
+		{"pg.Page[Address]", "Page-Address", ""},
+		{"AddrPage", "AddrPage", ""},
+		{"*AddrPage", "AddrPage", ""},
+		{"AliasPage", "Page-Address", ""},
+		{"pg.AddrPage", "Page-Addr", ""},
+		{"GA[Address]", "Box-Address", ""},
+		{"GD[Address]", "Box-Address", ""},
+		{"GP[Address]", "Page-Address", ""},
+		{"GParen[Address]", "Box-Address", ""},
+		{"MPage", "", marshaler("MPage", "MPage", "MarshalJSON")},
+		{"*MPage", "", marshaler("*MPage", "MPage", "MarshalJSON")},
+		{"UPage", "", marshaler("UPage", "UPage", "UnmarshalJSON")},
+		{"TPage", "", ""},
+		{"AliasM", "", marshaler("AliasM", "MPage", "MarshalJSON")},
+		{"pg.MPage", "", marshaler("pg.MPage", "pg.MPage", "MarshalJSON")},
+		{"Cyc1[Address]", "", generic("Cyc1[Address]", "Cyc1[Address]")},
+		{"mo.Option[Address]", "", generic("mo.Option[Address]", "mo.Option[Address]")},
+		{"Undeclared[Address]", "", generic("Undeclared[Address]", "Undeclared[Address]")},
+		{"List[Address]", "", f26("List[Address]")},
+		{"*List[Address]", "", f26("*List[Address]")},
+		{"pg.List[Address]", "", f26("pg.List[Address]")},
+		{"GL[Address]", "", f26("GL[Address]")},
+		{"GPL[Address]", "", f26("GPL[Address]")},
+		{"ID[int]", "", f26("ID[int]")},
+		{"Opt[Address]", "", f26("Opt[Address]")},
+		{"AL", "", f26("AL")},
+		{"ML", "", f26("ML")},
+		{"LP", "", f26("LP")},
+		{"[]Address", "", f26("[]Address")},
+		{"AddrSlice", "", f26("AddrSlice")},
+		{"Status", "", f26("Status")},
+		{"PP", "", f26("PP")},
+		{"PA", "", f26("PA")},
+		{"PtrBox[Address]", "", f26("PtrBox[Address]")},
 	}
 }
 
-// TestGenericRequestsWarnOnce pins table 3 and the generic bases it does not
-// name (generic aliases and defined types over a struct, a generic interface,
-// a generic named string): one warning per route, no requestBody, and an
-// untyped request, in either parameter position.
-func TestGenericRequestsWarnOnce(t *testing.T) {
+// TestGenericRequests pins table 3 in either parameter position: a request
+// that resolves to a struct Instantiation adopts its component (named, with
+// its substituted fields) and warns nothing; any other raises its one
+// warning and documents no requestBody of its own.
+func TestGenericRequests(t *testing.T) {
 	for _, r := range genericRequestRows() {
 		t.Run(r.typ, func(t *testing.T) {
 			for _, params := range []string{"req " + r.typ + ", ctx server.HandlerContext", "ctx server.HandlerContext, req " + r.typ} {
 				run := analyzeGenericRoute(t, params, "server.Result[Receipt]")
-				assert.Equal(t, []string{r.want}, run.warnings, params)
-				assertUntypedRequest(t, run.route.Request)
+				if r.want == "" {
+					assert.Empty(t, run.warnings, params)
+				} else {
+					assert.Equal(t, []string{r.want}, run.warnings, params)
+				}
+				if r.name != "" {
+					require.NotNil(t, run.route.Request, params)
+					assert.Equal(t, r.name, run.route.Request.Name, params)
+					assert.NotEmpty(t, run.route.Request.Fields, params)
+					assert.Contains(t, run.a.typeRegistry, r.name)
+				} else if run.route.Request != nil {
+					assert.Empty(t, run.route.Request.Name, params)
+				}
 				require.NotNil(t, run.route.Response)
 				assert.Equal(t, "Receipt", run.route.Response.Name)
 				assertNoGenericComponent(t, run.a)
@@ -452,84 +472,86 @@ func TestGenericRequestsWarnOnce(t *testing.T) {
 	}
 }
 
-// genericPayloadRows are the payloads of table 4, each with the one warning
-// it raises: the full payload type as written, then the instantiation.
-func genericPayloadRows() []struct{ result, written, inst string } {
-	const page = "Page[Address]"
-	return []struct{ result, written, inst string }{
-		{"server.Result[Page[Address]]", page, page},
-		{"server.ResultWithMeta[Page[Address]]", page, page},
-		{"server.Result[[]Page[Address]]", "[]Page[Address]", page},
-		{"server.Result[*Page[Address]]", "*Page[Address]", page},
-		{"server.Result[map[string]Page[Address]]", "map[string]Page[Address]", page},
-		{"server.Result[List[Address]]", "List[Address]", "List[Address]"},
-		{"server.Result[Box[Address]]", "Box[Address]", "Box[Address]"},
-		{"server.Result[Pair[string, int]]", "Pair[string, int]", "Pair[string, int]"},
-		{"server.Result[pg.Page[Address]]", "pg.Page[Address]", "pg.Page[Address]"},
-		{"server.Result[mo.Option[Address]]", "mo.Option[Address]", "mo.Option[Address]"},
-		{"server.Result[Box[Page[Address]]]", "Box[Page[Address]]", "Box[Page[Address]]"},
-		{page, page, page},
-		{"*Page[Address]", "*Page[Address]", page},
-		{"Pair[string, int]", "Pair[string, int]", "Pair[string, int]"},
-		{"List[Address]", "List[Address]", "List[Address]"},
-		{"server.Result[AddrPage]", "AddrPage", page},
-		{"server.Result[*AddrPage]", "*AddrPage", page},
-		{"server.Result[AliasPage]", "AliasPage", page},
-		{"server.Result[LP]", "LP", page},
-		{"server.Result[[]AddrPage]", "[]AddrPage", page},
-		{"server.Result[map[string]AddrPage]", "map[string]AddrPage", page},
-		{"server.Result[pg.AddrPage]", "pg.AddrPage", "Page[Addr]"},
+// genericPayloadRows are the payloads of table 4, each with the Resolution
+// it documents (issue 114: a payload emits what a field of its type emits)
+// or, for a leftover, issue 138's warning, naming the payload type as
+// written, then the instantiation. A registered name (AddrPage) has no
+// Resolution: it is $ref'd as any registered struct.
+func genericPayloadRows() []struct{ result, name, res, warn string } {
+	const page = "$Page-Address"
+	return []struct{ result, name, res, warn string }{
+		{"server.Result[Page[Address]]", "", page, ""},
+		{"server.ResultWithMeta[Page[Address]]", "", page, ""},
+		{"server.Result[[]Page[Address]]", "", "[]" + page, ""},
+		{"server.Result[*Page[Address]]", "", "*" + page, ""},
+		{"server.Result[map[string]Page[Address]]", "", "map[string]" + page, ""},
+		{"server.Result[List[Address]]", "", "[]$Address", ""},
+		{"server.Result[Box[Address]]", "", "$Box-Address", ""},
+		{"server.Result[Pair[string, int]]", "", "$Pair-string-int", ""},
+		{"server.Result[pg.Page[Address]]", "", page, ""},
+		{"server.Result[Box[Page[Address]]]", "", "$Box-Page-Address", ""},
+		{"Page[Address]", "", page, ""},
+		{"*Page[Address]", "", "*" + page, ""},
+		{"Pair[string, int]", "", "$Pair-string-int", ""},
+		{"List[Address]", "", "[]$Address", ""},
+		{"server.Result[AddrPage]", "AddrPage", "", ""},
+		{"server.Result[*AddrPage]", "AddrPage", "", ""},
+		{"server.Result[AliasPage]", "", page, ""},
+		{"server.Result[LP]", "", "[]" + page, ""},
+		{"server.Result[[]AddrPage]", "AddrPage", "", ""},
+		{"server.Result[map[string]AddrPage]", "", "map[string]$AddrPage", ""},
+		{"server.Result[pg.AddrPage]", "", "$Page-Addr", ""},
+		{"server.Result[mo.Option[Address]]", "", "", fmt.Sprintf(genericPayloadWarning, "mo.Option[Address]", "mo.Option[Address]")},
+		{"mo.Option[Address]", "", "", fmt.Sprintf(genericPayloadWarning, "mo.Option[Address]", "mo.Option[Address]")},
+		{"server.Result[[]Undeclared[Address]]", "", "", fmt.Sprintf(genericPayloadWarning, "[]Undeclared[Address]", "Undeclared[Address]")},
 	}
 }
 
-// TestGenericPayloadsWarnOnce pins table 4: on a typed-request route, each
-// generic payload raises exactly one warning naming the full payload type
-// (a bare return in full, never its first type argument), never the named
-// non-struct one, and its data stays untyped: no Resolution and no name.
-func TestGenericPayloadsWarnOnce(t *testing.T) {
+// TestGenericPayloads pins table 4 on a typed-request route: a payload
+// holding an Instantiation the tool resolves is typed, with no warning; a
+// leftover keeps issue 138's one warning and resolves to no TypeInfo.
+func TestGenericPayloads(t *testing.T) {
 	for _, r := range genericPayloadRows() {
 		t.Run(r.result, func(t *testing.T) {
 			run := analyzeGenericRoute(t, "req IDReq, ctx server.HandlerContext", r.result)
-			assert.Equal(t, []string{fmt.Sprintf(genericPayloadWarning, r.written, r.inst)}, run.warnings)
-			if run.route.Response != nil {
-				assert.Empty(t, run.route.Response.Name)
-				assert.Nil(t, run.route.Response.Resolution)
-			}
 			require.NotNil(t, run.route.Request)
 			assert.Equal(t, "IDReq", run.route.Request.Name)
 			assertNoGenericComponent(t, run.a)
+			if r.warn != "" {
+				assert.Equal(t, []string{r.warn}, run.warnings)
+				assert.Nil(t, run.route.Response)
+				return
+			}
+			assert.Empty(t, run.warnings)
+			require.NotNil(t, run.route.Response)
+			assert.True(t, IsTypedPayload(run.route.Response), "doctor counts it typed")
+			assert.Equal(t, r.name, run.route.Response.Name)
+			assert.Equal(t, cmp.Or(r.res, "unknown"), renderShapePtr(run.route.Response.Resolution))
 		})
 	}
-	run := analyzeGenericRoute(t, "req IDReq, ctx server.HandlerContext", "Pair[string, int]")
-	assert.Equal(t, []string{"response type Pair[string, int]: Pair[string, int] is a generic type instantiation, " +
-		"which is not resolved — emitting an untyped schema"}, run.warnings)
-	run = analyzeGenericRoute(t, "req AddrPage, ctx server.HandlerContext", "server.Result[Receipt]")
-	assert.Equal(t, []string{"request type AddrPage: Page[Address] is a generic type instantiation, which is not resolved " +
-		"— no requestBody emitted"}, run.warnings)
 }
 
-// TestGenericOnlyHandlersAreFound pins the status change issue 138 accepts:
-// a handler with a generic request parameter, whatever its payload, or a
-// request-less handler whose payload holds an unresolved instantiation, is
-// found, so a request-less generic payload warns, a generic request with a
-// generic payload raises one warning each, and a generic request with an
-// anonymous struct payload raises the request one, its payload documented
-// inline (issue 118). The generic_status fixture's handlers document
-// server.Created and server.NewNotFoundError.
+// TestGenericOnlyHandlersAreFound pins that a handler with a generic request
+// parameter, whatever its payload, or a request-less handler whose payload
+// holds an instantiation, is found: issue 138's status change, kept by issue
+// 114. A request-less leftover payload warns; a generic request with a
+// generic payload documents both. The generic_status fixture's handlers
+// document server.Created and server.NewNotFoundError.
 func TestGenericOnlyHandlersAreFound(t *testing.T) {
-	run := analyzeGenericRoute(t, "ctx server.HandlerContext", "server.Result[Page[Address]]")
-	assert.Equal(t, []string{fmt.Sprintf(genericPayloadWarning, "Page[Address]", "Page[Address]")}, run.warnings)
+	run := analyzeGenericRoute(t, "ctx server.HandlerContext", "server.Result[mo.Option[Address]]")
+	assert.Equal(t, []string{fmt.Sprintf(genericPayloadWarning, "mo.Option[Address]", "mo.Option[Address]")}, run.warnings)
 	assert.Nil(t, run.route.Request)
 	assert.Nil(t, run.route.Response)
 
 	run = analyzeGenericRoute(t, "req Box[Address], ctx server.HandlerContext", "server.Result[Page[Address]]")
-	assert.Equal(t, []string{
-		fmt.Sprintf(genericRequestWarning, "Box[Address]", "Box[Address]"),
-		fmt.Sprintf(genericPayloadWarning, "Page[Address]", "Page[Address]"),
-	}, run.warnings)
+	assert.Empty(t, run.warnings)
+	require.NotNil(t, run.route.Request)
+	assert.Equal(t, "Box-Address", run.route.Request.Name)
+	require.NotNil(t, run.route.Response)
+	assert.Equal(t, "$Page-Address", renderShapePtr(run.route.Response.Resolution))
 
 	run = analyzeGenericRoute(t, "req Box[Address], ctx server.HandlerContext", "server.Result[struct{ A int }]")
-	assert.Equal(t, []string{fmt.Sprintf(genericRequestWarning, "Box[Address]", "Box[Address]")}, run.warnings)
+	assert.Empty(t, run.warnings)
 	if assert.NotNil(t, run.route.Response) && assert.NotNil(t, run.route.Response.Resolution) {
 		assert.Equal(t, "struct{A int}", renderShape(*run.route.Response.Resolution))
 	}
@@ -543,26 +565,23 @@ func TestGenericOnlyHandlersAreFound(t *testing.T) {
 	for _, r := range routes {
 		assert.Equal(t, 201, r.SuccessStatus, r.Path)
 		assert.Equal(t, []int{404}, r.ErrorStatuses, r.Path)
-		assert.Nil(t, r.Request, r.Path)
-		if r.Path == "/receipts" {
-			assert.NotNil(t, r.Response, "an anonymous struct payload is documented inline")
-		} else {
-			assert.Nil(t, r.Response, r.Path)
-		}
+		assert.NotNil(t, r.Response, r.Path)
 	}
+	assert.Empty(t, a.Warnings(t.Context()))
 }
 
 // TestPointerResultWrapperRequestLess pins that a request-less handler
 // returning a pointer to a result wrapper (*server.Result[T],
 // *server.ResultWithMeta[T]) is found, since payloadExpr unwraps it as it
 // does the value form (issue 143): its route keeps its inferred error
-// statuses, a plain payload is typed with no warning, and a generic payload
-// raises the generic payload warning of Result[Page[Address]].
+// statuses, a plain or generic payload is typed with no warning (issue 114),
+// and a leftover generic payload raises the generic payload warning.
 func TestPointerResultWrapperRequestLess(t *testing.T) {
 	cases := map[string]string{
-		"*server.Result[Receipt]":         "",
-		"*server.ResultWithMeta[Receipt]": "",
-		"*server.Result[Page[Address]]":   "response type Page[Address]: Page[Address] is a generic type instantiation, which is not resolved — emitting an untyped schema",
+		"*server.Result[Receipt]":            "",
+		"*server.ResultWithMeta[Receipt]":    "",
+		"*server.Result[Page[Address]]":      "",
+		"*server.Result[mo.Option[Address]]": fmt.Sprintf(genericPayloadWarning, "mo.Option[Address]", "mo.Option[Address]"),
 	}
 	for result, warning := range cases {
 		src := strings.NewReplacer("PARAMS", "ctx server.HandlerContext", "RESULT", result,
@@ -577,7 +596,7 @@ func TestPointerResultWrapperRequestLess(t *testing.T) {
 		if warning == "" {
 			assert.Empty(t, a.Warnings(t.Context()), result)
 			require.NotNil(t, routes[0].Response, result)
-			assert.Equal(t, "Receipt", routes[0].Response.Name, result)
+			assert.True(t, IsTypedPayload(routes[0].Response), result)
 			continue
 		}
 		assert.Equal(t, []string{warning}, a.Warnings(t.Context()), result)

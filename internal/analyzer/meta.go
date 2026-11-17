@@ -302,7 +302,7 @@ func metaApplicability(route *models.Route) string {
 func (a *ProjectAnalyzer) reservedMetaKey(s structSite) string {
 	var fields []models.FieldInfo
 	a.withoutDiagnostics(func() {
-		fields = a.extractStructFields(s.st, s.file, s.path, map[string]struct{}{a.structIdentity(s.st): {}}, 0)
+		fields = a.extractFields(s, 0)
 	})
 	for i := range fields {
 		if key := bodyPropertyKey(&fields[i]); metaReservedKeys[key] {

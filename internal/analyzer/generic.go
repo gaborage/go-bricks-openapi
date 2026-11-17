@@ -3,6 +3,7 @@ package analyzer
 import (
 	"go/ast"
 	"go/types"
+	"path/filepath"
 	"strings"
 
 	"github.com/gaborage/go-bricks-openapi/internal/models"
@@ -10,9 +11,10 @@ import (
 
 // Unresolved instantiations (issue 138). A generic type written with its type
 // arguments (CONTEXT.md, "Instantiation") decodes as a ShapeInstantiation,
-// which is not resolved until #114 substitutes its arguments. Wherever it is
-// written it is documented as before — an untyped object, no requestBody, an
-// untyped payload — and raises one warning, so --strict fails on it.
+// which instantiation.go substitutes (issue 114). One it cannot resolve (its
+// generic declaration is outside the module, undeclared, or cut) is
+// documented as before — an untyped object, no requestBody, an untyped
+// payload — and raises one warning, so --strict fails on it.
 
 // Instantiation warnings. The field one is raised once per field declaration
 // (warnFieldFallback), the request and payload ones once per route. Each
@@ -24,6 +26,79 @@ const (
 	genericRequestWarning = "request type %s: %s is a generic type instantiation, which is not resolved — no requestBody emitted"
 	genericPayloadWarning = "response type %s: %s is a generic type instantiation, which is not resolved — emitting an untyped schema"
 )
+
+// populateInstantiationRequest documents a request whose type, a pointer
+// written in it shed, resolves to an Instantiation of a generic struct
+// (Box[A], *Box[A], type AliasPage = Page[A], a generic alias over one):
+// the Instantiation's component is registered and adopted, so its body is a
+// $ref to it and its path, query and header fields are parameters with
+// their substituted types, which warn first if go-bricks cannot bind them.
+// One whose generic type holds a marshal method is documented as a struct
+// Marshaler request (#111) is: its body is the leaf, and only its
+// parameters are kept. One inlined for an anonymous struct argument is
+// documented as an anonymous struct request is. It reports false for any
+// other request.
+func (a *ProjectAnalyzer) populateInstantiationRequest(h *handlerAnalysis, astFile *ast.File, filePath string) bool {
+	if h.requestExpr == nil || isMultiPointer(h.requestExpr) {
+		return false
+	}
+	c := newResolveCtx(astFile, filePath, false)
+	r := a.resolveShape(a.typeShape(pointee(h.requestExpr)), c)
+	if inst := a.instanceOf(r); inst != nil {
+		site := structSite{st: inst.st, pkg: inst.decl.site.file.Name.Name, file: inst.decl.site.file, path: inst.decl.site.path, env: inst.env}
+		a.warnUnbindableSite(site)
+		ti := a.registerInstantiation(inst, 0)
+		if ti == nil {
+			return false
+		}
+		h.request = &models.TypeInfo{}
+		adoptRegisteredType(h.request, ti)
+		return true
+	}
+	if r.Kind == models.ShapeStruct {
+		return a.populateInlineInstantiationRequest(h, astFile, filePath)
+	}
+	return a.populateGenericMarshalerRequest(h, r, c.st.first, astFile, filePath)
+}
+
+// populateInlineInstantiationRequest documents a request whose
+// Instantiation is inlined, an argument being an anonymous struct
+// (Box[struct{ X int }], ADR 0003), as an anonymous struct request is
+// (inlineRequest): no component, no warning.
+func (a *ProjectAnalyzer) populateInlineInstantiationRequest(h *handlerAnalysis, astFile *ast.File, filePath string) bool {
+	ec := embedClassifier{a: a, home: filepath.Dir(filePath)}
+	site, ok := ec.genericStruct(pointee(h.requestExpr), astFile, filePath, nil, 0)
+	if !ok {
+		return false
+	}
+	h.request = a.inlineRequest(site, h.requestType)
+	return true
+}
+
+// populateGenericMarshalerRequest documents a request whose type is an
+// Instantiation of a generic struct whose method set holds a marshal method
+// (r, its text or Marshaler leaf; fb, the fallback it noted) as
+// populateMarshalerRequest documents a struct Marshaler request.
+func (a *ProjectAnalyzer) populateGenericMarshalerRequest(h *handlerAnalysis, r models.TypeShape, fb fieldFallback, astFile *ast.File, filePath string) bool {
+	if r.Kind != models.ShapeMarshaler && r.Kind != models.ShapeText {
+		return false
+	}
+	ec := embedClassifier{a: a, home: filepath.Dir(filePath)}
+	site, ok := ec.genericStruct(pointee(h.requestExpr), astFile, filePath, nil, 0)
+	if !ok {
+		return false
+	}
+	ti := &models.TypeInfo{JOSE: hasJOSETag(site.st)}
+	params, paramsOnly := a.requestParamFields(site)
+	ti.Fields = params
+	h.request = ti
+	if paramsOnly && !ti.JOSE {
+		return true
+	}
+	ti.Resolution = &r
+	a.warnMarshalerRequest(h.requestType, fb)
+	return true
+}
 
 // warnNonStructRequest raises the one warning of a request that does not
 // register as a struct. The only anonymous struct that gets here is a
@@ -89,6 +164,9 @@ func (a *ProjectAnalyzer) requestInstantiation(expr ast.Expr, astFile *ast.File,
 	c := newResolveCtx(astFile, filePath, false)
 	r := a.resolveUnderlying(types.ExprString(expr), expr, c)
 	fb := c.st.first
+	if r.Kind == models.ShapeRecursive && fb.detail == instCutDetail {
+		return fb.typeName, true // an Instantiation cut by a cycle or the depth cap is not read
+	}
 	if r.Kind != models.ShapeInstantiation || fb.kind != fallbackGeneric {
 		return "", false
 	}
@@ -173,6 +251,18 @@ func (a *ProjectAnalyzer) payloadInstantiation(results *ast.FieldList, serverAli
 func (a *ProjectAnalyzer) warnGenericPayload(h *handlerAnalysis) {
 	if h.response == nil && h.responseInst != "" {
 		a.addWarningf(genericPayloadWarning, h.responseType, h.responseInst)
+	}
+}
+
+// dropUnresolvedGenericPayload drops the response of a handler whose
+// payload holds an Instantiation that did not resolve (issue 138's
+// leftovers: a generic type outside the module or undeclared, or one cut by
+// the depth cap), so it resolves to no TypeInfo, as before issue 114:
+// populateTypeFields left it nameless and unresolved, typed from its Shape.
+func dropUnresolvedGenericPayload(h *handlerAnalysis) {
+	ti := h.response
+	if ti != nil && ti.Name == "" && ti.Resolution == nil && ti.Shape != nil && firstInstantiation(ti.Shape) != "" {
+		h.response = nil
 	}
 }
 

@@ -5,11 +5,14 @@ import (
 	"go/parser"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks-openapi/internal/models"
 )
 
 // genericBaseB is package b of the generic-base embed tests.
@@ -117,22 +120,36 @@ func analyzeGenericBaseRows(t *testing.T, rows []embedRow) *ProjectAnalyzer {
 	})
 }
 
-// TestEmbeddedGenericNonStructBase pins issue 191: a generic instantiation
-// reached through an alias or a defined type (ll, lsd), or over an in-module
-// generic type (ol, b.List[int]), has its generic type read. A non-struct
-// one embedded under an unexported name, json-tagged or not, a chain through
-// a generic alias of json.RawMessage (rawChain) included, adds no property
-// and no warning, as encoding/json skips it, over an exported generic type
-// too (sq); one over time.Time (ltA), or a defined type over a generic alias
-// of it (ltD, which drops its methods), adds nothing. An exported one (LL,
-// b.List[int], Seq[int]) is one property with only the
-// unresolved-generic field warning. A struct base (bb, qb), an undeclared
-// one (gl, qm) and one from outside the module (ng) keep the dropped-embed
-// warning, and so does an exported instantiation of a generic alias of a
-// non-struct Marshaler (RawOf[int], RA, b.RawOf[int]): its promoted methods
-// make the embedding struct a Marshaler, which method-set reading does not
-// see through an instantiation (TestGenericEmbedMarshalerAndPointerWarn
-// pins the unexported ones).
+// assertPromotedMarshaler asserts that the row struct typ embeds a type
+// whose marshal method it promotes (issue 114 reads generic receivers and
+// sees through an instantiation): it is no component, its Rows field is a
+// Marshaler leaf, and that field raises the promoted-method warning naming
+// via, the embed as written.
+func assertPromotedMarshaler(t *testing.T, a *ProjectAnalyzer, typ, method, via string) {
+	t.Helper()
+	assert.NotContains(t, a.typeRegistry, typ)
+	f := fieldByJSON(t, a.typeRegistry["Rows"], strings.ToLower(typ))
+	require.NotNil(t, f.Resolution, typ)
+	assert.Equal(t, models.ShapeMarshaler, f.Resolution.Kind, typ)
+	want := fmt.Sprintf("has type %s: %s has the %s method promoted from its embedded %s,", typ, typ, method, via)
+	assert.Len(t, matching(a.warnings, want), 1, "%q in %v", want, a.warnings)
+}
+
+// TestEmbeddedGenericNonStructBase pins issue 191, as issue 114 resolves it:
+// a generic instantiation reached through an alias or a defined type (ll,
+// lsd), or over an in-module generic type (ol, b.List[int]), has its generic
+// type read. A non-struct one embedded under an unexported name, json-tagged
+// or not, a chain through a generic alias of json.RawMessage (rawChain)
+// included, adds no property and no warning, as encoding/json skips it, over
+// an exported generic type too (sq); one over time.Time (ltA), or a defined
+// type over a generic alias of it (ltD, which drops its methods), adds
+// nothing. An exported one (LL, b.List[int], Seq[int]) is one property typed
+// with its substituted type, with no warning. A struct base reached through
+// an alias (bb, qb) promotes its substituted fields. An undeclared one (gl,
+// qm) and one from outside the module (ng) keep the dropped-embed warning.
+// An exported instantiation of a generic alias of a non-struct Marshaler
+// (RawOf[int], RA, b.RawOf[int]) promotes its MarshalJSON, so the embedding
+// struct is a Marshaler type, as it is with the non-generic alias.
 func TestEmbeddedGenericNonStructBase(t *testing.T) {
 	rows := []embedRow{
 		{"GLl", "ll", nil},
@@ -145,21 +162,19 @@ func TestEmbeddedGenericNonStructBase(t *testing.T) {
 		{"GList", "list[int]", nil},
 		{"GRawChain", "rawChain", nil},
 		{"GLtA", "ltA", nil},
-		{"GExpLL", "LL", map[string]string{"LL": "inst:list[int]"}},
-		{"GQList", "b.List[int]", map[string]string{"List": "inst:b.List[int]"}},
-		{"GBb", "bb", nil},
-		{"GQb", "qb", nil},
+		{"GExpLL", "LL", map[string]string{"LL": "[]int"}},
+		{"GQList", "b.List[int]", map[string]string{"List": "[]int"}},
+		{"GBb", "bb", map[string]string{"v": "int"}},
+		{"GQb", "qb", map[string]string{"v": "int"}},
 		{"GGl", "gl", nil},
 		{"GQm", "qm", nil},
 		{"GNg", "ng", nil},
 		{"GSq", "sq", nil},
 		{"GLtD", "ltD", nil},
-		{"GSeq", "Seq[int]", map[string]string{"Seq": "inst:Seq[int]"}},
-		{"GRawOfExp", "RawOf[int]", nil},
-		{"GRA", "RA", nil},
-		{"GQRawOf", "b.RawOf[int]", nil},
+		{"GSeq", "Seq[int]", map[string]string{"Seq": "[]int"}},
 	}
-	a := analyzeGenericBaseRows(t, rows)
+	marshalers := []embedRow{{"GRawOfExp", "RawOf[int]", nil}, {"GRA", "RA", nil}, {"GQRawOf", "b.RawOf[int]", nil}}
+	a := analyzeGenericBaseRows(t, slices.Concat(rows, marshalers))
 	for _, r := range rows {
 		want := map[string]string{"y": goTypeInt}
 		for k, v := range r.want {
@@ -167,50 +182,47 @@ func TestEmbeddedGenericNonStructBase(t *testing.T) {
 		}
 		assert.Equal(t, want, renders(t, a.typeRegistry[r.typ]), r.typ)
 	}
+	assertPromotedMarshaler(t, a, "GRawOfExp", "MarshalJSON", "RawOf[int]")
+	assertPromotedMarshaler(t, a, "GRA", "MarshalJSON", "RA")
+	assertPromotedMarshaler(t, a, "GQRawOf", "MarshalJSON", "b.RawOf[int]")
 	warnings := embedWarnings(a)
 	for _, want := range []string{
-		"has type bb: box[int] is a generic instantiation, which is not expanded",
-		"has type qb: b.Box[int] is a generic instantiation",
 		"has type gl: gone[int] is a generic instantiation",
 		"has type qm: b.Missing[int] is a generic instantiation",
 		"has type ng: nsOf[int] is a generic instantiation",
-		"has type RawOf[int]: RawOf[int] is a generic instantiation",
-		"has type RA: rawOf[int] is a generic instantiation",
-		"has type b.RawOf[int]: b.RawOf[int] is a generic instantiation",
 	} {
 		assert.Len(t, matching(warnings, want), 1, "%q in %v", want, warnings)
 	}
-	assert.Len(t, warnings, 8, "%v", warnings)
+	assert.Len(t, warnings, 3, "%v", warnings)
 	all := a.Warnings(t.Context())
-	assert.Len(t, all, 11, "the eight dropped embeds and the three properties' field warnings: %v", all)
-	assert.Len(t, fieldWarnings(a, "Seq"), 1, "%v", all)
-	assert.Len(t, fieldWarnings(a, "LL"), 1, "%v", all)
-	assert.Len(t, fieldWarnings(a, "List"), 1, "%v", all)
+	assert.Len(t, all, 6, "the three dropped embeds and the three Marshaler fields' warnings: %v", all)
 }
 
 // TestGenericEmbedMarshalerAndPointerWarn pins that an unexported embed is
 // skipped only when its type is known not to be a struct and to promote no
 // marshal method. An instantiation of a generic alias of json.RawMessage
 // reached with no defined type on the way (rawOf[int], raw = b.RawOf[int])
-// keeps MarshalJSON, which makes the embedding struct a Marshaler that
-// method-set reading does not see through an instantiation: it is warned
-// untagged and nests under a json name, while a defined type on the way
-// (rawChain) drops the methods and is skipped. A generic alias of a pointer
-// (ptrOf[int], hiddenP = b.Ptr[int]) may point at a struct, which
-// encoding/json promotes, or keeps under a json name, however its embed is
-// named: it is warned untagged and nests under a json name too.
+// keeps MarshalJSON, which makes the embedding struct a Marshaler type,
+// json-tagged or not, exactly as the non-generic alias of json.RawMessage
+// does (issue 215), while a defined type on the way (rawChain) drops the
+// methods and is skipped. A generic alias of a pointer (ptrOf[int], hiddenP
+// = b.Ptr[int]) may point at a struct, which encoding/json promotes, or
+// keeps under a json name, however its embed is named: it is warned
+// untagged and nests under a json name.
 func TestGenericEmbedMarshalerAndPointerWarn(t *testing.T) {
 	rows := []embedRow{
-		{"MRawOfLower", "rawOf[int]", nil},
-		{"MRawOfTagged", "rawOf[int] `json:\"r\"`", map[string]string{"r": "inst:rawOf[int]"}},
-		{"MRaw", "raw", nil},
-		{"MRawTagged", "raw `json:\"r\"`", map[string]string{"r": "inst:b.RawOf[int]"}},
 		{"MRawChain", "rawChain", nil},
 		{"MPtrOf", "ptrOf[int]", nil},
 		{"MHiddenP", "hiddenP", nil},
-		{"MHiddenPTagged", "hiddenP `json:\"base\"`", map[string]string{"base": "inst:b.Ptr[int]"}},
+		{"MHiddenPTagged", "hiddenP `json:\"base\"`", map[string]string{"base": "*$Base"}},
 	}
-	a := analyzeGenericBaseRows(t, rows)
+	marshalers := []embedRow{
+		{"MRawOfLower", "rawOf[int]", nil},
+		{"MRawOfTagged", "rawOf[int] `json:\"r\"`", nil},
+		{"MRaw", "raw", nil},
+		{"MRawTagged", "raw `json:\"r\"`", nil},
+	}
+	a := analyzeGenericBaseRows(t, slices.Concat(rows, marshalers))
 	for _, r := range rows {
 		want := map[string]string{"y": goTypeInt}
 		for k, v := range r.want {
@@ -218,33 +230,31 @@ func TestGenericEmbedMarshalerAndPointerWarn(t *testing.T) {
 		}
 		assert.Equal(t, want, renders(t, a.typeRegistry[r.typ]), r.typ)
 	}
+	assertPromotedMarshaler(t, a, "MRawOfLower", "MarshalJSON", "rawOf[int]")
+	assertPromotedMarshaler(t, a, "MRawOfTagged", "MarshalJSON", "rawOf[int]")
+	assertPromotedMarshaler(t, a, "MRaw", "MarshalJSON", "raw")
+	assertPromotedMarshaler(t, a, "MRawTagged", "MarshalJSON", "raw")
 	warnings := embedWarnings(a)
 	for _, want := range []string{
-		"has type rawOf[int]: rawOf[int] is a generic instantiation, which is not expanded",
-		"has type raw: b.RawOf[int] is a generic instantiation",
 		"has type ptrOf[int]: ptrOf[int] is a generic instantiation",
 		"has type hiddenP: b.Ptr[int] is a generic instantiation",
 	} {
 		assert.Len(t, matching(warnings, want), 1, "%q in %v", want, warnings)
 	}
-	assert.Len(t, warnings, 4, "%v", warnings)
-	// Each tagged row adds its nested field's own warning beside the
-	// untagged row's embed warning.
-	assert.Len(t, fieldWarnings(a, "raw"), 2, "%v", a.warnings)
-	assert.Len(t, fieldWarnings(a, "hiddenP"), 2, "%v", a.warnings)
-	assert.Len(t, fieldWarnings(a, "rawOf"), 2, "%v", a.warnings)
+	assert.Len(t, warnings, 2, "%v", warnings)
+	assert.Len(t, a.Warnings(t.Context()), 6, "the two dropped embeds and the four Marshaler fields' warnings: %v", a.warnings)
 }
 
 // TestGenericEmbedOwnMarshalerWarns pins that an instantiation of a generic
 // non-struct type declaring one of the marshal methods (on the value or the
-// pointer receiver, local or in-module) is warned, exported embed or not and
-// through an alias (mjA): the promoted method makes the embedding struct a
-// Marshaler, which method-set reading does not see through an
-// instantiation. A defined type on the way (mjD) drops the methods, and a
-// method whose signature is not the interface's (mbad) is no marshal method:
-// both are skipped silently when unexported.
+// pointer receiver, local or in-module, a parenthesized receiver included)
+// makes the embedding struct a Marshaler type, exported embed or not and
+// through an alias (mjA): issue 114 reads generic receivers. A defined type
+// on the way (mjD) drops the methods, and a method whose signature is not the
+// interface's (mbad) is no marshal method: both are skipped silently when
+// unexported.
 func TestGenericEmbedOwnMarshalerWarns(t *testing.T) {
-	rows := []embedRow{
+	a := analyzeGenericBaseRows(t, []embedRow{
 		{"OMj", "mj[int]", nil},
 		{"OMp", "mp[int]", nil},
 		{"OMt", "mt[string, int]", nil},
@@ -256,34 +266,27 @@ func TestGenericEmbedOwnMarshalerWarns(t *testing.T) {
 		{"OPv", "pv[int]", nil},
 		{"OPp", "pp[int]", nil},
 		{"OPq", "pq[int]", nil},
+	})
+	for _, typ := range []string{"OMjD", "OMbad"} {
+		assert.Equal(t, map[string]string{"y": goTypeInt}, renders(t, a.typeRegistry[typ]), typ)
 	}
-	a := analyzeGenericBaseRows(t, rows)
-	for _, r := range rows {
-		assert.Equal(t, map[string]string{"y": goTypeInt}, renders(t, a.typeRegistry[r.typ]), r.typ)
-	}
-	warnings := embedWarnings(a)
-	for _, want := range []string{
-		"has type mj[int]: mj[int] is a generic instantiation, which is not expanded",
-		"has type mp[int]: mp[int] is a generic instantiation",
-		"has type mt[string, int]: mt[string, int] is a generic instantiation",
-		"has type Mj[int]: Mj[int] is a generic instantiation",
-		"has type b.QM[int]: b.QM[int] is a generic instantiation",
-		"has type mjA: mj[int] is a generic instantiation",
-		"has type pv[int]: pv[int] is a generic instantiation", // parenthesized receivers
-		"has type pp[int]: pp[int] is a generic instantiation",
-		"has type pq[int]: pq[int] is a generic instantiation",
+	for typ, via := range map[string]string{
+		"OMj": "mj[int]", "OMp": "mp[int]", "OMjExp": "Mj[int]", "OQM": "b.QM[int]", "OMjA": "mjA",
+		"OPv": "pv[int]", "OPp": "pp[int]", "OPq": "pq[int]",
 	} {
-		assert.Len(t, matching(warnings, want), 1, "%q in %v", want, warnings)
+		assertPromotedMarshaler(t, a, typ, "MarshalJSON", via)
 	}
-	assert.Len(t, warnings, 9, "%v", warnings)
-	assert.Len(t, a.Warnings(t.Context()), 9, "no other warning")
+	assertPromotedMarshaler(t, a, "OMt", "MarshalText", "mt[string, int]")
+	assert.Empty(t, embedWarnings(a))
+	assert.Len(t, a.Warnings(t.Context()), 9, "one per Marshaler field, no other: %v", a.warnings)
 }
 
 // TestGenericEmbedKeepsDepthCut pins that generic carries its chain's depth:
 // reached at the last level maxNamedResolutionDepth allows, the named type
 // its generic type is declared over is cut like any too-deep chain (a
 // non-struct, left to the property's Resolution), rather than read afresh
-// as the struct it is.
+// as the struct it is. Below that level, a generic type declared over a
+// named struct promotes that struct's fields (issue 114).
 func TestGenericEmbedKeepsDepthCut(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.go")
@@ -296,6 +299,6 @@ func TestGenericEmbedKeepsDepthCut(t *testing.T) {
 	require.NoError(t, err)
 	ec := embedClassifier{a: a, home: dir}
 
-	assert.Equal(t, embedGeneric, ec.generic(file, path, expr, 0, false).class, "a struct base is warned")
-	assert.Equal(t, embedNonStruct, ec.generic(file, path, expr, maxNamedResolutionDepth-1, false).class)
+	assert.Equal(t, embedStruct, ec.generic(file, path, expr, 0, false, nil).class, "a struct base is promoted")
+	assert.Equal(t, embedNonStruct, ec.generic(file, path, expr, maxNamedResolutionDepth-1, false, nil).class)
 }

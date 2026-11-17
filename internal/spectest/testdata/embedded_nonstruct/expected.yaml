@@ -136,6 +136,11 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
   schemas:
+    Base:
+      type: object
+      properties:
+        label:
+          type: string
     Collided:
       type: object
       properties:
@@ -144,6 +149,10 @@ components:
     Dropped:
       type: object
       properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Base'
         kept:
           type: string
     ErrorResponse:
@@ -192,9 +201,15 @@ components:
       type: object
       properties:
         LL:
-          type: object
+          type: array
+          items:
+            type: integer
+            format: int64
         List:
-          type: object
+          type: array
+          items:
+            type: integer
+            format: int64
         keep:
           type: integer
           format: int64

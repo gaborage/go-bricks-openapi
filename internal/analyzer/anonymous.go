@@ -76,8 +76,13 @@ func (a *ProjectAnalyzer) resolveStruct(s models.TypeShape, c resolveCtx) models
 	}
 	// structIdentity is the literal's position, shared by every parse of its
 	// file, so a literal re-entered through the package cache's parse is
-	// still caught.
+	// still caught. Inside an Instantiation the bindings are part of it: one
+	// literal under two bindings (List[List[int]] for type List[T any]
+	// []struct{ V T }) is two types, not a cycle.
 	key := a.structIdentity(lit)
+	if len(c.env) > 0 {
+		key += "[" + a.envIdentity(c.env) + "]"
+	}
 	if a.closesLiteralCycle(key) {
 		c.st.note(fieldFallback{kind: fallbackRecursive, typeName: anonStructDisplay})
 		return models.TypeShape{Kind: models.ShapeRecursive, Name: anonStructDisplay}
@@ -109,7 +114,9 @@ func (a *ProjectAnalyzer) extractLiteral(lit *ast.StructType, key string, c reso
 	a.openLiterals = append(a.openLiterals, key)
 	a.literalExtracts++
 	defer a.closeLiteral()
-	fields := a.extractStructFields(lit, c.file, c.path, map[string]struct{}{}, depth)
+	fields := a.extractUnder(c.env, func() []models.FieldInfo {
+		return a.extractStructFields(lit, c.file, c.path, map[string]struct{}{}, depth)
+	})
 	if fields == nil {
 		return []models.FieldInfo{}
 	}
@@ -277,10 +284,19 @@ func (a *ProjectAnalyzer) registerInlineRefs(fields []models.FieldInfo, astFile 
 // ones included: those, too, get no Resolution and no warning. written is
 // the request type as written.
 func (a *ProjectAnalyzer) anonymousRequest(lit *ast.StructType, written string, astFile *ast.File, filePath string) *models.TypeInfo {
-	site := structSite{st: lit, pkg: astFile.Name.Name, file: astFile, path: filePath}
+	return a.inlineRequest(structSite{st: lit, pkg: astFile.Name.Name, file: astFile, path: filePath}, written)
+}
+
+// inlineRequest is anonymousRequest for the struct literal at site, its
+// fields resolved under site's bindings: an anonymous struct, or a generic
+// struct whose Instantiation is inlined because an argument is an anonymous
+// struct (Box[struct{ X int }], ADR 0003).
+func (a *ProjectAnalyzer) inlineRequest(site structSite, written string) *models.TypeInfo {
+	lit, astFile, filePath := site.st, site.file, site.path
 	a.warnUnbindableSite(site)
 	ti := &models.TypeInfo{JOSE: hasJOSETag(lit)}
 	c := newResolveCtx(astFile, filePath, false)
+	c.env = site.env
 	c.st.inline = true
 	r := a.resolveShape(a.typeShape(lit), c)
 	if r.Kind != models.ShapeStruct || r.Struct == nil {

@@ -315,8 +315,11 @@ func payloadRows() []payloadRow {
 		{result: "server.Result[[]struct{ A int }]", res: "[]struct{A int}", shape: "[]struct{…}"},
 		{result: "server.Result[map[string]func()]", nilResp: true},
 		{result: "server.Result[map[string]chan int]", nilResp: true},
-		// Issue 138: an Instantiation keeps the nil response and warns.
-		{result: "server.Result[Page[User]]", nilResp: true, warn: fmt.Sprintf(genericPayloadWarning, "Page[User]", "Page[User]")},
+		// Issue 114: an Instantiation of a generic struct is a ref to its
+		// component; one the tool cannot read keeps issue 138's nil response
+		// and warning.
+		{result: "server.Result[Page[User]]", res: "$Page-User"},
+		{result: "server.Result[Gone[User]]", nilResp: true, warn: fmt.Sprintf(genericPayloadWarning, "Gone[User]", "Gone[User]")},
 		// U3, resolved by #120: a written **T root resolves exactly like *T
 		// (more rows in multi_pointer_payload_test.go).
 		{result: "server.Result[**int64]", res: "**int64"},

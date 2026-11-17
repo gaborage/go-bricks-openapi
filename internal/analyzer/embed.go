@@ -22,7 +22,7 @@ const (
 		"an in-module package whose buildable files all carry a build constraint " +
 		"and whose first one by name has another package clause, or a name with no declaration in its package), so neither " +
 		"its fields nor its methods are known — the embedded field is dropped from the spec"
-	genericEmbedWarning = "embedded field %s at %s has type %s: %s is a generic instantiation, which is not expanded " +
+	genericEmbedWarning = "embedded field %s at %s has type %s: %s is a generic instantiation, which is not expanded as an embed " +
 		"— the embedded field is dropped from the spec"
 )
 
@@ -62,9 +62,11 @@ type embedClassifier struct {
 // of a local or in-module generic non-struct type (list[int], type ll =
 // list[int], type ol = b.List[int]) or an alias of a well-known Marshaler type
 // that is not a struct (uuid.UUID) among them, is skipped, json name or
-// not, as encoding/json skips it before it reads the tag. An unexported
-// embed classification stops short of (unreadable, or generic) is warned
-// like an exported one: encoding/json promotes it if it is a struct.
+// not, as encoding/json skips it before it reads the tag. An instantiation
+// of an in-module generic struct (Page[Address]) is promoted with its type
+// arguments bound (genericStruct). An unexported embed classification stops
+// short of (unreadable, or a generic type it cannot read) is warned like an
+// exported one: encoding/json promotes it if it is a struct.
 func (a *ProjectAnalyzer) classifyEmbed(field *ast.Field, astFile *ast.File, filePath string) embedTarget {
 	t := field.Type
 	if star, ok := t.(*ast.StarExpr); ok {
@@ -78,7 +80,8 @@ func (a *ProjectAnalyzer) classifyEmbed(field *ast.Field, astFile *ast.File, fil
 	case *ast.SelectorExpr:
 		target = ec.qualified(astFile, a.typeShape(e).Name, 0, false)
 	default:
-		target = ec.generic(astFile, filePath, t, 0, false)
+		// Written in the embedding struct, under its bindings.
+		target = ec.generic(astFile, filePath, t, 0, false, a.curEnv)
 	}
 	if target.nonStruct() && !token.IsExported(embeddedFieldName(field.Type)) {
 		return embedTarget{class: embedSkip}
@@ -89,7 +92,7 @@ func (a *ProjectAnalyzer) classifyEmbed(field *ast.Field, astFile *ast.File, fil
 // nonStruct reports whether t's type is known not to be a struct: a
 // non-struct type, or a well-known Marshaler type other than the structs
 // (wellKnownStructs).
-func (t embedTarget) nonStruct() bool {
+func (t *embedTarget) nonStruct() bool {
 	return t.class == embedNonStruct || t.class == embedMarshaler && !wellKnownStructs[t.stop]
 }
 
@@ -106,11 +109,14 @@ func (t embedTarget) nonStruct() bool {
 // struct, follows a pointer (type ptr[T any] = *Base) to one, and writes
 // the whole embedding struct through the methods of a well-known Marshaler
 // reached only through aliases (type raw[T any] = json.RawMessage).
-func (ec embedClassifier) generic(file *ast.File, path string, t ast.Expr, depth int, defined bool) embedTarget {
+func (ec embedClassifier) generic(file *ast.File, path string, t ast.Expr, depth int, defined bool, env typeEnv) embedTarget {
 	warned := embedTarget{class: embedGeneric, stop: types.ExprString(t)}
 	ts, tsFile, tsPath, found := ec.genericDecl(file, path, t)
 	if !found || !defined && ec.declaresMarshaler(tsFile, tsPath, ts.Name.Name) {
 		return warned // not read, or a marshal method the embedding struct promotes
+	}
+	if site, ok := ec.genericStruct(t, file, path, env, depth); ok {
+		return embedTarget{class: embedStruct, site: site}
 	}
 	var named embedTarget
 	defined = defined || !ts.Assign.IsValid()
@@ -136,6 +142,16 @@ func (ec embedClassifier) generic(file *ast.File, path string, t ast.Expr, depth
 	default:
 		return warned // a struct, a well-known Marshaler struct, or a type not read
 	}
+}
+
+// genericStruct returns the struct an Instantiation t, written in file
+// under env, reaches (instantiationStruct), with the bindings its fields
+// resolve under (issue 114): its fields are promoted like any struct's.
+func (ec embedClassifier) genericStruct(t ast.Expr, file *ast.File, path string, env typeEnv, depth int) (structSite, bool) {
+	c := newResolveCtx(file, path, false)
+	c.env = env
+	end, ok := ec.a.instantiationStruct(ec.a.typeShape(t), c, depth)
+	return end.site(), ok
 }
 
 // declaresMarshaler reports whether the generic type name, declared in
@@ -214,8 +230,8 @@ func (ec embedClassifier) local(file *ast.File, path, name string, depth int, de
 	if depth >= maxNamedResolutionDepth {
 		return embedTarget{class: embedNonStruct}
 	}
-	if st, pkg, f, p, ok := ec.a.resolveTypeSpecChain(file, path, name); ok {
-		return embedTarget{class: embedStruct, site: structSite{st: st, pkg: pkg, file: f, path: p}}
+	if end, ok := ec.a.followChain(file, path, name, 0, false); ok {
+		return embedTarget{class: embedStruct, site: end.site()}
 	}
 	ts, tsFile, tsPath, ok := ec.a.resolveLocalTypeSpec(file, path, name)
 	if !ok {
@@ -235,7 +251,7 @@ func (ec embedClassifier) local(file *ast.File, path, name string, depth int, de
 		// parenthesized (type PS (struct{ ... })) or not, before this switch.
 		return embedTarget{class: embedStruct, site: structSite{st: rhs, pkg: tsFile.Name.Name, file: tsFile, path: tsPath}}
 	case *ast.IndexExpr, *ast.IndexListExpr:
-		return ec.generic(tsFile, tsPath, rhs, depth+1, defined)
+		return ec.generic(tsFile, tsPath, rhs, depth+1, defined, nil)
 	default:
 		return embedTarget{class: embedNonStruct} // slice, array, map, interface, func, chan
 	}
@@ -326,7 +342,7 @@ func (a *ProjectAnalyzer) embedProperty(field *ast.Field, astFile *ast.File, fil
 // warnDroppedEmbed raises a dropped embed's one warning, once per position.
 // While quietEmbeds is set it neither warns nor marks the position, so the
 // same embed still warns when a struct holding it is registered.
-func (a *ProjectAnalyzer) warnDroppedEmbed(field *ast.Field, t embedTarget) {
+func (a *ProjectAnalyzer) warnDroppedEmbed(field *ast.Field, t *embedTarget) {
 	if a.quietEmbeds {
 		return
 	}
@@ -372,6 +388,7 @@ type fieldDecl struct {
 	file  *ast.File
 	path  string
 	depth int
+	env   typeEnv // the bindings of the generic struct declaring the field (curEnv when it was built)
 }
 
 // dominanceKey is the key encoding/json writes f under: its JSON name, or
