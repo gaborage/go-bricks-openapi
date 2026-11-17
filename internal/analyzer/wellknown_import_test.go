@@ -138,7 +138,7 @@ func TestShadowPackagesResolveFromSource(t *testing.T) {
 	for _, r := range rows {
 		assert.Equal(t, r.want, got[r.json], r.json)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestShadowPackageEmbeds pins an embedded shadow type: an exported
@@ -168,7 +168,7 @@ type EmbStdDur struct {
 	assert.Equal(t, map[string]string{"Duration": "*" + goTypeInt64}, renders(t, a.typeRegistry["EmbStdDur"]))
 	assert.Nil(t, a.typeRegistry["EmbStdIP"], "a text type's embedding struct registers no component")
 	assert.Equal(t, "text:EmbStdIP", renders(t, a.typeRegistry["Rows"])["stdIP"])
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestShadowPackagePayloads pins response payloads of shadow types: typed
@@ -206,7 +206,7 @@ func TestShadowPackagePayloads(t *testing.T) {
 		}
 		assert.True(t, IsTypedPayload(ti), p.result)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestWellKnownOwners pins which packages own a well-known name: every UUID
@@ -275,7 +275,7 @@ func (m *Module) id(ctx server.HandlerContext) (server.Result[sat.UUID], server.
 		}
 		assert.True(t, IsTypedPayload(ti), path)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestWellKnownTableKeysHaveOwners pins that every key of the well-known

@@ -52,7 +52,7 @@ func TestDeclsDisagreePayloadRoot(t *testing.T) {
 				{"/dis", "server.Result[[]DI]"}, {"/k", "server.Result[K]"}, {"/bare", "Rows"},
 			}, ""),
 	})
-	w := a.Warnings(t.Context())
+	w := a.Warnings()
 	for goName, typ := range map[string]string{"R": "Rows", "DI": "DI", "K": "K"} {
 		assert.Contains(t, w, fmt.Sprintf(declsDisagreePayloadWarning, typ, typ, declsShapeCause))
 		if fw := fieldWarnings(a, goName); assert.Len(t, fw, 1, goName) {
@@ -93,7 +93,7 @@ func TestDeclsDisagreeClashCause(t *testing.T) {
 		filepath.Join("mod", "module.go"): btagModule("\tWS WS `json:\"ws\"`\n",
 			[][2]string{{"/resp", "server.Result[Resp]"}, {"/ws", "server.Result[WS]"}}, "WS"),
 	})
-	w := a.Warnings(t.Context())
+	w := a.Warnings()
 	assert.Contains(t, w, fmt.Sprintf(declsDisagreePayloadWarning, "WS", "WS", declsClashCause))
 	if fw := fieldWarnings(a, "WS"); assert.Len(t, fw, 1) {
 		assert.Contains(t, fw[0], "WS's build-tagged declarations disagree on shape ("+declsClashCause+";")
@@ -152,7 +152,7 @@ func TestBuildTaggedStructCopies(t *testing.T) {
 				fmt.Sprintf(declsDisagreePayloadWarning, "Loc", "Loc", declsShapeCause),
 				fmt.Sprintf(declsDisagreeRequestWarning, "W", "W", declsClashCause),
 			}, structCopyFieldWarnings(t, a)...)
-			assert.ElementsMatch(t, want, a.Warnings(t.Context()))
+			assert.ElementsMatch(t, want, a.Warnings())
 
 			for _, path := range []string{"/w", "/loc"} {
 				resp := routeByPath(t, routes, path).Response
@@ -207,7 +207,7 @@ func TestBuildTaggedStructCopyRequests(t *testing.T) {
 			files[filepath.Join("mod", "module.go")] = btagModule("\tSame Same `json:\"same\"`\n", nil, c.req) +
 				"type OverW W\n\ntype WS []W\n\ntype PW *W\n"
 			a, _ := analyzeProjectRoutes(t, files)
-			assert.Equal(t, []string{c.want}, a.Warnings(t.Context()))
+			assert.Equal(t, []string{c.want}, a.Warnings())
 		})
 	}
 }
@@ -229,7 +229,7 @@ func TestBuildTaggedStructCopyEmbeds(t *testing.T) {
 				[][2]string{{"/resp", "server.Result[Resp]"}}, "") +
 				"type EW struct {\n\tW\n}\n\ntype EL struct {\n\tLoc\n}\n"
 			a, _ := analyzeProjectRoutes(t, files)
-			assert.Empty(t, a.Warnings(t.Context()))
+			assert.Empty(t, a.Warnings())
 			assert.Equal(t, c.w, renders(t, a.typeRegistry["EW"]), "EW")
 			assert.Equal(t, c.loc, renders(t, a.typeRegistry["EL"]), "EL")
 		})
@@ -272,7 +272,7 @@ func TestBuildTaggedCopiesOutsideIssue157(t *testing.T) {
 			if c.fields == nil {
 				// The slice copy first: the copies disagree, as before; only
 				// the payload's text is issue 180's.
-				w := a.Warnings(t.Context())
+				w := a.Warnings()
 				require.Len(t, w, 3)
 				assert.Contains(t, w[0], "has type M: M's build-tagged declarations disagree on shape ("+declsShapeCause+";")
 				assert.Equal(t, []string{fmt.Sprintf(declsDisagreePayloadWarning, "M", "M", declsShapeCause),
@@ -287,7 +287,7 @@ func TestBuildTaggedCopiesOutsideIssue157(t *testing.T) {
 				names = append(names, f.JSONName)
 			}
 			assert.Equal(t, c.fields, names)
-			assert.Empty(t, a.Warnings(t.Context()))
+			assert.Empty(t, a.Warnings())
 		})
 	}
 }
@@ -342,7 +342,7 @@ func TestBuildTaggedStructCopiesQualified(t *testing.T) {
 			assert.Equal(t, map[string]string{"loc": "Loc", "locs": "[]Loc", "same": "$Same"}, renders(t, a.typeRegistry["Resp"]))
 			assert.NotContains(t, a.typeRegistry, "Loc")
 			assert.Contains(t, a.typeRegistry, "Same")
-			w := a.Warnings(t.Context())
+			w := a.Warnings()
 			assert.Contains(t, w, fmt.Sprintf(declsDisagreePayloadWarning, "b.Loc", "b.Loc", declsShapeCause))
 			assert.Contains(t, w, fmt.Sprintf(declsDisagreeRequestWarning, "b.Loc", "b.Loc", declsShapeCause))
 			for _, goName := range []string{"Loc", "Locs"} {
@@ -391,7 +391,7 @@ func TestBuildTaggedCopiesThroughQualifiedChains(t *testing.T) {
 			if fw := fieldWarnings(a, "Ch"); assert.Len(t, fw, 1) {
 				assert.Contains(t, fw[0], "Ch's build-tagged declarations disagree on shape ("+declsShapeCause+";")
 			}
-			assert.Len(t, a.Warnings(t.Context()), 1)
+			assert.Len(t, a.Warnings(), 1)
 		})
 	}
 }

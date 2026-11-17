@@ -194,7 +194,7 @@ func TestEmbeddedGenericNonStructBase(t *testing.T) {
 		assert.Len(t, matching(warnings, want), 1, "%q in %v", want, warnings)
 	}
 	assert.Len(t, warnings, 3, "%v", warnings)
-	all := a.Warnings(t.Context())
+	all := a.Warnings()
 	assert.Len(t, all, 6, "the three dropped embeds and the three Marshaler fields' warnings: %v", all)
 }
 
@@ -242,7 +242,7 @@ func TestGenericEmbedMarshalerAndPointerWarn(t *testing.T) {
 		assert.Len(t, matching(warnings, want), 1, "%q in %v", want, warnings)
 	}
 	assert.Len(t, warnings, 2, "%v", warnings)
-	assert.Len(t, a.Warnings(t.Context()), 6, "the two dropped embeds and the four Marshaler fields' warnings: %v", a.warnings)
+	assert.Len(t, a.Warnings(), 6, "the two dropped embeds and the four Marshaler fields' warnings: %v", a.warnings)
 }
 
 // TestGenericEmbedOwnMarshalerWarns pins that an instantiation of a generic
@@ -278,7 +278,7 @@ func TestGenericEmbedOwnMarshalerWarns(t *testing.T) {
 	}
 	assertPromotedMarshaler(t, a, "OMt", "MarshalText", "mt[string, int]")
 	assert.Empty(t, embedWarnings(a))
-	assert.Len(t, a.Warnings(t.Context()), 9, "one per Marshaler field, no other: %v", a.warnings)
+	assert.Len(t, a.Warnings(), 9, "one per Marshaler field, no other: %v", a.warnings)
 }
 
 // TestGenericEmbedKeepsDepthCut pins that generic carries its chain's depth:

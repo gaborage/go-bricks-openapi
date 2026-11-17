@@ -161,7 +161,7 @@ func analyzerWarnings(t *testing.T, dir string) []string {
 	a := analyzer.New(dir)
 	_, err := a.AnalyzeProject()
 	require.NoError(t, err)
-	return a.Warnings(t.Context())
+	return a.Warnings()
 }
 
 // readMarshalerSpec reads the spec generate wrote.

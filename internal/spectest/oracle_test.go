@@ -255,7 +255,7 @@ func TestNamedResolutionOracle(t *testing.T) {
 	a := analyzer.New(dir)
 	_, err = a.AnalyzeProject()
 	require.NoError(t, err)
-	assertBindingParity(t, a.Warnings(t.Context()), "n", "e")
+	assertBindingParity(t, a.Warnings(), "n", "e")
 }
 
 // bindingWarningText is in the analyzer's warning on a parameter go-bricks

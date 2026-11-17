@@ -84,8 +84,8 @@ func TestRunGenerateNonStructRequestFailsStrict(t *testing.T) {
 			a := analyzer.New(dir)
 			_, err := a.AnalyzeProject()
 			require.NoError(t, err)
-			require.Len(t, a.Warnings(t.Context()), 1)
-			assert.True(t, strings.HasPrefix(a.Warnings(t.Context())[0], "request type "+req+" is not a struct"), a.Warnings(t.Context())[0])
+			require.Len(t, a.Warnings(), 1)
+			assert.True(t, strings.HasPrefix(a.Warnings()[0], "request type "+req+" is not a struct"), a.Warnings()[0])
 
 			out := filepath.Join(t.TempDir(), outputFileName)
 			var runErr error

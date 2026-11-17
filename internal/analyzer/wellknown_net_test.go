@@ -61,7 +61,7 @@ func TestFileModeAndNetTypesResolve(t *testing.T) {
 	for _, r := range rows {
 		assert.Equal(t, r.want, got[r.json], r.json)
 	}
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	assert.Len(t, warnings, 2, "%v", warnings)
 	assert.Len(t, matching(warnings, "MyAddr is a defined type over netip.Addr"), 1, "%v", warnings)
 	assert.Len(t, matching(warnings, "MyPrefix is a defined type over netip.Prefix"), 1, "%v", warnings)
@@ -194,7 +194,7 @@ type EmbPerm struct {
 	} {
 		assert.Equal(t, want, renders(t, a.typeRegistry[typ]), typ)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestWellKnownMarshalerEmbedDefined pins which defined types over a
@@ -244,7 +244,7 @@ func TestNetByteSlicesResolve(t *testing.T) {
 	for _, r := range rows {
 		assert.Equal(t, r.want, got[r.json], r.json)
 	}
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	assert.Len(t, warnings, 1, "%v", warnings)
 	assert.Len(t, matching(warnings, "net.IPNet"), 1, "%v", warnings)
 }
@@ -294,5 +294,5 @@ type EmbHW struct {
 		"mod/module.go": rowsModule("\t\"net\"\n", decls, "\tE EmbHW `json:\"e\"`\n"),
 	})
 	assert.Equal(t, map[string]string{"HardwareAddr": "[]byte", "IPMask": "*[]byte", "n": goTypeInt}, renders(t, a.typeRegistry["EmbHW"]))
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }

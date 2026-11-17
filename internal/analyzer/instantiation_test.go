@@ -239,7 +239,7 @@ func TestInstantiationSubstitutedSchemas(t *testing.T) {
 	// the module's type T, not Shadow's parameter.
 	assert.Equal(t, map[string]string{"l": "[]$T", "v": goTypeInt}, renders(t, a.typeRegistry["Shadow-int"]))
 
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 1, "%v", warnings)
 	assert.Len(t, matching(warnings, "has type T: decimal.Decimal resolves to no schema"), 1, "%v", warnings)
 	assert.Len(t, matching(warnings, "has type T: billing.Money has its own MarshalJSON method"), 0,
@@ -478,7 +478,7 @@ func TestInstantiationDefinedOverMarshaler(t *testing.T) {
 	assert.Equal(t, map[string]string{"v": goTypeInt}, renders(t, a.typeRegistry["TBox-int"]))
 	assert.Equal(t, map[string]string{"v": goTypeInt}, renders(t, a.typeRegistry["JBox-int"]))
 	assert.Equal(t, map[string]string{"DM": "[]int", "k": goTypeInt}, renders(t, a.typeRegistry["ED"]))
-	assert.Len(t, matching(a.Warnings(t.Context()), "MarshalJSON"), 1, "only JC's: %v", a.warnings)
+	assert.Len(t, matching(a.Warnings(), "MarshalJSON"), 1, "only JC's: %v", a.warnings)
 }
 
 // TestInstantiationFuncChanArgRefused pins that an Instantiation whose type
@@ -495,7 +495,7 @@ func TestInstantiationFuncChanArgRefused(t *testing.T) {
 		assert.NotContains(t, name, "unknown", "no component spells a func or chan argument")
 		assert.NotContains(t, name, "Box-Box", "no component for an Instantiation holding a refused one")
 	}
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	for _, want := range []string{
 		"has type Box[chan int], which holds a chan",
 		"has type Box[[]func()], which holds a func",
@@ -612,7 +612,7 @@ func TestInstantiationByteElemDecodeOnly(t *testing.T) {
 	a, rows := analyzeInstReview(t)
 	assert.Equal(t, "[]byte", rows["by"])
 	assert.Equal(t, "[]marshal:BE[int](unknown)", rows["be"])
-	assert.Empty(t, matching(a.Warnings(t.Context()), "UnmarshalJSON"), "%v", a.warnings)
+	assert.Empty(t, matching(a.Warnings(), "UnmarshalJSON"), "%v", a.warnings)
 }
 
 // TestInstantiationIdentityPastDepthCap pins that composite levels spend no
@@ -667,7 +667,7 @@ func TestInstantiationGenericAliasArgument(t *testing.T) {
 func TestInstantiationLiteralUnderTwoBindings(t *testing.T) {
 	a, rows := analyzeInstReview(t)
 	assert.Equal(t, "[]struct{value []struct{value int}}", rows["ll"])
-	assert.Empty(t, matching(a.Warnings(t.Context()), "contains itself"), "%v", a.warnings)
+	assert.Empty(t, matching(a.Warnings(), "contains itself"), "%v", a.warnings)
 }
 
 // TestBuildTaggedCopiesDifferentBindings pins that build-tagged copies of
@@ -676,7 +676,7 @@ func TestInstantiationLiteralUnderTwoBindings(t *testing.T) {
 func TestBuildTaggedCopiesDifferentBindings(t *testing.T) {
 	a, rows := analyzeInstReview(t)
 	assert.Equal(t, "W", rows["w"])
-	assert.Len(t, matching(a.Warnings(t.Context()), "W's build-tagged declarations disagree on shape (no common container shape"), 1, "%v", a.warnings)
+	assert.Len(t, matching(a.Warnings(), "W's build-tagged declarations disagree on shape (no common container shape"), 1, "%v", a.warnings)
 	_, registered := a.typeRegistry["W"]
 	assert.False(t, registered)
 }
@@ -689,7 +689,7 @@ func TestGenericParenthesizedPointerReceiver(t *testing.T) {
 	a, rows := analyzeInstReview(t)
 	assert.Equal(t, "marshal:PT[int](unknown)", rows["pt"])
 	assert.Equal(t, "text:VT[int]", rows["vt"])
-	assert.Len(t, matching(a.Warnings(t.Context()), "PT has its own MarshalText"), 1, "%v", a.warnings)
+	assert.Len(t, matching(a.Warnings(), "PT has its own MarshalText"), 1, "%v", a.warnings)
 }
 
 // TestGenericInlineRequest pins that a request whose Instantiation is

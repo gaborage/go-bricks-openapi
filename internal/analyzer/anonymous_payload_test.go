@@ -124,7 +124,7 @@ func TestAnonymousStructPayloadRows(t *testing.T) {
 			want = append(want, r.warn)
 		}
 	}
-	assert.ElementsMatch(t, want, a.Warnings(t.Context()))
+	assert.ElementsMatch(t, want, a.Warnings())
 	assert.Contains(t, a.typeRegistry, "Office", "a struct reachable only through an anonymous payload registers")
 	assert.NotContains(t, a.typeRegistry, "Rows")
 	assert.Empty(t, a.openLiterals)
@@ -191,7 +191,7 @@ func (m *Module) offices(ctx server.HandlerContext) (server.Result[struct{ O Off
 		{"[]struct{o $Office}", "struct{o $ModOffice}"},
 	}, pair, "both register, one collision-qualified")
 	assert.Len(t, a.typeRegistry, 2)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestCrossPackageNamedAnonymousPayload pins that a named slice over an
@@ -221,7 +221,7 @@ func (m *Module) rows(req Req, ctx server.HandlerContext) (server.Result[q.Rows]
 	assert.Equal(t, "[]struct{o $Office; n int}", renderShape(*rows.Resolution))
 	assert.Contains(t, a.typeRegistry, "Office")
 	assert.NotContains(t, a.typeRegistry, "Rows")
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestRequestlessAnonymousPayloadIsFound pins that a request-less handler
@@ -304,7 +304,7 @@ func (m *Module) list(req JReq, ctx server.HandlerContext) (server.Result[`+list
 	require.NotNil(t, list.Resolution)
 	assert.Equal(t, "[]struct{b int}", renderShape(*list.Resolution))
 	assert.NotContains(t, a.typeRegistry, "Only")
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestAnonymousStructRequestIsDocumented pins issue 171: a request parameter
@@ -452,7 +452,7 @@ func TestEmptyAnonymousStructRequestHandlerIsFound(t *testing.T) {
 	assert.Nil(t, route.Response)
 	assert.Equal(t, 201, route.SuccessStatus)
 	assert.Equal(t, []int{404}, route.ErrorStatuses)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestAnonymousStructRequestHandlerIsFound pins that a handler whose only
@@ -469,7 +469,7 @@ func TestAnonymousStructRequestHandlerIsFound(t *testing.T) {
 	assert.Nil(t, route.Response)
 	assert.Equal(t, 201, route.SuccessStatus)
 	assert.Equal(t, []int{404}, route.ErrorStatuses)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestIsAnonymousStruct pins the request screen: a struct literal, one
@@ -524,6 +524,6 @@ func (m *Module) q(ctx server.HandlerContext) (server.Result[Q0], server.IAPIErr
 	require.NotNil(t, q.Response)
 	require.NotNil(t, q.Response.Resolution, "the payload still resolves, truncated past the limit")
 	root := anonLoc(t, src, "struct{ A Q1 ")
-	assert.Equal(t, []string{fmt.Sprintf(literalLimitWarning, root, maxLiteralExtractions)}, a.Warnings(t.Context()))
+	assert.Equal(t, []string{fmt.Sprintf(literalLimitWarning, root, maxLiteralExtractions)}, a.Warnings())
 	assert.Empty(t, a.openLiterals)
 }

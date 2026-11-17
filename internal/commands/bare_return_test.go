@@ -89,7 +89,7 @@ func bareReturnOutcome(t *testing.T, result string, raw bool) payloadOutcome {
 	project, err := a.AnalyzeProject()
 	require.NoError(t, err)
 	outcome := payloadOutcome{
-		Warnings:      a.Warnings(t.Context()),
+		Warnings:      a.Warnings(),
 		TypedResponse: calculateProjectStats(project).TypedResponseRoutes == 1,
 	}
 

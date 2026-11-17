@@ -103,7 +103,7 @@ func TestFuncChanFieldsWarn(t *testing.T) {
 	if w := fieldWarnings(a, "CB"); assert.Len(t, w, 1) {
 		assert.Contains(t, w[0], `is the query parameter "cb" of type func()`)
 	}
-	assert.Len(t, a.Warnings(t.Context()), 13, "one per field row, two for F, one for CB: %v", a.Warnings(t.Context()))
+	assert.Len(t, a.Warnings(), 13, "one per field row, two for F, one for CB: %v", a.Warnings())
 
 	d := renders(t, a.typeRegistry["DReq"])
 	for key, want := range map[string]string{

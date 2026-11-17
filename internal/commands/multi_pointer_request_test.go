@@ -28,8 +28,8 @@ func TestRunGenerateMultiPointerRequestFailsStrict(t *testing.T) {
 	a := analyzer.New(dir)
 	_, err := a.AnalyzeProject()
 	require.NoError(t, err)
-	require.Len(t, a.Warnings(t.Context()), 1)
-	assert.Contains(t, a.Warnings(t.Context())[0], "request type **Address is not a struct")
+	require.Len(t, a.Warnings(), 1)
+	assert.Contains(t, a.Warnings()[0], "request type **Address is not a struct")
 
 	out := filepath.Join(t.TempDir(), outputFileName)
 	var runErr error
@@ -70,7 +70,7 @@ func TestRunDoctorMultiPointerRequestIsCaveat(t *testing.T) {
 
 	var runErr error
 	out := testutil.CaptureStdout(t, func() {
-		runErr = runDoctor(t.Context(), &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion})
+		runErr = runDoctor(&DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion})
 	})
 	require.NoError(t, runErr, "a **T request is a caveat, not a hard error")
 	assert.Contains(t, out, "request type **Address is not a struct")

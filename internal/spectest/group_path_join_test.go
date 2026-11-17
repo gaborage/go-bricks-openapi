@@ -32,5 +32,5 @@ func TestGroupPathJoinRoutes(t *testing.T) {
 		"/api/v3/w", "/api/x", "/api/x2", "/b", "/c", "/nolead", "/sg", "/v2/y",
 	}, got)
 
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }

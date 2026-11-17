@@ -80,7 +80,7 @@ func analyzeBareReturn(t *testing.T, result string) (response *models.TypeInfo, 
 	t.Helper()
 	a, routes := analyzeSingleModule(t, strings.ReplaceAll(bareReturnModSrc, "RESULT", result))
 	route := routeForPath(t, routes, bareReturnRouteKey)
-	return route.Response, a.Warnings(t.Context())
+	return route.Response, a.Warnings()
 }
 
 // TestBareReturnMatchesResultPayload pins that a bare (non-wrapper) handler

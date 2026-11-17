@@ -127,7 +127,7 @@ func TestQualifiedNamedRows(t *testing.T) {
 	for _, r := range rows {
 		assert.Equal(t, r.want, got[r.json], r.json)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestQualifiedShadowing pins that every step after the lookup runs in the
@@ -155,7 +155,7 @@ func TestQualifiedShadowing(t *testing.T) {
 	assert.Equal(t, "[]$Item", got["items"])
 	require.Contains(t, a.typeRegistry, "Item")
 	assert.Equal(t, "c", a.typeRegistry["Item"].Package)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestQualifiedWarnedRowsInEveryPosition pins #100's warned rows in all seven
@@ -323,7 +323,7 @@ func runWidthCases(t *testing.T, dir, importLine, qual string) {
 			assert.Equal(t, c.leaf, got["w"])
 			assert.Equal(t, "[]"+c.leaf, got["ws"])
 			assert.Equal(t, "map[string]"+c.leaf, got["wm"])
-			assert.Empty(t, a.Warnings(t.Context()))
+			assert.Empty(t, a.Warnings())
 		})
 	}
 }
@@ -443,7 +443,7 @@ func TestQualifiedToolsFileSortsFirst(t *testing.T) {
 			assert.Equal(t, goTypeString, got["created"])
 			require.Contains(t, a.typeRegistry, "Addr")
 			assert.Equal(t, map[string]string{"street": goTypeString}, renders(t, a.typeRegistry["Addr"]))
-			assert.Empty(t, a.Warnings(t.Context()))
+			assert.Empty(t, a.Warnings())
 		})
 	}
 }
@@ -527,7 +527,7 @@ func TestQualifiedAllConstrainedStandIns(t *testing.T) {
 			assert.Equal(t, map[string]string{"street": goTypeString}, renders(t, a.typeRegistry["Addr"]))
 			assert.Equal(t, "b", a.typeRegistry["Addr"].Package)
 			assert.Equal(t, "b", a.unaliasedImportName("github.com/example/app/b"))
-			assert.Empty(t, a.Warnings(t.Context()))
+			assert.Empty(t, a.Warnings())
 		})
 	}
 }
@@ -719,7 +719,7 @@ func TestQualifiedSameClausePackages(t *testing.T) {
 	assert.Equal(t, "$ModelItem", got["user"])
 	assert.Equal(t, map[string]string{"sku": goTypeString}, renders(t, a.typeRegistry["Item"]))
 	assert.Equal(t, map[string]string{"email": goTypeString}, renders(t, a.typeRegistry["ModelItem"]))
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestQualifiedPayloadResolves pins the payload half (#110): a
@@ -738,7 +738,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 `,
 	})
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 	cents := routeByPath(t, routes, "/cents").Response
 	require.NotNil(t, cents)
 	require.NotNil(t, cents.Resolution)
@@ -762,7 +762,7 @@ func TestQualifiedInSiblingFile(t *testing.T) {
 	assert.Equal(t, "[]$User", sib["users"])
 	require.Contains(t, a.typeRegistry, "User")
 	assert.Equal(t, "b", a.typeRegistry["User"].Package)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestQualifiedNamedOverStructKeyedBySite pins that a named type over a
@@ -782,7 +782,7 @@ func TestQualifiedNamedOverStructKeyedBySite(t *testing.T) {
 	assert.Equal(t, "$RUser", got["remote"])
 	assert.Equal(t, map[string]string{"name": goTypeString}, renders(t, a.typeRegistry["User"]))
 	assert.Equal(t, map[string]string{"email": goTypeString}, renders(t, a.typeRegistry["RUser"]))
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestQualifiedAliasReExportSharesComponent pins that an alias re-exporting a
@@ -820,7 +820,7 @@ func TestQualifiedAliasReExportSharesComponent(t *testing.T) {
 			})
 			assert.Equal(t, c.want, renders(t, a.typeRegistry["Rows"]))
 			assert.NotContains(t, a.typeRegistry, c.absent)
-			assert.Empty(t, a.Warnings(t.Context()))
+			assert.Empty(t, a.Warnings())
 			if c.alias == "" {
 				return // an alias of another package's non-struct is no payload component
 			}

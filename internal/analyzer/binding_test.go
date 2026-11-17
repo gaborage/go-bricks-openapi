@@ -260,7 +260,7 @@ func analyzeBindRows(t *testing.T, rows []bindRow, extra string) []string {
 		"mod/types.go":  bindDecls,
 		"mod/module.go": bindModule(fields.String()),
 	})
-	return a.Warnings(t.Context())
+	return a.Warnings()
 }
 
 // warningsAbout returns the warnings about the field named name.
@@ -379,7 +379,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 `,
 		})
-		got[i] = a.Warnings(t.Context())
+		got[i] = a.Warnings()
 	}
 	reasons := []string{reasonUintptr, reasonStruct, reasonSliceElem}
 	require.Len(t, got[0], len(reasons), "%v", got[0])
@@ -426,7 +426,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 `,
 	})
-	ws := a.Warnings(t.Context())
+	ws := a.Warnings()
 	require.Len(t, ws, 2, "%v", ws)
 	assert.Contains(t, ws[0], "field Ptr at ")
 	assert.Contains(t, ws[0], "go-bricks cannot bind ("+reasonUintptr+")")

@@ -62,7 +62,7 @@ func analyzeParen(t *testing.T, params, result string) (route models.Route, warn
 	t.Helper()
 	src := strings.NewReplacer("PARAMS", params, "RESULT", result).Replace(parenModSrc)
 	a, routes := analyzeSingleModule(t, src)
-	return routeForPath(t, routes, "POST /items"), a.Warnings(t.Context())
+	return routeForPath(t, routes, "POST /items"), a.Warnings()
 }
 
 // TestParenStructRequest pins that a struct request written in parentheses,
@@ -279,7 +279,7 @@ func TestParenDeclarationsTypeFields(t *testing.T) {
 	for _, name := range []string{"PB", "PBA", "PS"} {
 		assert.Contains(t, a.typeRegistry, name)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestParenMarshalerDeclaration pins that a declaration with a parenthesized
@@ -361,7 +361,7 @@ func TestParenReExportSharesComponent(t *testing.T) {
 	})
 	assert.Equal(t, map[string]string{"a": "$User", "b": "$User"}, renders(t, a.typeRegistry["Rows"]))
 	assert.NotContains(t, a.typeRegistry, "DUser")
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestPointeeShedsParens pins the shared helper behind the request checks.

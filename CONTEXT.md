@@ -50,5 +50,6 @@ _Avoid_: diagnostic (reserved for what a Survey raises), health check
 
 ## Conventions
 
-**Context-first**:
-Exported APIs accept a `context.Context` as the first parameter even when unused. Comment-only convention, applied inconsistently today — recorded as observed, not reconciled.
+**Context parameter**:
+A function takes a `context.Context` only when it reads it (`ctx.Err()`, `ctx.Done()`) or passes it to a callee that does, and then as its first parameter; revive's `context-as-argument` enforces the order. Non-test code never declares a blank or unnamed `context.Context` parameter; a repo test fails on one. There is no rule that exported APIs must accept a ctx: every importable package is under `internal/`, and the CLI never cancels.
+_Avoid_: context-first convention

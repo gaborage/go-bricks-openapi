@@ -200,7 +200,7 @@ func (r metaRun) loc(t *testing.T, marker string) string {
 // warnings returns the run's warnings.
 func (r metaRun) warnings(t *testing.T) []string {
 	t.Helper()
-	return r.a.Warnings(t.Context())
+	return r.a.Warnings()
 }
 
 // metaWarnings returns the run's meta directive warnings.
@@ -404,7 +404,7 @@ func (h *Handler) list(ctx server.HandlerContext) (server.ResultWithMeta[[]User]
 }
 `,
 	})
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 	assert.Contains(t, a.typeRegistry, "UsersMeta")
 }
 
@@ -557,8 +557,8 @@ func TestMetaDirectiveCrossModuleLoserRegistersNothing(t *testing.T) {
 		"a/a.go": metaDupModule("a", ""),
 		"b/b.go": metaDupModule("b", "\t//openapi:meta LoserMeta\n"),
 	})
-	assert.Len(t, warningsContaining(a.Warnings(t.Context()), "is the same route node"), 1)
-	assert.Empty(t, warningsContaining(a.Warnings(t.Context()), "directive meta"))
+	assert.Len(t, warningsContaining(a.Warnings(), "is the same route node"), 1)
+	assert.Empty(t, warningsContaining(a.Warnings(), "directive meta"))
 	assert.NotContains(t, a.typeRegistry, "LoserMeta")
 	assert.NotContains(t, a.typeRegistry, "Nest")
 }
@@ -586,7 +586,7 @@ func TestMetaDirectiveInterfaceCopiesDisagree(t *testing.T) {
 				filepath.Join("mod", "module.go"): head,
 			})
 			want := fileLoc(t, filepath.Join("mod", "module.go"), head, "//openapi:meta") + fmt.Sprintf(metaUnresolvedMsg, typ)
-			assert.Equal(t, []string{want}, a.Warnings(t.Context()))
+			assert.Equal(t, []string{want}, a.Warnings())
 			assert.NotContains(t, a.typeRegistry, typ)
 			assert.NotContains(t, a.typeRegistry, "BT")
 		})

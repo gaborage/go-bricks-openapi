@@ -147,5 +147,5 @@ func TestQualifiedNamedResolutionOracle(t *testing.T) {
 	a := analyzer.New(dir)
 	_, err = a.AnalyzeProject()
 	require.NoError(t, err)
-	assertBindingParity(t, a.Warnings(t.Context()), "q", "l")
+	assertBindingParity(t, a.Warnings(), "q", "l")
 }

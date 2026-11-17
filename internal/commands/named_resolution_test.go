@@ -121,7 +121,7 @@ func TestRunGenerateNamedResolutionFixtureWarnsOnlyOnBinding(t *testing.T) {
 	a := analyzer.New(root)
 	_, err := a.AnalyzeProject()
 	require.NoError(t, err)
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 2)
 	assert.Contains(t, warnings[0], `the query parameter "tagsPtr" of type *Tags, which go-bricks cannot bind (a pointer to a slice)`)
 	assert.Contains(t, warnings[1], `the query parameter "ids" of type Ids, which go-bricks cannot bind (a slice whose element is not a string)`)
@@ -138,7 +138,7 @@ func TestRunDoctorMarshalerFieldIsCaveat(t *testing.T) {
 
 	var runErr error
 	out := testutil.CaptureStdout(t, func() {
-		runErr = runDoctor(t.Context(), &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion})
+		runErr = runDoctor(&DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion})
 	})
 	require.NoError(t, runErr, "a Marshaler field is a caveat, not a hard error")
 	assert.Contains(t, out, "Status has its own MarshalText method, which encoding/json uses instead")

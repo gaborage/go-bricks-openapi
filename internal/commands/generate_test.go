@@ -1375,7 +1375,7 @@ func TestWellKnownStdlibPayloadsAreTyped(t *testing.T) {
 	assert.Equal(t, map[string]any{"type": "number"}, rates["items"])
 
 	doctorOut := testutil.CaptureStdout(t, func() {
-		runErr = runDoctor(t.Context(), &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion})
+		runErr = runDoctor(&DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion})
 	})
 	require.NoError(t, runErr, doctorOut)
 	assert.Contains(t, doctorOut, "Typed routes: 4/4")

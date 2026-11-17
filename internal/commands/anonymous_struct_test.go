@@ -163,7 +163,7 @@ func TestRunEmptyAnonymousRequestPassesStrict(t *testing.T) {
 	assert.NotContains(t, digMap(t, spec.Paths, "/items", "post"), "requestBody")
 
 	doctorOut := testutil.CaptureStdout(t, func() {
-		runErr = runDoctor(t.Context(), &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion})
+		runErr = runDoctor(&DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion})
 	})
 	require.NoError(t, runErr, doctorOut)
 	assert.Contains(t, doctorOut, "All checks passed")

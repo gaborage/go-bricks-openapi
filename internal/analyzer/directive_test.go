@@ -51,7 +51,7 @@ func analyzeDirectiveModule(t *testing.T, body string) (routes []routeAndWarning
 	for i := range rs {
 		routes = append(routes, routeAndWarnings{key: rs[i].Method + " " + rs[i].Path, statuses: rs[i].ErrorStatuses, public: rs[i].Public})
 	}
-	return routes, a.Warnings(t.Context())
+	return routes, a.Warnings()
 }
 
 type routeAndWarnings struct {
@@ -663,9 +663,9 @@ func (m *Module) RegisterRoutes(r any) {
 `,
 	}
 	a := analyzeDirectiveProject(t, files)
-	require.Len(t, warningsContaining(a.Warnings(t.Context()), "an unrecognized RegisterRoutes signature"), 1,
+	require.Len(t, warningsContaining(a.Warnings(), "an unrecognized RegisterRoutes signature"), 1,
 		"api is a near-miss module, so its registration is never walked")
-	first := warningsContaining(a.Warnings(t.Context()), detachedMsg)
+	first := warningsContaining(a.Warnings(), detachedMsg)
 
 	public := "directive public has no effect — it is not directly above an analyzed route registration"
 	assert.Equal(t, []string{
@@ -677,7 +677,7 @@ func (m *Module) RegisterRoutes(r any) {
 
 	_, err := a.AnalyzeProject()
 	require.NoError(t, err)
-	assert.Equal(t, first, warningsContaining(a.Warnings(t.Context()), detachedMsg), "a repeated run reports the same detached warnings once")
+	assert.Equal(t, first, warningsContaining(a.Warnings(), detachedMsg), "a repeated run reports the same detached warnings once")
 }
 
 // analyzeDirectiveProject writes files (project-relative path -> source) into
@@ -741,7 +741,7 @@ func RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	})
 
 	require.Contains(t, a.typeRegistry, "Invoice", "the nested module's package must be parsed for this test to mean anything")
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // platformMethod is a registration helper declared in several build-tagged
@@ -794,7 +794,7 @@ func TestDetachedDirectiveInBuildTaggedDuplicateIsDeterministic(t *testing.T) {
 			tt.files["go.mod"] = "module example.com/app\n\ngo 1.25\n"
 			want := []string{tt.want + ":8: directive public has no effect — it is not directly above an analyzed route registration"}
 			for range 16 {
-				assert.Equal(t, want, analyzeDirectiveProject(t, tt.files).Warnings(t.Context()))
+				assert.Equal(t, want, analyzeDirectiveProject(t, tt.files).Warnings())
 			}
 		})
 	}

@@ -136,5 +136,5 @@ func TestBodilessStatusPayload(t *testing.T) {
 	assert.NotContains(t, registry, "Page")
 	assert.Contains(t, registry, "Shared", "a payload a 200 route also returns keeps its component")
 
-	assert.Empty(t, a.Warnings(t.Context()), "a bodiless payload raises no payload warning")
+	assert.Empty(t, a.Warnings(), "a bodiless payload raises no payload warning")
 }

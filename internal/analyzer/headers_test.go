@@ -361,6 +361,6 @@ func (m *Module) create(ctx server.HandlerContext) (server.Result[Item], server.
 	a, routes := analyzeSingleModule(t, src)
 	assert.Equal(t, []string{"Location"}, routeForPath(t, routes, "POST /items").ResponseHeaders)
 	assert.Nil(t, routeForPath(t, routes, "POST /raw").ResponseHeaders)
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	assert.Empty(t, warnings, strings.Join(warnings, "\n"))
 }

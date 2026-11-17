@@ -79,7 +79,7 @@ func TestRunDoctorUnresolvedRoutesBlock(t *testing.T) {
 	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion}
 
 	var runErr error
-	out := testutil.CaptureStdout(t, func() { runErr = runDoctor(t.Context(), opts) })
+	out := testutil.CaptureStdout(t, func() { runErr = runDoctor(opts) })
 
 	require.NoError(t, runErr, "an unresolved route is a caveat, not a hard error")
 	assert.Contains(t, out, unresolvedCountLine)
@@ -95,7 +95,7 @@ func TestRunDoctorNoUnresolvedRoutesBlock(t *testing.T) {
 	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion}
 
 	var runErr error
-	out := testutil.CaptureStdout(t, func() { runErr = runDoctor(t.Context(), opts) })
+	out := testutil.CaptureStdout(t, func() { runErr = runDoctor(opts) })
 
 	require.NoError(t, runErr)
 	assert.NotContains(t, out, "Unresolved routes:")
@@ -159,7 +159,7 @@ func TestPathDependentGroupPrefixFailsStrict(t *testing.T) {
 		opts := &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion}
 
 		var runErr error
-		out := testutil.CaptureStdout(t, func() { runErr = runDoctor(t.Context(), opts) })
+		out := testutil.CaptureStdout(t, func() { runErr = runDoctor(opts) })
 
 		require.NoError(t, runErr, "an unresolved route is a caveat, not a hard error")
 		assert.Contains(t, out, unresolvedCountLine)

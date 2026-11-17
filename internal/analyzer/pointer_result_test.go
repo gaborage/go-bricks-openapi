@@ -164,7 +164,7 @@ func TestPointerNoContentResultStatus(t *testing.T) {
 			a, routes := analyzeSingleModule(t, src)
 			route := routeForPath(t, routes, "POST /items")
 			assert.Equal(t, tt.status, route.SuccessStatus)
-			assert.Equal(t, tt.warnings, a.Warnings(t.Context()))
+			assert.Equal(t, tt.warnings, a.Warnings())
 			require.NotNil(t, route.Response)
 			assert.Equal(t, tt.status == 204, route.Response.NoContent, "a 204 is documented bodiless")
 		})

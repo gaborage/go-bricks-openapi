@@ -76,7 +76,7 @@ func TestCancelledWellKnownMarshalerEmbed(t *testing.T) {
 		assert.Equal(t, want, renders(t, a.typeRegistry[r.typ]), r.typ)
 	}
 	assert.Empty(t, embedWarnings(a))
-	all := a.Warnings(t.Context())
+	all := a.Warnings()
 	assert.Len(t, all, 3, "only the Doc, Stamp and Count fields' own-method warnings: %v", all)
 }
 

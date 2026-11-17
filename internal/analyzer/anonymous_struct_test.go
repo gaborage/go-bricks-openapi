@@ -143,7 +143,7 @@ func TestAnonymousStructFieldResolution(t *testing.T) {
 		fmt.Sprintf(recursiveFieldWarning, "B", anonLoc(t, src, "B struct {"), "struct{*A; X int}", anonStructDisplay),
 		fmt.Sprintf(recursiveFieldWarning, "Next", anonLoc(t, src, "Next L"), "L", anonStructDisplay),
 	}
-	assert.ElementsMatch(t, want, a.Warnings(t.Context()))
+	assert.ElementsMatch(t, want, a.Warnings())
 }
 
 // TestAnonymousStructInnerFieldInfo pins that an anonymous struct's fields
@@ -163,7 +163,7 @@ func TestAnonymousStructInnerFieldInfo(t *testing.T) {
 	assert.True(t, tag.Required)
 	assert.Equal(t, "8", tag.Constraints["max"])
 	assert.Nil(t, fieldByJSON(t, inner, "-").Resolution, "a json:\"-\" field is not resolved")
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestAnonymousStructUnextracted pins two places a literal stays a bare
@@ -184,7 +184,7 @@ func TestAnonymousStructUnextracted(t *testing.T) {
 	assert.Equal(t, "marshal:M([]struct{…})", got["m"])
 	assert.Equal(t, []string{
 		fmt.Sprintf(marshalerFieldWarning, "M", anonLoc(t, src, "M M"), "M", "M", methodMarshalJSON),
-	}, a.Warnings(t.Context()))
+	}, a.Warnings())
 }
 
 // TestAnonymousStructDepthCap pins that a literal shares the registration
@@ -246,7 +246,7 @@ func TestAnonymousStructBuildTaggedVariants(t *testing.T) {
 			assert.Contains(t, w[0], name+"'s build-tagged declarations disagree on shape")
 		}
 	}
-	assert.Len(t, a.Warnings(t.Context()), 2)
+	assert.Len(t, a.Warnings(), 2)
 }
 
 // TestAnonymousStructBuildTaggedCycle pins that build-tagged declarations,
@@ -280,7 +280,7 @@ func TestAnonymousStructBuildTaggedCycle(t *testing.T) {
 			}
 		}
 	}
-	assert.Len(t, a.Warnings(t.Context()), 4, "no disagreement")
+	assert.Len(t, a.Warnings(), 4, "no disagreement")
 }
 
 // TestAnonymousStructBuildTaggedLimit pins the other asymmetric cut: inside an
@@ -310,7 +310,7 @@ func TestAnonymousStructBuildTaggedLimit(t *testing.T) {
 	assert.Equal(t, maxLiteralExtractions, extractedLiterals(map[string]string{"w1": got["w1"]}), "one declaration")
 	assert.Equal(t, got["w1"], got["w"], "two declarations")
 	root := anonLoc(t, module, "struct{ T T ")
-	assert.Equal(t, []string{fmt.Sprintf(literalLimitWarning, root, maxLiteralExtractions)}, a.Warnings(t.Context()))
+	assert.Equal(t, []string{fmt.Sprintf(literalLimitWarning, root, maxLiteralExtractions)}, a.Warnings())
 }
 
 // TestAnonymousStructUnextractedBuildTagged pins that build-tagged
@@ -353,7 +353,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	assert.Equal(t, []string{
 		fmt.Sprintf(unbindableParamWarning, "Modes", filepath.FromSlash("mod/module.go")+":15:2", paramTypeQuery, "modes", "BD", reasonSliceElem),
 		fmt.Sprintf(declsDisagreePayloadWarning, "[]BD", "BD", declsShapeCause),
-	}, a.Warnings(t.Context()))
+	}, a.Warnings())
 }
 
 // TestSameLiteral pins literalText's sense of "written alike": names, types
@@ -389,7 +389,7 @@ func TestAnonymousStructRegistersInnerRefs(t *testing.T) {
 	for _, name := range []string{"Office", "OtherOffice", "Ack", "Deep"} {
 		assert.Contains(t, a.typeRegistry, name)
 	}
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestAnonymousStructWarnsSurvivorsOnly pins that an anonymous struct is
@@ -403,7 +403,7 @@ func TestAnonymousStructWarnsSurvivorsOnly(t *testing.T) {
 		"\t\tD decimal.Decimal `json:\"d\"`\n\t\tBad int `bad json:\"b\"`\n\t\tGen[int]\n\t} `json:\"meta\"`\n}\n"
 	a, _ := analyzeRows(t, "\t\"github.com/shopspring/decimal\"\n", decls, "\tInner\n\tMeta string `json:\"meta\"`\n")
 	assert.Equal(t, map[string]string{"meta": "string"}, renders(t, a.typeRegistry["Rows"]))
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestAnonymousStructDominatedCycle pins that a field the dominance rule
@@ -417,7 +417,7 @@ func TestAnonymousStructDominatedCycle(t *testing.T) {
 	a, _ := analyzeRows(t, "", decls, "\tR R `json:\"r\"`\n")
 	elem := "[]struct{x int; v int}"
 	assert.Equal(t, map[string]string{"x": "struct{w int; y " + elem + "; z " + elem + "}"}, renders(t, a.typeRegistry["R"]))
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // TestAnonymousStructInnerGenericField pins that an Instantiation inside an
@@ -430,7 +430,7 @@ func TestAnonymousStructInnerGenericField(t *testing.T) {
 	a, _ := analyzeSingleModule(t, src)
 	assert.Equal(t, []string{
 		fmt.Sprintf(genericFieldWarning, "G", anonLoc(t, src, "G Gone[int]"), "Gone[int]", "Gone[int]"),
-	}, a.Warnings(t.Context()))
+	}, a.Warnings())
 	assert.Equal(t, map[string]string{"w": "struct{p $Box-int; g inst:Gone[int]}"}, renders(t, a.typeRegistry["Rows"]))
 	assert.Contains(t, a.typeRegistry, "Box-int")
 }
@@ -510,7 +510,7 @@ func TestPayloadOverLiteralResolves(t *testing.T) {
 	req := routeByPath(t, routes, "/req").Request
 	require.NotNil(t, req)
 	assert.Empty(t, req.Name)
-	warnings := a.Warnings(t.Context())
+	warnings := a.Warnings()
 	require.Len(t, warnings, 3)
 	assert.Contains(t, warnings, fmt.Sprintf(marshalerPromotedPayloadWarning, "MRows", anonStructDisplay, methodMarshalJSON, "time.Time"))
 	assert.Contains(t, warnings, fmt.Sprintf(nonStructRequestWarning, "ReqRows"))
@@ -564,7 +564,7 @@ func TestMarshalerRequestLiteralUnextracted(t *testing.T) {
 	require.NotNil(t, req)
 	require.Len(t, req.Fields, 1)
 	assert.Equal(t, "id", req.Fields[0].ParamName)
-	assert.Empty(t, a.Warnings(t.Context()))
+	assert.Empty(t, a.Warnings())
 }
 
 // siblingLiteralRows renders k Rows fields Fi, each an anonymous struct that
@@ -603,8 +603,8 @@ func TestAnonymousStructSiblingCycles(t *testing.T) {
 	const k = 6
 	a, got := analyzeRows(t, "", "", siblingLiteralRows(k))
 	assert.Equal(t, k*k, extractedLiterals(got))
-	assert.Len(t, a.Warnings(t.Context()), k)
-	for _, w := range a.Warnings(t.Context()) {
+	assert.Len(t, a.Warnings(), k)
+	for _, w := range a.Warnings() {
 		assert.Contains(t, w, "struct{…} contains itself")
 	}
 	assert.Empty(t, a.openLiterals)
@@ -627,7 +627,7 @@ func TestAnonymousStructExpansionLimit(t *testing.T) {
 	a, got := analyzeRows(t, "", decls.String(), rows)
 	assert.Equal(t, 2*maxLiteralExtractions, extractedLiterals(got), "each field gets the whole limit")
 	root := anonLoc(t, rowsModule("", decls.String(), rows), "struct{ A Q2 ")
-	assert.Equal(t, []string{fmt.Sprintf(literalLimitWarning, root, maxLiteralExtractions)}, a.Warnings(t.Context()))
+	assert.Equal(t, []string{fmt.Sprintf(literalLimitWarning, root, maxLiteralExtractions)}, a.Warnings())
 
 	_, small := analyzeRows(t, "", "type P1 []struct{ A P2 `json:\"a\"`; B P2 `json:\"b\"` }\ntype P2 []struct{ X int `json:\"x\"` }\n",
 		"\tF P1 `json:\"f\"`\n")
